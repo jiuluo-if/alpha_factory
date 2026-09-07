@@ -40,6 +40,7 @@ from .reflection import Reflector
 from .simulator import Simulator
 from .state import Experiment, ResearchState, Trajectory
 from .submission import SubmissionPool, latest_active_snapshot, self_correlation_evidence
+from .trial_ledger import TrialLedger
 
 SEED_HYPOTHESES = [
     {
@@ -153,6 +154,9 @@ class Agent:
             max_len=agent_cfg.get("trajectory_window", 100),
             path=os.path.join(self.state_dir, "trajectory.jsonl"),
         )
+        self.trial_ledger = TrialLedger(
+            os.path.join(self.state_dir, "trial_ledger.jsonl")
+        )
         self.builder = CandidateBuilder(
             neutralization=self.simulation_settings.get("neutralization", "SUBINDUSTRY")
         )
@@ -174,6 +178,11 @@ class Agent:
             poll_timeout_sec=self.poll_timeout_sec,
             replace_attempts=agent_cfg.get("replace_attempts", 3),
             replace_backoff_sec=agent_cfg.get("replace_backoff_sec", 60),
+            yearly_policy={
+                "min_sharpe": (self.quality_policy or {}).get("promising_sharpe", 0.0),
+                "min_fitness": (self.quality_policy or {}).get("promising_fitness", 0.0),
+                "max_turnover": (self.quality_policy or {}).get("max_turnover"),
+            },
         )
         _REFLECTOR_KWARGS = {
             "success_sharpe": "success_sharpe",
@@ -812,6 +821,8 @@ class Agent:
             exp.expected_horizon = p.get("expected_horizon")
             exp.falsification = p.get("falsification")
             experiments.append(exp)
+            self._record_trial_phase(exp, "generated", outcome="PENDING")
+            self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
             self.memory.remember_expression(exp.expression)
 
         self.memory.register_hypothesis(hypothesis)
@@ -825,8 +836,8 @@ class Agent:
             self.simulator.run(
                 experiments,
                 on_complete=self._record_live_result,
-                on_update=lambda _exp: self._write_proposal_checkpoint(
-                    round_no, hypothesis, experiments, complete=False
+                on_update=lambda exp: self._on_simulation_update(
+                    exp, round_no, hypothesis, experiments
                 ),
             )
         finally:
@@ -1141,8 +1152,8 @@ class Agent:
                 self.simulator.run(
                     runnable,
                     on_complete=self._record_live_result,
-                    on_update=lambda _exp: self._write_proposal_checkpoint(
-                        round_no, hypothesis, experiments, complete=False
+                    on_update=lambda exp: self._on_simulation_update(
+                        exp, round_no, hypothesis, experiments
                     ),
                 )
             finally:
@@ -1524,6 +1535,22 @@ class Agent:
 
     # ------------------------------------------------------------ helpers
 
+    def _record_trial_phase(self, experiment, phase, outcome=None):
+        """Best-effort audit only; never changes Simulation safety semantics."""
+        try:
+            self.trial_ledger.record(experiment, phase, outcome=outcome)
+        except Exception as exc:
+            print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
+
+    def _on_simulation_update(self, experiment, round_no, hypothesis, experiments):
+        if experiment.status in {"RUNNING", "SUBMIT_UNKNOWN"}:
+            self._record_trial_phase(
+                experiment, "submitted", outcome=experiment.status
+            )
+        self._write_proposal_checkpoint(
+            round_no, hypothesis, experiments, complete=False
+        )
+
     def _attach_candidate_meta(self, experiment, candidate):
         experiment.hypothesis_id = candidate.get("parent") or experiment.hypothesis_id
         experiment.mutation = candidate.get("mutation")
@@ -1560,6 +1587,7 @@ class Agent:
         # update the already-written JSONL row and would silently lose the
         # correlation snapshot for crash recovery/reporting.
         exp.self_correlation = self_correlation_evidence(exp.metrics)
+        self._record_trial_phase(exp, "completed", outcome=exp.status)
         self.trajectory.add(exp)
         self._print_experiment(exp)
         verdict = self.reflector._classify(exp)
@@ -1685,11 +1713,20 @@ class Agent:
             exp.self_correlation = self._settled_self_correlation(exp)
             rating = self._alpha_rating(exp.metrics or {})
             healthy = bool((exp.health or {}).get("ok"))
+            yearly = exp.yearly_evidence or {}
+            # If the platform supplied annual aggregates, an unstable annual
+            # profile is a hard promotion blocker. Legacy rows without this
+            # optional evidence remain readable and are not rewritten.
+            yearly_ok = (
+                yearly.get("status") != "VERIFIED"
+                or yearly.get("stable") is True
+            )
             eligible = (
                 rating in {"EXCELLENT", "SPECTACULAR"}
                 and checks_passed(exp.metrics) is True
                 and healthy
                 and exp.validation_status == "STABLE"
+                and yearly_ok
                 and self._correlation_under(exp.self_correlation, corr_cap)
                 and exp.self_correlation["status"] == "PASS"
             )
@@ -1817,6 +1854,7 @@ class Agent:
                     "checks": m.get("checks"),
                     "health": e.health,
                     "self_correlation": e.self_correlation or self_correlation_evidence(m),
+                    "yearly_evidence": e.yearly_evidence,
                 }
             )
         path = os.path.join(self.state_dir, "sims_results.json")

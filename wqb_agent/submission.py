@@ -115,6 +115,7 @@ class SubmissionPool:
                 "metrics": experiment.metrics,
                 "health": experiment.health,
                 "validation_status": experiment.validation_status,
+                "yearly_evidence": experiment.yearly_evidence,
                 "rating": rating,
                 "self_correlation": correlation,
                 "active_snapshot": active_snapshot,

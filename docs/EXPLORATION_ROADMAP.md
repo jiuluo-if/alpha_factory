@@ -35,4 +35,4 @@
 - `STOP` / `KILL`：仅按已达可提交候选的防过拟合纪律或明确机制证伪执行。
 - `RECONCILE`：UNKNOWN、TIMEOUT、RATE_LIMIT、AUTH、INFRA 或缺少必须证据；不写入 avoid 或长期 lesson。
 
-详细状态机与门控以 [AGENTS.md](../AGENTS.md) 为准。
+公开研究政策与安全门控以 [RESEARCH_POLICY.md](RESEARCH_POLICY.md) 为准；本地执行约束不作为公开 API 契约。

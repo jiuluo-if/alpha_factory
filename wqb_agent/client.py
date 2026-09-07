@@ -28,12 +28,10 @@ import os
 import random
 import threading
 import time
-from email.utils import parsedate_to_datetime
-from datetime import datetime, timezone
-
 import requests
 
 from .failures import FailureKind, classify_error
+from .protocol import retry_after_seconds
 
 BASE_URL = "https://api.worldquantbrain.com"
 
@@ -271,19 +269,7 @@ class WQBClient:
 
     @staticmethod
     def _retry_after_seconds(resp):
-        value = resp.headers.get("Retry-After")
-        try:
-            return max(1.0, float(value))
-        except (TypeError, ValueError):
-            if value:
-                try:
-                    dt = parsedate_to_datetime(value)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return max(1.0, (dt - datetime.now(timezone.utc)).total_seconds())
-                except (TypeError, ValueError, OverflowError):
-                    pass
-            return 5.0
+        return retry_after_seconds(resp)
 
     def _register_rate_limit(self, resp):
         # A small, bounded jitter prevents all workers from waking on the

@@ -37,16 +37,18 @@ from .client import (
 from .metrics import check_health as _check_health
 from .metrics import check_pass as _check_pass
 from .metrics import extract_metrics as _extract_metrics
+from .yearly import build_yearly_evidence
 
 
 class Simulator:
     def __init__(self, client, max_concurrent=3, poll_timeout_sec=1500,
-                 replace_attempts=3, replace_backoff_sec=60):
+                 replace_attempts=3, replace_backoff_sec=60, yearly_policy=None):
         self.client = client
         self.max_concurrent = max_concurrent
         self.poll_timeout_sec = poll_timeout_sec
         self.replace_attempts = max(1, replace_attempts)
         self.replace_backoff_sec = max(0, replace_backoff_sec)
+        self.yearly_policy = dict(yearly_policy or {})
         self.stop_dispatch = False
         self.paused_reason = None
 
@@ -232,6 +234,26 @@ class Simulator:
                     payload = self.client.get_alpha(alpha_id)
                     experiment.alpha_id = alpha_id
                     experiment.metrics = _extract_metrics(payload)
+                    aggregates = getattr(self.client, "get_aggregates", None)
+                    if callable(aggregates):
+                        try:
+                            experiment.yearly_evidence = build_yearly_evidence(
+                                aggregates(alpha_id),
+                                min_sharpe=self.yearly_policy.get("min_sharpe", 0.0),
+                                min_fitness=self.yearly_policy.get("min_fitness", 0.0),
+                                max_turnover=self.yearly_policy.get("max_turnover"),
+                            )
+                        except Exception as exc:
+                            # Annual evidence is read-only advisory evidence;
+                            # its outage must not turn a completed Simulation
+                            # into UNKNOWN or trigger a second POST.
+                            experiment.yearly_evidence = {
+                                "status": "UNKNOWN",
+                                "source": "BRAIN /alphas/{id}/aggregates",
+                                "years": [],
+                                "stable": None,
+                                "reason": f"aggregates unavailable: {type(exc).__name__}",
+                            }
                     experiment.status = "DONE"
                     try:
                         health = _check_health(payload)

@@ -7,7 +7,7 @@
 
 | 外部方法 | 本工程采用 | 本工程保留的边界 |
 |---|---|---|
-| session_state、batch fingerprint、预算预留 | `factory_session.json`、固定 `proposals.json`、既有 proposal fingerprint、已见表达式排除和 18/轮上限 | 不复制 exact-4/multi-simulation 提交链；所有真实 POST 仍走 `Agent.run_proposals()` |
+| session_state、batch fingerprint、预算预留 | `factory_session.json`、固定 `proposals.json`、既有 proposal fingerprint、已见表达式排除和配置化的18/100轮上限 | 不复制 exact-4/multi-simulation 提交链；所有真实 POST 仍走 `Agent.run_proposals()` |
 | skeleton/template diversity | `AlphaFactory` 的模板目录、family、stage path、slot 与结构指纹，并限制同族最多 2 个 | 不用模板绕过真实字段 discovery、类型门控、SELF_CORRELATION 或健康检查 |
 | memory-writer 的 session 幂等与聚合 | `ExperienceMemory` 的压缩表达式集合、短期/长期/垃圾三层和幂等写入 | trajectory 仍是唯一原始证据；UNKNOWN、INFRA 不进入长期 lesson |
 | field factory 的 slot/evidence 追踪 | `assemble_proposals()` 为每个真实字段生成可审计 BASELINE，并逐字保留 description | 不从字段名推断语义，不把模板 rationale 冒充经济事实 |

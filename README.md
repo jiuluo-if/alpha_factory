@@ -6,7 +6,7 @@
 
 ## 生产入口
 
-每次研究先读 [AGENTS.md](AGENTS.md)，再按两阶段流程执行：
+每次研究先阅读公开研究政策 [docs/RESEARCH_POLICY.md](docs/RESEARCH_POLICY.md)，再按两阶段流程执行：
 
 ```powershell
 python main.py --suggest
@@ -25,7 +25,7 @@ python main.py --factory-status
 python main.py --factory-stop
 ```
 
-工厂默认最多运行 86400 秒、最多预留 240 个 Simulation，恢复未完成 checkpoint 优先；它仍通过同一个
+工厂默认最多运行 86400 秒、最多预留 300 个 Simulation，单轮最多生成100个 proposal，恢复未完成 checkpoint 优先；它仍通过同一个
 `Agent.run_proposals()` 提交，不旁路生产状态机；结束时只输出一份紧凑会话摘要。`factory_session.json`、
 `suggestions.json` 和 `proposals.json` 都是固定 canonical 文件，逻辑内容不变
 时不会重复写入。工厂内部调用默认静默，避免把每个轮次的诊断输出变成长时重复报告；需要排障时可直接使用
@@ -35,7 +35,7 @@ python main.py --factory-stop
 
 `wqb_agent/alpha_factory.py` 提供初步的 template-first 候选工厂：先选择可审计的表达式骨架，再用 discovery 字段填充 `p`/`s`/`g` 槽位。工厂只生成候选，不访问 BRAIN、不写 `.wqb_state`、不提交 Simulation；候选会携带 `template_id`、`template_family`、结构指纹、槽位和阶段路径，随后仍必须经过 `proposals.json` 的完整生产预检。
 
-同一批同一 `template_family` 最多保留 2 个候选；若工厂在预算预留后、checkpoint 写入前退出，会优先恢复同一 session 的 canonical proposals，无法证明提交状态时停在 `RECONCILE_REQUIRED`。
+普通候选同一 `template_family` 最多保留 2 个；economic 模式最多保留 4 个。若工厂在预算预留后、checkpoint 写入前退出，会优先恢复同一 session 的 canonical proposals，无法证明提交状态时停在 `RECONCILE_REQUIRED`。
 
 AI 可在 hypothesis 中显式指定 `template_ids`、`template_family` 或 `template_ref` 进入模板模式；未指定时保留旧候选生成兼容路径。`wqb_agent/research_guard.py` 会对已完成且有分数的历史实验做只读结构审计：同一谱系同一变更类别连续无实质增益时，阻断该类别并提示切换变量；`UNKNOWN`、超时和基础设施失败不会被当作研究结论。
 
@@ -75,6 +75,8 @@ proposal 必须使用 discovery 已证实的字段，并记录：`fields`、`dat
 | [docs/OPERATORS_CHEATSHEET.md](docs/OPERATORS_CHEATSHEET.md) | 算子签名与类型依据 |
 | [docs/SIMULATION_SETTINGS.md](docs/SIMULATION_SETTINGS.md) | 设置白名单与纪律 |
 | [docs/STATE_LAYOUT.md](docs/STATE_LAYOUT.md) | 状态读取、仲裁与归档边界 |
+| [docs/BRAIN_PROTOCOL.md](docs/BRAIN_PROTOCOL.md) | endpoint、schema、Retry-After 与 capability 事实层 |
+| [docs/RESEARCH_POLICY.md](docs/RESEARCH_POLICY.md) | 公开研究政策、TrialLedger 与年度 evidence |
 | [docs/README.md](docs/README.md) | 文档索引与历史归档说明 |
 
 验证改动：

@@ -15,6 +15,7 @@ from wqb_agent.incremental_policy import IncrementalValuePolicy
 from wqb_agent.state import Experiment
 from wqb_agent.diagnostics import DiagnosticEvent
 from wqb_agent.trial_ledger import TrialLedger
+from wqb_agent.behavior import extract_behavior_series
 import main as main_entry
 
 
@@ -55,6 +56,38 @@ class Phase8ReleaseTests(unittest.TestCase):
                      "submission_pool", "fields_cache", "evidence_cache", "active_snapshot",
                      "simulation_results", "memory", "search_snapshot", "validation_plan"):
             self.assertIn(name, ARTIFACT_SCHEMAS)
+
+    def test_platform_fixtures_are_small_anonymous_and_not_live_capability(self):
+        fixture_dir = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
+        expected = {
+            "authentication.json", "simulation_progress.json", "alpha.json",
+            "aggregates.json", "alpha_check.json", "pnl.json",
+            "data_fields.json", "data_sets.json", "operators.json",
+            "self_correlation.json",
+        }
+        actual = {name for name in os.listdir(fixture_dir) if name.endswith(".json")}
+        self.assertEqual(actual, expected)
+        forbidden_keys = {"password", "secret", "authorization", "cookie"}
+
+        def walk(value):
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    self.assertNotIn(str(key).lower(), forbidden_keys)
+                    yield from walk(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    yield from walk(nested)
+
+        for name in sorted(expected):
+            with open(os.path.join(fixture_dir, name), encoding="utf-8") as handle:
+                payload = json.load(handle)
+            list(walk(payload))
+        with open(os.path.join(fixture_dir, "pnl.json"), encoding="utf-8") as handle:
+            pnl_payload = json.load(handle)
+        self.assertEqual(
+            extract_behavior_series({"pnl": pnl_payload["pnl"]})["availability"],
+            "UNAVAILABLE",
+        )
 
     def test_legacy_v2_and_current_migrations_are_idempotent(self):
         for payload in ({"schema_version": 2}, {"schema_version": CURRENT_SCHEMA_VERSION,

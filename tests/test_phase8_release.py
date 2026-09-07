@@ -1,7 +1,9 @@
 import json
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from wqb_agent.config import parse_config
@@ -13,6 +15,7 @@ from wqb_agent.incremental_policy import IncrementalValuePolicy
 from wqb_agent.state import Experiment
 from wqb_agent.diagnostics import DiagnosticEvent
 from wqb_agent.trial_ledger import TrialLedger
+import main as main_entry
 
 
 class Phase8ReleaseTests(unittest.TestCase):
@@ -75,6 +78,19 @@ class Phase8ReleaseTests(unittest.TestCase):
             result = run_doctor({"simulation": {}, "agent": {"state_dir": tmp}}, offline=True)
             self.assertTrue(result["config_valid"])
             self.assertTrue(audit_state(tmp)["ok"])
+
+    def test_doctor_uses_example_config_on_fresh_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "sys.argv", ["main.py", "--doctor", "--offline",
+                          "--config", os.path.join(tmp, "missing.json"),
+                          "--state-dir", tmp]
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main_entry.main()
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["config_valid"])
+            self.assertEqual(payload["state_dir"], tmp)
 
     def test_audit_detects_orphan_submission(self):
         with tempfile.TemporaryDirectory() as tmp:

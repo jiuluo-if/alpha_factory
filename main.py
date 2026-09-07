@@ -125,7 +125,15 @@ def main():
     if args.offline and not (args.doctor or args.audit_state):
         parser.error("--offline 只能与 --doctor 或 --audit-state 一起使用")
 
-    config = load_config(args.config)
+    config = None
+    # Read-only diagnostics are intentionally runnable on a fresh checkout:
+    # they use the checked-in example as a schema-safe fallback, while all
+    # production actions still require the user-created config.json.
+    if (args.doctor or args.audit_state) and not os.path.exists(args.config):
+        example = os.path.join(os.path.dirname(__file__), "config.example.json")
+        config = load_config(example)
+    else:
+        config = load_config(args.config)
     if config is None:
         example = os.path.join(os.path.dirname(__file__), "config.example.json")
         print(

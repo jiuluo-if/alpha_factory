@@ -1,6 +1,7 @@
 import json
 import io
 import os
+import contextlib
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -124,6 +125,13 @@ class Phase8ReleaseTests(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertTrue(payload["config_valid"])
             self.assertEqual(payload["state_dir"], tmp)
+
+    def test_offline_flag_cannot_enter_production_path(self):
+        with patch("sys.argv", ["main.py", "--offline", "--run-proposals"]), \
+             contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main_entry.main()
+        self.assertEqual(raised.exception.code, 2)
 
     def test_audit_detects_orphan_submission(self):
         with tempfile.TemporaryDirectory() as tmp:

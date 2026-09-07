@@ -23,6 +23,26 @@
 | 性能边界 | `TrialLedger.summarize_cached`、只读长跑探针 | 已提供可重建摘要缓存；未发现经证实的热点前不做猜测性优化 |
 | 配置类型 | `wqb_agent.config.ResearchAllocation` | 角色分配与搜索预算、工厂硬上限分层表达，解析仍只发生一次 |
 
+## Release Definition of Done 对照
+
+| 问题 | 直接证据 | 结论 |
+|---|---|---|
+| 1. 外部 write 有哪些？ | `wqb_agent/client.py`、`wqb_agent/simulator.py`、架构测试 | 仅 Simulation 提交链；Alpha submission 不在生产代码中 |
+| 2. 如何避免重复 Simulation POST？ | checkpoint、`SUBMIT_UNKNOWN`、submission fingerprint、`tests/test_architecture.py` | 已有 exactly-once 恢复边界；未知提交先对账，不自动重 POST |
+| 3. 当前未决 `SUBMIT_UNKNOWN`？ | `python main.py --doctor --offline --state-dir .wqb_state` | 当前快照为 17 个 |
+| 4. SearchPolicy 能否重启恢复？ | `Agent._load_state`、`SearchSnapshot.from_sources`、重启回归测试 | 从 trajectory、ledger、checkpoint 重建；缺失 ledger 时保持未知/降级 |
+| 5. STABLE Alpha 的 robustness evidence？ | `ValidationPlan`、`ValidationReport`、`ResearchEvidenceBundle` | 只有验证报告 PASS 才进入 STABLE 语义，不以单次指标替代 |
+| 6. incremental evidence 来自哪个 pool snapshot？ | `AlphaPoolSnapshot.snapshot_id`、结算 ledger 引用 | 结算时记录 snapshot id、pool size 与摘要证据 |
+| 7. unavailable 为什么 unavailable？ | `extract_behavior_series`、doctor capability | 非 `LIVE_VERIFIED` PnL/return 一律 `UNAVAILABLE/INCONCLUSIVE` |
+| 8. pool Alpha 为什么 eligible？ | `submission_eligibility` 的 reasons、`incremental_gate` | 按平台检查、健康、相关性、验证、年度证据和策略逐项判定 |
+| 9. 所有 state artifact schema？ | `wqb_agent/schema.py` registry、doctor schema report | 新写入有版本；历史真实 artifact 仍会如实显示 LEGACY |
+| 10. 老 schema 如何读取？ | `migrate_artifact` 及 migration tests | 内存迁移、确定性、幂等，不回写旧文件 |
+| 11. CI 是否依赖真实 BRAIN？ | CI 三层命令、fixture/network-free tests | 不依赖；smoke 不进入 CI |
+| 12. 新环境能否一条命令安装测试？ | `pyproject.toml`、`pip install .`、CI | 已验证 Python >=3.11 安装与测试链 |
+| 13. 已知统计近似？ | README Known Limitations、研究政策 | PBO 与有效独立试验数标记为 proxy/approximate |
+| 14. 哪些 capability 是 LIVE_VERIFIED？ | protocol truth、doctor、fixture tests | 只有真实验证响应才标 LIVE_VERIFIED；当前 PnL 为 UNAVAILABLE |
+| 15. 删除 derived cache 能否重建？ | append-only trajectory/ledger、`summarize_cached` | 摘要缓存可删除重建；当前缺失的历史 TrialLedger 不能被猜测补造 |
+
 ## 当前真实状态说明
 
 真实 `.wqb_state` 只做过只读检查，不能把诊断中的未知或未完成状态写成发布成功：当前快照仍报告 1 个未完成/未决 checkpoint、17 个 `SUBMIT_UNKNOWN`，且 PnL 与增量能力为 `UNAVAILABLE`。这些是需要后续对账的研究运行状态，不通过本次代码发布自动清理。

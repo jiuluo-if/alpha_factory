@@ -73,6 +73,9 @@ class Experiment:
         # Optional read-only annual aggregate evidence.  Missing in legacy
         # rows is intentionally compatible and remains UNKNOWN.
         self.yearly_evidence = None
+        # A robustness plan is registered before its jobs are submitted.
+        self.validation_plan = None
+        self.validation_report = None
         # Only an explicit robustness procedure may set this to STABLE.
         # Unset means the record is evidence, not a promotable champion.
         self.validation_status = None
@@ -123,6 +126,8 @@ class Experiment:
             "falsification": self.falsification,
             "health": self.health,
             "yearly_evidence": self.yearly_evidence,
+            "validation_plan": self.validation_plan,
+            "validation_report": self.validation_report,
             "validation_status": self.validation_status,
             "elapsed_sec": self.elapsed_sec,
             "created_at": self.created_at,
@@ -174,6 +179,8 @@ class Experiment:
         exp.falsification = data.get("falsification")
         exp.health = data.get("health")
         exp.yearly_evidence = data.get("yearly_evidence")
+        exp.validation_plan = data.get("validation_plan")
+        exp.validation_report = data.get("validation_report")
         exp.validation_status = data.get("validation_status")
         exp.elapsed_sec = data.get("elapsed_sec")
         exp.created_at = data.get("created_at", 0)

@@ -731,6 +731,12 @@ class ExperienceMemory:
     def set_current_best(self, experiment):
         self.current_best = experiment.to_dict()
 
+    def set_current_best_record(self, record):
+        """Persist a validated candidate snapshot supplied by an aggregator."""
+        if not isinstance(record, dict):
+            raise TypeError("current_best record must be an object")
+        self.current_best = dict(record)
+
     # ------------------------------------------------------------ context
 
     def context(self, recent_experiments=None, short_term_n=5, garbage_n=3):

@@ -1,0 +1,147 @@
+import random
+import statistics
+import unittest
+import tempfile
+import os
+
+from wqb_agent.agent import Agent
+from wqb_agent.pnl import PnlAdapter
+from wqb_agent.state import Experiment, Trajectory
+from wqb_agent.trial_ledger import TrialLedger
+from wqb_agent.validation_report import (
+    REQUIRED_VARIABLES,
+    build_validation_report,
+    default_validation_plan,
+    deflated_sharpe_ratio,
+    pbo_cscv,
+    probabilistic_sharpe_ratio,
+    validate_plan,
+)
+
+
+def _metrics(sharpe=1.2):
+    return {
+        "sharpe": sharpe, "fitness": 1.1, "turnover": 0.2,
+        "returns": 0.1, "drawdown": 0.1, "margin": 0.01,
+        "checks": [{"name": "ALL", "pass": True},
+                    {"name": "SELF_CORRELATION", "pass": True, "value": 0.1}],
+    }
+
+
+class TestValidationReport(unittest.TestCase):
+    def setUp(self):
+        self.parent = {"expression": "rank(signal)", "status": "DONE", "metrics": _metrics(),
+                       "health": {"ok": True},
+                       "self_correlation": {"status": "PASS"},
+                       "submission_fingerprint": "parent-fp", "yearly_evidence": {
+                           "status": "VERIFIED", "stable": True,
+                       }}
+        self.plan = default_validation_plan(self.parent, timestamp=1.0)
+
+    def test_plan_contains_preregistered_required_variables(self):
+        valid, errors = validate_plan(self.plan)
+        self.assertTrue(valid, errors)
+        self.assertEqual({item["variable"] for item in self.plan["variables"]} & set(REQUIRED_VARIABLES), set(REQUIRED_VARIABLES))
+        self.assertEqual(self.plan["preregistered_at"], 1.0)
+
+    def test_one_robustness_success_cannot_be_stable(self):
+        child = {"status": "DONE", "changed_variable": "window_locality", "metrics": _metrics()}
+        report = build_validation_report(self.parent, [child], self.plan,
+                                         yearly_evidence=self.parent["yearly_evidence"],
+                                         platform_evidence={
+                                             "parent": {"health": self.parent["health"], "correlation": self.parent["self_correlation"]},
+                                             "children": [{"health": {"ok": True}, "correlation": {"status": "PASS"}}],
+                                         })
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["stable"])
+
+    def test_only_aggregate_report_promotes_parent(self):
+        children = [
+            {"status": "DONE", "changed_variable": variable, "metrics": _metrics(),
+             "health": {"ok": True}, "self_correlation": {"status": "PASS"}}
+            for variable in REQUIRED_VARIABLES if variable != "yearly_aggregates"
+        ]
+        report = build_validation_report(self.parent, children, self.plan,
+                                         yearly_evidence=self.parent["yearly_evidence"],
+                                         trial_summary={"generated_trials": 6},
+                                         platform_evidence={
+                                             "parent": {"health": self.parent["health"], "correlation": self.parent["self_correlation"]},
+                                             "children": [{"health": child["health"], "correlation": child["self_correlation"]} for child in children],
+                                         })
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["candidate"], "parent")
+        self.assertEqual(report["selection_adjustment"]["trial_events"], 6)
+
+    def test_more_searches_reduce_selection_adjusted_confidence(self):
+        returns = [-0.01, 0.02, 0.01, 0.03, -0.02, 0.01, 0.015, -0.005, 0.01, 0.02]
+        one = deflated_sharpe_ratio(returns, observed_sharpe=1.2, n_trials=1)
+        many = deflated_sharpe_ratio(returns, observed_sharpe=1.2, n_trials=100)
+        self.assertGreater(many["selection_threshold"], one["selection_threshold"])
+        self.assertLess(many["psr"], one["psr"])
+        observed = deflated_sharpe_ratio(
+            returns, observed_sharpe=1.2, n_trials=10,
+            trial_sharpes=[-0.2, 0.0, 0.3, 0.1],
+        )
+        self.assertTrue(observed["trial_sharpes_observed"])
+
+    def test_synthetic_null_search_does_not_validate_raw_max_sharpe(self):
+        rng = random.Random(20260907)
+        candidates = [[rng.gauss(0.0, 1.0) for _ in range(80)] for _ in range(100)]
+        sharpes = [statistics.fmean(row) / statistics.pstdev(row) for row in candidates]
+        winner = candidates[max(range(len(candidates)), key=lambda index: sharpes[index])]
+        raw = probabilistic_sharpe_ratio(winner, observed_sharpe=max(sharpes))
+        adjusted = deflated_sharpe_ratio(winner, observed_sharpe=max(sharpes), n_trials=100)
+        self.assertGreater(max(sharpes), 0.0)
+        self.assertLess(adjusted["psr"], raw["psr"])
+        self.assertGreater(adjusted["selection_threshold"], 0.0)
+
+    def test_statistical_availability_is_fail_closed(self):
+        self.assertEqual(probabilistic_sharpe_ratio([1.0, 1.0])["status"], "UNAVAILABLE")
+        self.assertEqual(pbo_cscv([[1.0, 2.0, 3.0]])["status"], "UNAVAILABLE")
+        self.assertEqual(pbo_cscv([[1, 2, 3, 4, 5, 6, 7, 8], [0, 1, 2, 3, 4, 5, 6, 7]])["status"], "AVAILABLE")
+
+    def test_pnl_requires_verified_capability(self):
+        self.assertEqual(PnlAdapter("COMMUNITY_OBSERVED").analyze([1, 2, 3])["status"], "UNAVAILABLE")
+        result = PnlAdapter("LIVE_VERIFIED").analyze([0.01, 0.02, -0.01, 0.03] * 10, window=5)
+        self.assertIn(result["status"], {"PASS", "FAIL"})
+        self.assertIn("rolling_stability", result)
+        self.assertIn("bootstrap", result)
+
+    def test_agent_marks_parent_only_after_aggregate_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Experiment(1, "h", "rank(signal)", {}, ["signal"])
+            parent.status = "DONE"
+            parent.metrics = _metrics()
+            parent.health = {"ok": True}
+            parent.self_correlation = {"status": "PASS"}
+            parent.yearly_evidence = {"status": "VERIFIED", "stable": True}
+            plan = default_validation_plan(parent, timestamp=1.0)
+            children = []
+            for variable in REQUIRED_VARIABLES[:-1]:
+                child = Experiment(2, "h", f"rank({variable})", {}, ["signal"])
+                child.status = "DONE"
+                child.metrics = _metrics()
+                child.health = {"ok": True}
+                child.self_correlation = {"status": "PASS"}
+                child.experiment_stage = "ROBUSTNESS"
+                child.parent_expression = parent.expression
+                child.changed_variable = variable
+                child.validation_plan = plan
+                children.append(child)
+            agent = object.__new__(Agent)
+            agent.trajectory = Trajectory()
+            agent.trajectory.experiments = [parent, children[0]]
+            agent.state_dir = tmp
+            agent.trial_ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"))
+            agent.reflector = type("ReflectorStub", (), {"evidence_cache": {}})()
+            agent._completed_parent = lambda expression: parent
+            Agent._mark_robustness_stability(agent, [children[0]])
+            self.assertNotEqual(parent.validation_status, "STABLE")
+            agent.trajectory.experiments.extend(children[1:])
+            Agent._mark_robustness_stability(agent, children)
+            self.assertEqual(parent.validation_status, "STABLE")
+            self.assertEqual(parent.validation_report["status"], "PASS")
+
+
+if __name__ == "__main__":
+    unittest.main()

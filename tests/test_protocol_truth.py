@@ -104,6 +104,7 @@ class TestTrialLedger(unittest.TestCase):
             exp.status = "RUNNING"
             ledger.record(exp, "submitted")
             exp.status = "DONE"
+            exp.metrics = {"sharpe": 1.25}
             ledger.record(exp, "completed")
             ledger.record(exp, "completed")
             summary = ledger.summarize()
@@ -111,6 +112,7 @@ class TestTrialLedger(unittest.TestCase):
             self.assertEqual(summary["phase_counts"]["completed"], 1)
             self.assertEqual(summary["trial_counts"]["template_family"]["quality"]["completed"], 1)
             self.assertEqual(summary["trial_counts"]["field"]["signal"]["generated"], 1)
+            self.assertEqual(summary["trial_sharpe_count"], 1)
 
     def test_legacy_experiment_row_without_yearly_evidence_loads(self):
         exp = Experiment.from_dict({

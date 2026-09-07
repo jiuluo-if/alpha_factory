@@ -35,6 +35,8 @@
 - 未完成传输状态以 checkpoint 为准；已确认实验事实以 trajectory 为准；展示结果以可重建缓存为准。
 - `context.md` 与 `experience.json` 是压缩决策视图，不得反向覆盖原始证据。
 - Experiment 的 `yearly_evidence` 是由已知 Alpha 的 aggregates 派生的年度稳定性证据；缺失或 `UNKNOWN` 不得解释为稳定通过。
+- Experiment 的 `validation_plan`/`validation_report` 记录预注册 robustness 变量与聚合判定；只有 report `PASS` 的 parent 才能为 `STABLE`、进入 `current_best` 或提交池。
+- `validation_reports.jsonl` 是 validation report 的 append-only 派生审计证据，不替代 trajectory 或 checkpoint。
 - `SELF_CORRELATION` 缺失、`PENDING` 或未完成时只能标记 `RECONCILE`，不得升级为 `PROMOTE`。
 - 任何历史状态快照、`quarantine/` 内容和本地字段目录都不能冒充当前 BRAIN API 响应。
 - 允许新增审计说明或外部报告；禁止手工移动/重命名 canonical 文件、删除运行锁、覆盖状态文件，或把备份直接放回生产路径。

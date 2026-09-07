@@ -53,3 +53,25 @@ def _window_change(expression, direction):
         + str(target)
         + expression[found.end():]
     )
+
+
+def _relative_window_changes(expression, ratios=(0.75, 1.25)):
+    """Return bounded relative window perturbations, not a fixed +/- 1 sweep."""
+    found = None
+    for match in _TS_OP_PATTERN.finditer(expression or ""):
+        found = match
+    if not found:
+        return []
+    current = int(found.group(2))
+    candidates = []
+    for ratio in ratios:
+        target_value = max(1, round(current * float(ratio)))
+        # Keep the relative perturbation itself.  Snapping to a sparse
+        # catalog can collapse a 25% change back to the original window.
+        target = target_value
+        if target != current and target not in candidates:
+            candidates.append(target)
+    return [
+        expression[: found.start()] + found.group(1) + str(target) + expression[found.end():]
+        for target in candidates
+    ]

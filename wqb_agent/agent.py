@@ -41,6 +41,10 @@ from .simulator import Simulator
 from .state import Experiment, ResearchState, Trajectory
 from .submission import SubmissionPool, latest_active_snapshot, self_correlation_evidence
 from .trial_ledger import TrialLedger
+from .validation_report import (
+    build_validation_report,
+    default_validation_plan,
+)
 
 SEED_HYPOTHESES = [
     {
@@ -820,6 +824,11 @@ class Agent:
             exp.direction = p.get("direction")
             exp.expected_horizon = p.get("expected_horizon")
             exp.falsification = p.get("falsification")
+            exp.validation_plan = p.get("validation_plan")
+            if exp.experiment_stage == "ROBUSTNESS" and exp.validation_plan is None:
+                # The proposal contract normally rejects this earlier.  Keep
+                # the construction boundary fail-closed for direct callers.
+                raise ValueError("ROBUSTNESS 缺少预注册 validation_plan")
             experiments.append(exp)
             self._record_trial_phase(exp, "generated", outcome="PENDING")
             self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
@@ -861,7 +870,10 @@ class Agent:
 
         self._refresh_self_correlation_evidence(experiments)
         self._mark_robustness_stability(experiments)
-        summary = self.reflector.reflect(round_no, hypothesis, experiments)
+        summary = self.reflector.reflect(
+            round_no, hypothesis, experiments,
+            validation_candidates=getattr(self, "_validation_candidates", None),
+        )
         self._sync_submission_pool(experiments)
         state = ResearchState(
             round_no=round_no,
@@ -1023,7 +1035,10 @@ class Agent:
         hypothesis = checkpoint.get("hypothesis") or {"id": f"h-llm-r{round_no}", "_round": int(round_no)}
         self._refresh_self_correlation_evidence(experiments)
         self._mark_robustness_stability(experiments)
-        summary = self.reflector.reflect(int(round_no), hypothesis, experiments)
+        summary = self.reflector.reflect(
+            int(round_no), hypothesis, experiments,
+            validation_candidates=getattr(self, "_validation_candidates", None),
+        )
         self._sync_submission_pool(experiments)
         state = ResearchState(
             round_no=int(round_no), hypothesis=hypothesis,
@@ -1169,7 +1184,10 @@ class Agent:
         self.trajectory.add_many(experiments)
         self._refresh_self_correlation_evidence(experiments)
         self._mark_robustness_stability(experiments)
-        summary = self.reflector.reflect(round_no, hypothesis, experiments)
+        summary = self.reflector.reflect(
+            round_no, hypothesis, experiments,
+            validation_candidates=getattr(self, "_validation_candidates", None),
+        )
         self._sync_submission_pool(experiments)
         state = ResearchState(
             round_no=round_no,
@@ -1417,6 +1435,9 @@ class Agent:
         if checks_passed(metrics) is not True:
             return None
         if best.get("validation_status") != "STABLE":
+            return None
+        report = best.get("validation_report") or {}
+        if report.get("status") != "PASS" or report.get("candidate") != "parent":
             return None
         health = best.get("health") or {}
         if health and not health.get("ok", False):
@@ -1707,7 +1728,11 @@ class Agent:
         if corr_cap is None:
             corr_cap = 0.5
         eligible_records = []
-        for exp in experiments:
+        candidates = list(experiments)
+        for parent, report in getattr(self, "_validation_candidates", []) or []:
+            if all(existing.id != parent.id for existing in candidates):
+                candidates.append(parent)
+        for exp in candidates:
             if exp.status != "DONE" or not exp.alpha_id:
                 continue
             exp.self_correlation = self._settled_self_correlation(exp)
@@ -1726,6 +1751,9 @@ class Agent:
                 and checks_passed(exp.metrics) is True
                 and healthy
                 and exp.validation_status == "STABLE"
+                and isinstance(exp.validation_report, dict)
+                and exp.validation_report.get("status") == "PASS"
+                and exp.validation_report.get("candidate") == "parent"
                 and yearly_ok
                 and self._correlation_under(exp.self_correlation, corr_cap)
                 and exp.self_correlation["status"] == "PASS"
@@ -1744,24 +1772,84 @@ class Agent:
             )
 
     def _mark_robustness_stability(self, experiments):
-        """Only a successful explicit robustness result can mark STABLE."""
+        """Apply the one canonical STABLE gate to parent candidates.
+
+        A single SUCCESS/ROBUSTNESS row is evidence only.  The parent is
+        promoted only after all pre-registered dimensions have been
+        aggregated into one passing ValidationReport.
+        """
+        self._validation_candidates = []
+        all_rows = list(self.trajectory.experiments or [])
         for exp in experiments:
-            if exp.experiment_stage != "ROBUSTNESS" or exp.status != "DONE":
+            if all(existing.id != exp.id for existing in all_rows):
+                all_rows.append(exp)
+        for row in all_rows:
+            report = getattr(row, "validation_report", None) or {}
+            if (getattr(row, "validation_status", None) == "STABLE"
+                    and not (report.get("status") == "PASS" and report.get("candidate") == "parent")):
+                row.validation_status = "UNVALIDATED"
+        children_by_parent = {}
+        plans = {}
+        for child in all_rows:
+            if child.experiment_stage != "ROBUSTNESS":
                 continue
-            parent = self._completed_parent(exp.parent_expression)
-            verdict = self.reflector._classify(exp).get("label")
-            correlation = self_correlation_evidence(exp.metrics)
-            if (
-                parent is not None
-                and checks_passed(parent.metrics) is True
-                and checks_passed(exp.metrics) is True
-                and verdict == "SUCCESS"
-                and correlation["status"] == "PASS"
-                and bool((exp.health or {}).get("ok"))
-            ):
-                exp.validation_status = "STABLE"
-            else:
-                exp.validation_status = "FAILED"
+            parent_expression = child.parent_expression
+            if not isinstance(parent_expression, str) or not parent_expression.strip():
+                continue
+            key = canonical_expression(parent_expression)
+            children_by_parent.setdefault(key, []).append(child)
+            if isinstance(child.validation_plan, dict) and key not in plans:
+                plans[key] = child.validation_plan
+
+        trial_summary = self.trial_ledger.summarize()
+        for key, children in children_by_parent.items():
+            parent = self._completed_parent(children[0].parent_expression)
+            if parent is None:
+                continue
+            plan = plans.get(key)
+            if not isinstance(plan, dict):
+                plan = default_validation_plan(parent)
+            parent.self_correlation = self._settled_self_correlation(parent)
+            platform_evidence = {
+                "parent": {
+                    "health": parent.health,
+                    "correlation": parent.self_correlation,
+                },
+                "children": [
+                    {
+                        "health": child.health,
+                        "correlation": self._settled_self_correlation(child),
+                    }
+                    for child in children
+                ],
+            }
+            report = build_validation_report(
+                parent,
+                children,
+                plan,
+                yearly_evidence=parent.yearly_evidence,
+                trial_summary=trial_summary,
+                platform_evidence=platform_evidence,
+            )
+            append_jsonl_if_unique(
+                os.path.join(self.state_dir, "validation_reports.jsonl"),
+                {
+                    "parent_id": parent.id,
+                    "parent_expression": parent.expression,
+                    "plan_id": report.get("plan_id"),
+                    "status": report.get("status"),
+                    "report": dict(report),
+                    "recorded_at": time.time(),
+                },
+                ("parent_id", "plan_id", "status"),
+            )
+            parent.validation_report = report
+            for child in children:
+                child.validation_report = report
+                child.validation_status = "VALIDATED" if report["status"] == "PASS" else "FAILED"
+            parent.validation_status = "STABLE" if report["status"] == "PASS" else "UNVALIDATED"
+            if report["status"] == "PASS":
+                self._validation_candidates.append((parent, report))
 
     def _alpha_rating(self, metrics):
         """Internal Excellent/Spectacular discipline from AGENTS.md."""

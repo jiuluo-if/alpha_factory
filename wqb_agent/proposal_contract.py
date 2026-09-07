@@ -10,6 +10,7 @@ import os
 import re
 
 from .diversity import extract_fields
+from .validation_report import validate_plan
 
 
 PROPOSAL_EXPERIMENT_QS = {
@@ -27,7 +28,8 @@ MAX_CONFIGURED_PROPOSALS_PER_ROUND = 100
 EXPERIMENT_STAGES = {"BASELINE", "CHILD", "ROBUSTNESS"}
 CHILD_CHANGE_TYPES = {
     "field_swap", "window_change", "operator_variant", "smoothing",
-    "neutralization", "decay",
+    "neutralization", "decay", "window_locality", "semantic_field_swap",
+    "universe", "universe_robustness", "decay_truncation",
 }
 SETTING_OVERRIDES = {"universe", "truncation", "decay"}
 _VEC_INPUT_RE = re.compile(
@@ -123,6 +125,11 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                 problems.append("Child/ROBUSTNESS 必须声明已完成 baseline 的 parent_expression")
             if not isinstance(p.get("changed_variable"), str) or not p["changed_variable"].strip():
                 problems.append("Child/ROBUSTNESS 必须声明唯一 changed_variable")
+            if stage == "ROBUSTNESS":
+                plan_ok, plan_errors = validate_plan(p.get("validation_plan"))
+                if not plan_ok:
+                    problems.extend(["ROBUSTNESS 必须先注册 ValidationPlan: " + error
+                                     for error in plan_errors])
         profiles = {
             str(field.get("id")): field for field in (discovered_fields or [])
             if isinstance(field, dict) and field.get("id")

@@ -65,7 +65,7 @@ class Reflector:
         # 平台证据缓存侧车（alpha_id -> 已结算 checks）；见 wqb_agent/evidence.py。
         self.evidence_cache = evidence_cache or {}
 
-    def reflect(self, round_no, hypothesis, experiments):
+    def reflect(self, round_no, hypothesis, experiments, validation_candidates=None):
         results = []
         for exp in experiments:
             verdict = self._classify(exp)
@@ -73,7 +73,7 @@ class Reflector:
             self._learn(round_no, hypothesis, exp, verdict)
 
         old_best_id = (self.memory.current_best or {}).get("id")
-        best = self._update_best(results)
+        best = self._update_best(results, validation_candidates=validation_candidates)
         self._update_lineages(round_no, results)
         self._generate_next(round_no, hypothesis, results)
         self._mark_hypothesis_outcome(hypothesis, results)
@@ -405,17 +405,31 @@ class Reflector:
         """实验统一评分（复用 metrics.score_of，只算有指标的实验）。"""
         return score_of((exp.metrics or {}) or None)
 
-    def _update_best(self, results):
+    def _update_best(self, results, validation_candidates=None):
         done = [
             r for r in results
             if r["experiment"].metrics
             and r["verdict"]["label"] == "SUCCESS"
             and getattr(r["experiment"], "validation_status", None) == "STABLE"
+            and isinstance(getattr(r["experiment"], "validation_report", None), dict)
+            and r["experiment"].validation_report.get("status") == "PASS"
         ]
+        for parent, report in validation_candidates or []:
+            if (getattr(parent, "metrics", None)
+                    and getattr(parent, "validation_status", None) == "STABLE"
+                    and isinstance(report, dict) and report.get("status") == "PASS"):
+                done.append({
+                    "experiment": parent,
+                    "verdict": {"label": "SUCCESS"},
+                })
         if not done:
             current = self.memory.current_best
             metrics = (current or {}).get("metrics") or {}
-            if checks_passed(metrics) is True and (current or {}).get("validation_status") == "STABLE":
+            report = (current or {}).get("validation_report") or {}
+            if (checks_passed(metrics) is True
+                    and (current or {}).get("validation_status") == "STABLE"
+                    and report.get("status") == "PASS"
+                    and report.get("candidate") == "parent"):
                 return current
             return None
         best_exp = max(done, key=lambda r: self._exp_score(r["experiment"]))["experiment"]

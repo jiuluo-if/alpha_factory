@@ -61,6 +61,7 @@ class TrialLedger:
             "phase": phase,
             "outcome": outcome or state,
             "status": state,
+            "sharpe": self._value(self._value(trial, "metrics", {}) or {}, "sharpe"),
             "round": self._value(trial, "round"),
             "expression_fingerprint": fingerprint,
             "template_family": self._value(trial, "template_family") or "unknown",
@@ -78,8 +79,29 @@ class TrialLedger:
         groups = {key: defaultdict(Counter) for key in
                   ("template_family", "lineage_id", "template_id", "field")}
         events = 0
+        trial_ids = set()
+        generated_trials = set()
+        sharpe_count = 0
+        sharpe_mean = 0.0
+        sharpe_m2 = 0.0
         for row in iter_jsonl_objects(self.path):
             events += 1
+            trial_id = row.get("trial_id")
+            if trial_id:
+                trial_ids.add(trial_id)
+            if row.get("phase") == "generated" and trial_id:
+                generated_trials.add(trial_id)
+            if row.get("phase") == "completed":
+                value = row.get("sharpe")
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+                if value is not None:
+                    sharpe_count += 1
+                    delta = value - sharpe_mean
+                    sharpe_mean += delta / sharpe_count
+                    sharpe_m2 += delta * (value - sharpe_mean)
             phase_counts[row.get("phase", "unknown")] += 1
             status_counts[row.get("status", "UNKNOWN")] += 1
             for key in ("template_family", "lineage_id", "template_id"):
@@ -89,6 +111,13 @@ class TrialLedger:
         return {
             "schema_version": self.SCHEMA_VERSION,
             "events": events,
+            "trial_count": len(trial_ids),
+            "generated_trials": len(generated_trials),
+            "trial_sharpe_count": sharpe_count,
+            "trial_sharpe_mean": sharpe_mean if sharpe_count else None,
+            "trial_sharpe_std": (
+                (sharpe_m2 / sharpe_count) ** 0.5 if sharpe_count > 1 else None
+            ),
             "phase_counts": dict(phase_counts),
             "status_counts": dict(status_counts),
             "trial_counts": {

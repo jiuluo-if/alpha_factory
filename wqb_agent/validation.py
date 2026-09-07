@@ -16,7 +16,7 @@ import math
 
 from .diversity import extract_fields
 from .metrics import checks_passed, num, score_of
-from .mutations import _swap_field, _window_change
+from .mutations import _relative_window_changes, _swap_field
 from .state import Experiment
 
 
@@ -87,8 +87,8 @@ class HighSignalValidator:
                 seen.add(new_expr)
                 perms.append((new_expr, label))
 
-        add(_window_change(expression, +1), "window-up")
-        add(_window_change(expression, -1), "window-down")
+        for index, changed in enumerate(_relative_window_changes(expression)):
+            add(changed, f"window-relative-{index + 1}")
         if "ts_mean(" not in expression:
             add(f"ts_mean({expression}, 5)", "smooth-ts-mean-5")
         if alt_fields:
@@ -116,19 +116,42 @@ class HighSignalValidator:
             + [str(field) for field in (alt_fields or [])
                if not isinstance(field, dict) and field]
         ))
-        jobs = [
-            Experiment(
+        specs = [
+            (new_expr, label, dict(self.settings),
+             "window_locality" if label.startswith("window-relative") else
+             "semantic_field_swap" if label.startswith("field-swap") else "window_locality")
+            for new_expr, label in perms
+        ]
+        if len(specs) < 4 and self.settings.get("universe"):
+            altered = dict(self.settings)
+            altered["universe"] = "TOP1000" if str(self.settings["universe"]).upper() != "TOP1000" else "TOP500"
+            specs.append((record["expression"], "universe-robustness", altered, "universe_robustness"))
+        if len(specs) < 4 and ("decay" in self.settings or "truncation" in self.settings):
+            altered = dict(self.settings)
+            if "decay" in altered:
+                try:
+                    altered["decay"] = max(1, round(float(altered["decay"]) * 1.25))
+                except (TypeError, ValueError):
+                    altered["decay"] = altered["decay"]
+            else:
+                try:
+                    altered["truncation"] = round(float(altered["truncation"]) * 0.8, 4)
+                except (TypeError, ValueError):
+                    altered["truncation"] = altered["truncation"]
+            specs.append((record["expression"], "decay-truncation", altered, "decay_truncation"))
+        jobs = []
+        for new_expr, label, settings, variable in specs[:4]:
+            job = Experiment(
                 round_no,
                 record.get("hypothesis_id"),
                 new_expr,
-                self.settings,
+                settings,
                 extract_fields(new_expr, known_fields),
                 datasets=record.get("datasets") or [],
             )
-            for new_expr, _ in perms
-        ]
-        for job, (_, label) in zip(jobs, perms):
             job.mutation = f"validation-{label}"
+            job.changed_variable = variable
+            jobs.append(job)
         return jobs, perms
 
     def decide(self, record, results):

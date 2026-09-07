@@ -4,6 +4,11 @@
 也支持最长一整天的 AI 接管运行；唯一目标是用真实 Simulation 获得健康、稳定、
 低相关的候选，不把字段猜测、单次高分或文档快照当作平台事实。
 
+新 coding/research agent 的最短阅读路径是：根目录 `AGENTS.md` →
+[`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md) →
+[`wqb_agent/research_api.py`](wqb_agent/research_api.py)。旧模块和工厂入口
+仍为兼容实现，不是理解仓库的默认起点。
+
 ## 生产入口
 
 每次研究先阅读公开研究政策 [docs/RESEARCH_POLICY.md](docs/RESEARCH_POLICY.md)，再按两阶段流程执行：

@@ -1,4 +1,10 @@
-"""Pure proposal contract and allocation validation.
+"""ROLE: CORE
+AGENT_RELEVANCE: HIGH
+PURPOSE: Validate agent-authored proposals before execution.
+READ WHEN: changing schema, field/operator provenance, or budget gates.
+DO NOT USE FOR: selecting hypotheses or bypassing fail-closed validation.
+
+Pure proposal contract and allocation validation.
 
 This module has no transport, persistence, or Agent dependency.  Keeping the
 proposal contract here lets the long-running orchestrator compose discovery,

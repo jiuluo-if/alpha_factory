@@ -1,4 +1,10 @@
-"""Read-only efficiency metrics and no-look-ahead policy replay."""
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: LOW
+PURPOSE: Calculate read-only search calibration and policy replay evidence.
+READ WHEN: analyzing trial efficiency or reward calibration.
+DO NOT USE FOR: changing platform execution or choosing hypotheses.
+
+Read-only efficiency metrics and no-look-ahead policy replay."""
 
 from collections import Counter, defaultdict
 import math

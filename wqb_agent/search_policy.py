@@ -1,4 +1,10 @@
-"""Pure search policy, diversity evidence, and bounded arm allocation."""
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: LOW
+PURPOSE: Apply configurable research allocation and diversity heuristics.
+READ WHEN: debugging search allocation behavior.
+DO NOT USE FOR: treating heuristic policy as a BRAIN invariant.
+
+Pure search policy, diversity evidence, and bounded arm allocation."""
 
 from collections import Counter, defaultdict
 import math
@@ -19,6 +25,9 @@ _TERMINAL = {"DONE", "FAILED", "SKIPPED", "SKIPPED_LOCAL"}
 
 def validate_budget_hierarchy(*, factory_max_simulations, search_max_simulations,
                               research_max_simulations):
+    # MECHANISM_INVARIANT:
+    # These numeric caps protect remote budget and may not be relaxed by a
+    # research heuristic. Allocation among valid experiments is policy.
     """Fail closed when nested Simulation budgets contradict their scope."""
     values = {
         "factory.max_simulations": factory_max_simulations,

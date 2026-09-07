@@ -1,3 +1,12 @@
+"""
+ROLE: CORE
+AGENT_RELEVANCE: HIGH
+PURPOSE: Compose discovery, proposal validation, guarded Simulation execution,
+recovery, and evidence updates through the existing runtime.
+READ WHEN: changing experiment execution or recovery orchestration.
+DO NOT USE FOR: choosing economic hypotheses or bypassing `research_api`.
+"""
+
 import json
 import os
 import re
@@ -408,6 +417,9 @@ class Agent:
 
     def _rotate_stalled_research_space(self, research_space, round_no,
                                        window=40, concentration=0.8):
+        # RESEARCH_POLICY:
+        # Heuristic only. Not a BRAIN invariant; an external research agent
+        # may override or bypass this direction choice.
         """Avoid spending another round on a recently exhausted dataset.
 
         A research-space hypothesis can remain valid while its current
@@ -460,6 +472,9 @@ class Agent:
         return research_space
 
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):
+        # MECHANISM_INVARIANT:
+        # This is the guarded execution boundary. Keep preflight, dedup,
+        # checkpoint, and unknown-write handling fail-closed.
         """Phase 2 of LLM-driven research: execute the agent's proposals
         through real BRAIN simulation, then reflect and update memory."""
         self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}

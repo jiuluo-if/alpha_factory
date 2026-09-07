@@ -1,4 +1,10 @@
-"""WQB API client with unified retry, classified exceptions and thread safety.
+"""ROLE: CORE
+AGENT_RELEVANCE: HIGH
+PURPOSE: Retrieve BRAIN truth and enforce transport/retry/unknown-write rules.
+READ WHEN: changing BRAIN requests, Retry-After, or reconciliation.
+DO NOT USE FOR: deciding research direction or interpreting hypotheses.
+
+WQB API client with unified retry, classified exceptions and thread safety.
 
 Retry policy (shared by every HTTP call through _request):
 
@@ -496,6 +502,9 @@ class WQBClient:
 
     def submit_simulation(self, expression, settings, alpha_type="REGULAR",
                           idempotency_key=None):
+        # MECHANISM_INVARIANT:
+        # Ambiguous POST outcomes must reconcile the same remote job; never
+        # infer safety from a timeout/429 and issue a duplicate write.
         """Submit once after a durable caller-side ``SUBMITTING`` checkpoint.
 
         A timeout, transport failure, 5xx, and a 429 without an explicit
@@ -525,6 +534,8 @@ class WQBClient:
         return location
 
     def poll_progress(self, progress_url, timeout_sec=1500, progress_callback=None):
+        # MECHANISM_INVARIANT:
+        # A known progress URL is the only job that may be polled after POST.
         """Poll until the simulation has an alpha id.
 
         400/403/404/422 fail fast (permanent), 401 re-auths, 429 honors

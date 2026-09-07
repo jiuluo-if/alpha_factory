@@ -1,4 +1,10 @@
-"""Unattended, bounded Alpha-factory orchestration.
+"""ROLE: LEGACY
+AGENT_RELEVANCE: LOW
+PURPOSE: Preserve compatibility for the existing bounded factory lifecycle.
+READ WHEN: a factory command or legacy session must be maintained.
+DO NOT USE FOR: the default agent-facing research model or new experiments.
+
+Unattended, bounded Alpha-factory orchestration.
 
 The runner is intentionally thin: Agent remains the only owner of BRAIN
 submission, checkpoint recovery, reflection, and research state.  This module
@@ -114,6 +120,9 @@ class AIFactoryRunner:
 
     def run(self, duration_sec=86400, max_rounds=0, idle_sleep_sec=30,
             max_simulations=240):
+        # RESEARCH_POLICY:
+        # This compatibility loop is not the default agent-facing model;
+        # safety boundaries inside Agent and Client remain mechanism.
         """Run until the deadline or round cap; return a compact session view.
 
         ``max_rounds=0`` means duration-only.  A non-positive duration is a

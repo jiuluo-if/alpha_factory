@@ -1,4 +1,10 @@
-"""Append-only, bounded-memory trial lifecycle ledger."""
+"""ROLE: CORE
+AGENT_RELEVANCE: MEDIUM
+PURPOSE: Preserve bounded append-only experiment lifecycle and trial counts.
+READ WHEN: changing trial accounting or evidence settlement.
+DO NOT USE FOR: making platform truth or research-direction decisions.
+
+Append-only, bounded-memory trial lifecycle ledger."""
 
 from __future__ import annotations
 

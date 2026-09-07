@@ -1,4 +1,8 @@
-"""Pure, conservative robustness retention evidence."""
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: MEDIUM
+PURPOSE: Compute conservative parent/child robustness retention evidence.
+READ WHEN: changing robustness diagnostics.
+DO NOT USE FOR: submitting experiments or inventing unavailable evidence."""
 
 from dataclasses import dataclass
 import math

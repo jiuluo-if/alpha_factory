@@ -1,4 +1,10 @@
-"""Three-window rolling simulation dispatcher.
+"""ROLE: CORE
+AGENT_RELEVANCE: HIGH
+PURPOSE: Execute validated experiments through the client and collect evidence.
+READ WHEN: changing Simulation dispatch, polling, or result parsing.
+DO NOT USE FOR: selecting research hypotheses or creating a second POST path.
+
+Three-window rolling simulation dispatcher.
 
 Keeps up to `max_concurrent` simulations in flight and refills the window as
 soon as one completes (FIRST_COMPLETED), so the 3 windows never idle.

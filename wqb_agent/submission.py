@@ -1,4 +1,10 @@
-"""Manual-submission pool and platform SELF_CORRELATION evidence.
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: LOW
+PURPOSE: Record manual-review eligibility and platform correlation evidence.
+READ WHEN: changing manual handoff evidence.
+DO NOT USE FOR: automatic Alpha submission or hypothesis choice.
+
+Manual-submission pool and platform SELF_CORRELATION evidence.
 
 This module never submits an Alpha.  It only preserves candidates which have
 already passed the platform's correlation check against the ACTIVE universe.

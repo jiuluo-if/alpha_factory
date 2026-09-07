@@ -1,3 +1,10 @@
+"""WQB research runtime.
+
+Public agent-facing API lives in :mod:`wqb_agent.research_api`.
+Other modules are implementation details unless a task explicitly requires
+them.  Legacy exports below remain available for compatibility and tests.
+"""
+
 from .diversity import deduplicate, extract_fields, is_redundant
 from .search_policy import BudgetAllocator, SearchPolicy
 from .search_snapshot import SearchSnapshot
@@ -61,6 +68,15 @@ __all__ = [
     "classify_error",
     "classify_experiment",
     "is_research_relevant",
+    "ExperimentSpec",
+    "inspect_state",
+    "discover_fields",
+    "get_operator_reference",
+    "run_experiment",
+    "get_experiment",
+    "compare_experiments",
+    "search_history",
+    "reconcile",
 ]
 
 
@@ -86,4 +102,14 @@ def __getattr__(name):
 
         globals()[name] = HighSignalValidator
         return HighSignalValidator
+    if name in {
+        "ExperimentSpec", "inspect_state", "discover_fields",
+        "get_operator_reference", "run_experiment", "get_experiment",
+        "compare_experiments", "search_history", "reconcile",
+    }:
+        from . import research_api
+
+        value = getattr(research_api, name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

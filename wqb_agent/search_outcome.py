@@ -1,4 +1,10 @@
-"""Small, versioned research outcome used by SearchPolicy.
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: LOW
+PURPOSE: Derive versioned research outcomes from existing evidence.
+READ WHEN: changing reward or promotion semantics.
+DO NOT USE FOR: platform truth, remote writes, or independent research policy.
+
+Small, versioned research outcome used by SearchPolicy.
 
 This module intentionally knows only the evidence needed to value one
 experiment.  It does not submit work, read state, or interpret the complete

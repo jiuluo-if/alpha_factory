@@ -1,4 +1,10 @@
-"""Canonical validation plans, aggregate reports, and selection-aware statistics.
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: MEDIUM
+PURPOSE: Evaluate validation evidence and statistical diagnostics.
+READ WHEN: changing robustness/statistical report semantics.
+DO NOT USE FOR: direct BRAIN access or choosing research direction.
+
+Canonical validation plans, aggregate reports, and selection-aware statistics.
 
 This module is pure: it does not submit simulations, read state, or call a
 client.  A ValidationPlan is registered before robustness work starts; a

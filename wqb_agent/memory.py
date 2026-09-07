@@ -1,4 +1,10 @@
-"""Experience Memory — three-tier compressed research memory.
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: MEDIUM
+PURPOSE: Maintain bounded derived workspace and decision memory.
+READ WHEN: debugging workspace compression or memory persistence.
+DO NOT USE FOR: replacing trajectory evidence or deciding hypotheses.
+
+Experience Memory — three-tier compressed research memory.
 
 Tiers
 -----

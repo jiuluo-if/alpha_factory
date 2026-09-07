@@ -1,3 +1,10 @@
+"""ROLE: CORE
+AGENT_RELEVANCE: HIGH
+PURPOSE: Represent auditable experiments and append-only recovery evidence.
+READ WHEN: changing experiment serialization, trajectory, or checkpoints.
+DO NOT USE FOR: treating derived memory as immutable platform truth.
+"""
+
 import json
 import os
 import time

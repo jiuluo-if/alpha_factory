@@ -1,4 +1,10 @@
-"""Robustness validation of suspiciously high-signal alphas.
+"""ROLE: INTERNAL
+AGENT_RELEVANCE: MEDIUM
+PURPOSE: Build bounded robustness perturbation work from experiment evidence.
+READ WHEN: changing validation task generation or high-signal checks.
+DO NOT USE FOR: direct Simulation submission or final economic interpretation.
+
+Robustness validation of suspiciously high-signal alphas.
 
 对应本地 AGENTS.md §6 纪律：Sharpe > 3 或 Fitness > 8 的高分信号必须先
 交叉验证再判定，聚合指标可被集中权重噪声欺骗。本模块对疑似高分候选

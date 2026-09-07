@@ -1,3 +1,10 @@
+"""ROLE: CORE
+AGENT_RELEVANCE: HIGH
+PURPOSE: Discover and profile fields using current BRAIN data or bounded cache.
+READ WHEN: changing field/dataset discovery or provenance.
+DO NOT USE FOR: inventing field semantics or choosing economic hypotheses.
+"""
+
 import hashlib
 import json
 import math

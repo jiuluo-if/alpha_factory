@@ -150,6 +150,7 @@ Desktop.ini
 .agents/
 .claude/
 .cursorindex/
+.planning/
 AGENTS.md
 *.prompt.local
 *.session.local

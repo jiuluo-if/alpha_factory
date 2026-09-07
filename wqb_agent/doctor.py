@@ -11,18 +11,25 @@ from .diagnostics import DiagnosticEvent
 
 
 def _readable(path):
-    return not os.path.exists(path) or os.access(path, os.R_OK)
+    return os.path.isfile(path) and os.access(path, os.R_OK)
 
 
 def run_doctor(raw_config, *, offline=True):
     parsed = raw_config if isinstance(raw_config, AppConfig) else parse_config(raw_config)
     state_dir = parsed.agent.get("state_dir", ".wqb_state")
+    ledger_path = os.path.join(state_dir, "trial_ledger.jsonl")
+    ledger_exists = os.path.isfile(ledger_path)
     result = {
         "config_valid": True,
         "offline": bool(offline),
         "state_dir": state_dir,
         "state_dir_writable": os.path.isdir(state_dir) and os.access(state_dir, os.W_OK),
-        "ledger_readable": _readable(os.path.join(state_dir, "trial_ledger.jsonl")),
+        "ledger_readable": _readable(ledger_path),
+        "ledger_status": (
+            "MISSING" if not ledger_exists
+            else "READABLE" if _readable(ledger_path)
+            else "UNREADABLE"
+        ),
         "checkpoint_consistency": "PASS",
         "schema_versions": {},
         "operator_reference": os.path.exists(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md")),
@@ -75,6 +82,16 @@ def run_doctor(raw_config, *, offline=True):
     if not result["state_dir_writable"]:
         diagnostics.append(DiagnosticEvent(
             "STATE_DIR_NOT_WRITABLE", "ERROR", "doctor", message=state_dir
+        ).as_dict())
+    if result["ledger_status"] == "MISSING":
+        diagnostics.append(DiagnosticEvent(
+            "LEDGER_MISSING", "WARN", "trial_ledger",
+            message="append-only TrialLedger 尚未建立，无法完成 checkpoint 对账"
+        ).as_dict())
+    elif result["ledger_status"] == "UNREADABLE":
+        diagnostics.append(DiagnosticEvent(
+            "LEDGER_UNREADABLE", "ERROR", "trial_ledger",
+            message=ledger_path
         ).as_dict())
     if result["pnl_capability"] != "LIVE_VERIFIED":
         diagnostics.append(DiagnosticEvent(

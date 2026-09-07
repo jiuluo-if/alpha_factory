@@ -63,6 +63,8 @@ class Phase8ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_doctor({"simulation": {}, "agent": {"state_dir": tmp}}, offline=True)
             self.assertTrue(result["config_valid"])
+            self.assertFalse(result["ledger_readable"])
+            self.assertEqual(result["ledger_status"], "MISSING")
             self.assertEqual(result["pnl_capability"], "UNAVAILABLE")
             self.assertEqual(result["incremental_capability"], "UNAVAILABLE")
 

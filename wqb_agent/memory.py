@@ -1,0 +1,870 @@
+"""Experience Memory — three-tier compressed research memory.
+
+Tiers
+-----
+- short_term : recent working memory (round recaps, pending reconciliations,
+  low-confidence observations). Entries expire after short_term_window
+  rounds; repeatedly-hit observations are promoted to long-term lessons,
+  everything else moves to the garbage tier.
+- long_term  : validated, evidence-backed memory (lessons / avoid / next /
+  active_hypotheses / current_best). Only real simulation results may write
+  here; every entry keeps source_round / evidence / confidence for audit.
+- garbage    : soft-deleted entries (tombstones). Forgotten / superseded /
+  expired entries move here with a reason and can be restored; they are
+  physically purged only after garbage_max_age_rounds rounds (by the
+  maintenance script, dry-run first).
+
+Long history lives in trajectory.jsonl (append-only). experience.json keeps
+the compressed long-term view; garbage.json keeps the tombstone log in a
+separate file so the main memory file never bloats.
+"""
+
+import base64
+import binascii
+import json
+import math
+import os
+import re
+import time
+import uuid
+import zlib
+from functools import lru_cache
+
+from .artifacts import atomic_write_json_if_changed
+from .expression import canonical_expression
+
+_CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
+# Hypothesis ids generated solely from a round are reconstructable from the
+# trajectory and must not consume long-term memory forever. The latter
+# alternatives cover pre-current-era ids already present in older state files.
+_EPHEMERAL_HYPOTHESIS_ID = re.compile(
+    r"^(?:h-(?:next|iter|llm|factory|space)-r\d+|"
+    r"h-rb[0-9a-z]+-.+|rb[0-9a-z]+-hypothesis)$",
+    re.IGNORECASE,
+)
+
+# Kinds allowed in the short-term tier.
+SHORT_KINDS = ("recap", "pending", "observation")
+# Reasons recorded when an entry is soft-deleted into the garbage tier.
+GARBAGE_REASONS = ("stale", "superseded", "deduped", "expired", "low_value",
+                   "not_promoted", "user_removed")
+
+
+class ExperienceMemory:
+    def __init__(
+        self,
+        state_dir=".wqb_state",
+        max_lessons=20,
+        max_avoid=30,
+        max_next=15,
+        max_hypotheses=12,
+        max_short_term=30,
+        short_term_window=5,
+        promote_hits=2,
+        max_garbage=200,
+        garbage_max_age_rounds=60,
+        next_max_age_rounds=20,
+        max_lineages=256,
+        max_seen_expressions=4096,
+        max_used_hypotheses=256,
+    ):
+        self.state_dir = state_dir
+        self.max_lessons = self._cap(max_lessons, 20)
+        self.max_avoid = self._cap(max_avoid, 30)
+        self.max_next = self._cap(max_next, 15)
+        self.max_hypotheses = self._cap(max_hypotheses, 12)
+        self.max_short_term = self._cap(max_short_term, 30)
+        self.short_term_window = self._cap(short_term_window, 5)
+        self.promote_hits = self._cap(promote_hits, 2)
+        self.max_garbage = self._cap(max_garbage, 200)
+        self.garbage_max_age_rounds = self._cap(garbage_max_age_rounds, 60)
+        self.next_max_age_rounds = self._cap(next_max_age_rounds, 20)
+        self.max_lineages = max(1, self._cap(max_lineages, 256))
+        try:
+            self.max_seen_expressions = max(1, int(max_seen_expressions))
+        except (TypeError, ValueError):
+            self.max_seen_expressions = 4096
+        try:
+            self.max_used_hypotheses = max(1, int(max_used_hypotheses))
+        except (TypeError, ValueError):
+            self.max_used_hypotheses = 256
+        self.current_best = None
+        self.lessons = []
+        self.avoid = []
+        self.next = []
+        self.active_hypotheses = []
+        self.seen_expressions = set()
+        self.used_hypotheses = set()
+        self.updated_round = 0
+        self.best_exhausted = False
+        self.short_term = []
+        # Bounded experiment-budget state; this is not a research lesson.
+        self.lineages = {}
+        self.garbage = []
+        self._ensure_dir()
+
+    # ------------------------------------------------------------------ I/O
+
+    def _ensure_dir(self):
+        os.makedirs(self.state_dir, exist_ok=True)
+
+    @staticmethod
+    def _cap(value, fallback):
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _number(value, default=0.0):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return default
+        return value if math.isfinite(value) else default
+
+    def memory_path(self):
+        return os.path.join(self.state_dir, "experience.json")
+
+    def garbage_path(self):
+        return os.path.join(self.state_dir, "garbage.json")
+
+    def load(self):
+        path = self.memory_path()
+        if not os.path.exists(path):
+            return self
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise TypeError("experience root must be an object")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            # 核心记忆损坏：只保留一个稳定诊断备份后降级为空记忆继续
+            # 启动，绝不崩溃——trajectory.jsonl 仍是完整证据源，可据此
+            # 重建。固定备份名避免全天运行每次重启都生成新的冗余文件。
+            backup = f"{path}.corrupt"
+            try:
+                if not os.path.exists(backup):
+                    os.replace(path, backup)
+            except OSError:
+                pass
+            self.current_best = None
+            self.lessons = []
+            self.avoid = []
+            self.next = []
+            self.active_hypotheses = []
+            self.seen_expressions = set()
+            self.used_hypotheses = set()
+            self.best_exhausted = False
+            self.updated_round = 0
+            self.short_term = []
+            self.lineages = {}
+            self._load_garbage()
+            print(
+                f"[MEMORY] experience.json 损坏（{type(exc).__name__}），"
+                f"已备份为 {backup} 并降级为空记忆启动。"
+            )
+            return self
+        self.current_best = (
+            data.get("current_best")
+            if isinstance(data.get("current_best"), dict) else None
+        )
+        self.lessons = self._dict_list(data.get("lessons"))
+        self.avoid = self._dict_list(data.get("avoid"))
+        self.next = self._dict_list(data.get("next"))
+        self.active_hypotheses = self._dict_list(data.get("active_hypotheses"))
+        packed = data.get("seen_expressions_blob")
+        if isinstance(packed, str):
+            self.seen_expressions = self._unpack_expressions(packed)
+        else:
+            # Backward compatibility with the pre-factory JSON list format.
+            legacy_expressions = data.get("seen_expressions", [])
+            if not isinstance(legacy_expressions, list):
+                legacy_expressions = []
+            self.seen_expressions = {
+                canonical_expression(value)
+                for value in legacy_expressions
+                if isinstance(value, str) and value.strip()
+            }
+        self._trim_seen_expressions()
+        used_hypotheses = data.get("used_hypotheses", [])
+        if not isinstance(used_hypotheses, list):
+            used_hypotheses = []
+        self.used_hypotheses = {
+            str(value) for value in used_hypotheses
+            if isinstance(value, (str, int)) and value
+            and not _EPHEMERAL_HYPOTHESIS_ID.fullmatch(str(value))
+        }
+        self._trim_used_hypotheses()
+        self.best_exhausted = bool(data.get("best_exhausted", False))
+        try:
+            self.updated_round = int(data.get("updated_round", 0) or 0)
+        except (TypeError, ValueError):
+            self.updated_round = 0
+        # short_term may be absent in files written by older versions.
+        self.short_term = self._dict_list(data.get("short_term"))
+        raw_lineages = data.get("lineages", {})
+        self.lineages = (
+            {str(key): value for key, value in raw_lineages.items()
+             if isinstance(value, dict)}
+            if isinstance(raw_lineages, dict) else {}
+        )
+        self._load_garbage()
+        # Enforce all memory caps at the trust boundary.  This only changes
+        # the in-memory decision view; persistence remains owned by save().
+        self.compress()
+        return self
+
+    def _load_garbage(self):
+        path = self.garbage_path()
+        if not os.path.exists(path):
+            self.garbage = []
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = json.load(f)
+            self.garbage = self._dict_list(value)
+        except (json.JSONDecodeError, OSError):
+            # A corrupt tombstone log must never break the main memory.
+            self.garbage = []
+
+    @staticmethod
+    def _dict_list(value):
+        """Normalize optional persisted collections at the trust boundary."""
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
+
+    def save(self):
+        self.compress()
+        data = {
+            "schema_version": 2,
+            "current_best": self.current_best,
+            "lessons": self.lessons,
+            "avoid": self.avoid,
+            "next": self.next,
+            "active_hypotheses": self.active_hypotheses,
+            # Full expressions remain available in memory at runtime for
+            # exact dedupe, but the durable decision view stores them in one
+            # compressed field.  This removes megabytes of JSON punctuation
+            # without creating a second redundant memory file.
+            "seen_expressions_blob": self._pack_expressions(self.seen_expressions),
+            "seen_expressions_count": len(self.seen_expressions),
+            "used_hypotheses": sorted(self.used_hypotheses),
+            "best_exhausted": self.best_exhausted,
+            "updated_round": self.updated_round,
+            "short_term": self.short_term,
+            "lineages": self.lineages,
+        }
+        path = self.memory_path()
+        atomic_write_json_if_changed(path, data)
+        self._save_garbage()
+
+    def _save_garbage(self):
+        path = self.garbage_path()
+        atomic_write_json_if_changed(path, self.garbage)
+
+    # ---------------------------------------------------------- short term
+
+    def add_short_term(self, kind, text, round_no, evidence=1, detail=None):
+        """Add a short-term entry. A similar existing entry is merged:
+        hits + 1, text/round refreshed — repeated observations accumulate
+        hits and become promotion candidates when they expire."""
+        if kind not in SHORT_KINDS:
+            raise ValueError(f"short-term kind must be one of {SHORT_KINDS}")
+        lineage = detail.get("lineage") if isinstance(detail, dict) else None
+        for entry in self.short_term:
+            if entry.get("kind") == kind and self._similar(
+                entry.get("text", ""), text, threshold=0.7
+            ):
+                entry["hits"] = entry.get("hits", 1) + 1
+                entry["text"] = text
+                entry["round"] = round_no
+                entry["updated"] = time.time()
+                if lineage:
+                    entry["lineages"] = sorted(
+                        set(entry.get("lineages") or []) | {lineage}
+                    )
+                return entry
+        entry = {
+            "id": uuid.uuid4().hex[:8],
+            "kind": kind,
+            "text": text,
+            "round": round_no,
+            "evidence": evidence,
+            "hits": 1,
+            "detail": detail,
+            "lineages": [lineage] if lineage else [],
+            "created": time.time(),
+            "updated": time.time(),
+        }
+        self.short_term.append(entry)
+        return entry
+
+    def recent_short_term(self, n=5):
+        ordered = sorted(
+            self.short_term,
+            key=lambda x: (-x.get("updated", 0), -x.get("round", 0)),
+        )
+        return ordered[:n]
+
+    def bump_short_term(self, entry_id):
+        for entry in self.short_term:
+            if entry.get("id") == entry_id:
+                entry["hits"] = entry.get("hits", 1) + 1
+                entry["updated"] = time.time()
+                return entry
+        return None
+
+    def expire_short_term(self, now_round=None, save=False):
+        """Expire short-term entries older than the window. Observation
+        entries with enough hits are promoted to long-term lessons; the rest
+        move to the garbage tier (soft delete). Returns (promoted, trashed)."""
+        now_round = now_round if now_round is not None else self.updated_round
+        promoted, trashed = [], []
+        kept = []
+        for entry in self.short_term:
+            age = now_round - entry.get("round", now_round)
+            if age < self.short_term_window:
+                kept.append(entry)
+                continue
+            new_lesson = self._promote_short_term(entry, now_round)
+            if new_lesson is not None:
+                promoted.append(new_lesson)
+            else:
+                self.move_to_garbage(
+                    "short_term", entry, reason="expired",
+                    note=self._expire_note(entry), round_no=now_round,
+                )
+                trashed.append(entry)
+        self.short_term = kept
+        if save:
+            self.save()
+        return promoted, trashed
+
+    def _promote_short_term(self, entry, now_round):
+        """Observation entries that kept being repeated (hits >= threshold)
+        become long-term lessons; other kinds never auto-promote."""
+        if entry.get("kind") != "observation":
+            return None
+        if entry.get("hits", 0) < self.promote_hits:
+            return None
+        # Repeating a result in the same lineage is not independent evidence.
+        # Legacy entries with no lineage are deliberately retained as
+        # observations rather than promoted on hit count alone.
+        if len(set(entry.get("lineages") or [])) < 2:
+            return None
+        evidence = entry.get("evidence", 1) * min(entry.get("hits", 1), 3)
+        confidence = min(0.6, 0.2 + 0.1 * entry.get("hits", 0))
+        return self.add_lesson(
+            entry["text"], now_round, evidence=evidence, confidence=confidence
+        )
+
+    def _expire_note(self, entry):
+        return (
+            f"short-term [{entry.get('kind')}] not promoted "
+            f"(hits={entry.get('hits', 0)} < {self.promote_hits} or non-promotable)"
+        )
+
+    def confirm_pending(self, entry_id, verdict, round_no, detail=None):
+        """Reconcile a short-term 'pending' entry after read-only checks.
+        verdict: 'success' | 'failed' | 'neutral'. Resolves the entry into
+        long-term memory (or garbage) and removes it from short term."""
+        for i, entry in enumerate(self.short_term):
+            if entry.get("id") == entry_id:
+                self.short_term.pop(i)
+                text = detail or entry.get("text", "")
+                if verdict == "success":
+                    return self.add_lesson(
+                        text, round_no, evidence=2, confidence=0.5
+                    )
+                if verdict == "failed":
+                    self.add_avoid(
+                        text[:80], f"confirmed after reconciliation: {text}",
+                        round_no,
+                    )
+                    return self.add_lesson(
+                        text, round_no, evidence=1, confidence=0.3
+                    )
+                # neutral: not a directional conclusion.
+                self.move_to_garbage(
+                    "short_term", entry, reason="not_promoted",
+                    note="pending reconciliation was neutral", round_no=round_no,
+                )
+                return None
+        return None
+
+    # ---------------------------------------------------------------- garbage
+
+    def move_to_garbage(self, kind, entry, reason, note="", round_no=None):
+        """Soft-delete an entry: keep a tombstone instead of destroying it."""
+        if reason not in GARBAGE_REASONS and not note:
+            note = f"reason={reason}"
+        tomb = {
+            "id": uuid.uuid4().hex[:8],
+            "kind": kind,
+            "entry": entry,
+            "reason": reason,
+            "note": note,
+            "moved_round": round_no if round_no is not None else self.updated_round,
+            "moved_at": time.time(),
+        }
+        self.garbage.append(tomb)
+        if len(self.garbage) > self.max_garbage:
+            self.purge_garbage(
+                max_age_rounds=0, now_round=round_no, dry_run=False
+            )
+        return tomb
+
+    def restore_from_garbage(self, tomb_id):
+        """Restore a tombstoned entry back to its tier. Returns the restored
+        entry or None if the id is unknown."""
+        for i, tomb in enumerate(self.garbage):
+            if tomb.get("id") == tomb_id:
+                entry = tomb.get("entry")
+                kind = tomb.get("kind")
+                self.garbage.pop(i)
+                if kind == "lesson":
+                    self.lessons.append(entry)
+                elif kind == "avoid":
+                    self.avoid.append(entry)
+                elif kind == "next":
+                    self.next.append(entry)
+                elif kind == "short_term":
+                    self.short_term.append(entry)
+                elif kind == "hypothesis":
+                    self.active_hypotheses.append(entry)
+                else:
+                    return None
+                return entry
+        return None
+
+    def purge_garbage(self, max_age_rounds=None, now_round=None, dry_run=True):
+        """Physically delete tombstones older than max_age_rounds.
+        Returns the list that would be / was deleted."""
+        max_age_rounds = (
+            self.garbage_max_age_rounds
+            if max_age_rounds is None else max_age_rounds
+        )
+        now_round = now_round if now_round is not None else self.updated_round
+        doomed = [
+            t for t in self.garbage
+            if (now_round - t.get("moved_round", now_round)) > max_age_rounds
+        ]
+        if not dry_run and doomed:
+            doomed_ids = {t.get("id") for t in doomed}
+            self.garbage = [t for t in self.garbage if t.get("id") not in doomed_ids]
+            self._save_garbage()
+        return doomed
+
+    def garbage_stats(self):
+        by_kind = {}
+        by_reason = {}
+        for t in self.garbage:
+            by_kind[t.get("kind", "?")] = by_kind.get(t.get("kind", "?"), 0) + 1
+            by_reason[t.get("reason", "?")] = (
+                by_reason.get(t.get("reason", "?"), 0) + 1
+            )
+        return {"total": len(self.garbage), "by_kind": by_kind,
+                "by_reason": by_reason}
+
+    # ------------------------------------------------------------- lessons
+
+    def add_lesson(self, claim, source_round, evidence, confidence=0.5):
+        for lesson in self.lessons:
+            if self._similar(lesson["claim"], claim, threshold=0.8):
+                lesson["source_round"] = source_round
+                lesson["evidence"] = lesson.get("evidence", 0) + evidence
+                lesson["confidence"] = min(1.0, lesson.get("confidence", 0.5) + 0.15)
+                lesson["last_used"] = time.time()
+                lesson["updated"] = time.time()
+                return lesson
+        entry = {
+            "id": uuid.uuid4().hex[:8],
+            "claim": claim,
+            "source_round": source_round,
+            "evidence": evidence,
+            "confidence": min(confidence, 1.0),
+            "created": time.time(),
+            "updated": time.time(),
+            "last_used": time.time(),
+        }
+        self.lessons.append(entry)
+        return entry
+
+    # --------------------------------------------------------------- avoid
+
+    def add_avoid(self, direction, reason, source_round):
+        for item in self.avoid:
+            if item.get("direction") == direction:
+                item["reason"] = reason
+                item["source_round"] = source_round
+                item["updated"] = time.time()
+                return item
+        entry = {
+            "id": uuid.uuid4().hex[:8],
+            "direction": direction,
+            "reason": reason,
+            "source_round": source_round,
+            "created": time.time(),
+            "updated": time.time(),
+        }
+        self.avoid.append(entry)
+        return entry
+
+    def reconcile_avoid(self, direction, reason, source_round):
+        """Correct one evidence-backed avoid record without raw JSON edits.
+
+        Reflection stores expression keys truncated to 80 characters.  This
+        helper also collapses an accidental full-expression duplicate created
+        by a repair/migration caller, preserving the established key.
+        """
+        key = str(direction)[:80]
+        matches = [
+            item for item in self.avoid
+            if item.get("direction") == key or item.get("direction") == direction
+        ]
+        if matches:
+            target = next((item for item in matches if item.get("direction") == key), matches[0])
+            target["direction"] = key
+            target["reason"] = reason
+            target["source_round"] = source_round
+            target["updated"] = time.time()
+            # 用对象身份（id）剔除匹配项：dict 值相等不代表同一条记录，
+            # `not in matches` 的 == 语义可能误删内容恰好相同的另一条。
+            matched_ids = {id(item) for item in matches}
+            self.avoid = [
+                item for item in self.avoid
+                if item is target or id(item) not in matched_ids
+            ]
+            return target
+        return self.add_avoid(key, reason, source_round)
+
+    def is_avoided(self, direction):
+        return any(item["direction"] == direction for item in self.avoid)
+
+    # ---------------------------------------------------------------- next
+
+    def add_next(self, idea, priority, source, round_no, fields=None, datasets=None):
+        """Register a next experiment idea. fields/datasets make the idea
+        directly actionable: the next round fetches these fields first."""
+        for item in self.next:
+            if item.get("idea") == idea:
+                item["priority"] = max(item.get("priority", 0), priority)
+                item["source"] = source
+                if fields:
+                    item["fields"] = sorted(set(item.get("fields") or []) | set(fields))
+                if datasets:
+                    item["datasets"] = sorted(
+                        set(item.get("datasets") or []) | set(datasets)
+                    )
+                return item
+        entry = {
+            "id": uuid.uuid4().hex[:8],
+            "idea": idea,
+            "priority": priority,
+            "source": source,
+            "round": round_no,
+            "created": time.time(),
+        }
+        if fields:
+            entry["fields"] = sorted(set(fields))
+        if datasets:
+            entry["datasets"] = sorted(set(datasets))
+        self.next.append(entry)
+        return entry
+
+    def top_next(self, n=5):
+        ordered = sorted(self.next, key=lambda x: -self._number(x.get("priority")))
+        return ordered[:n]
+
+    def next_with_fields(self, now_round=None):
+        """Highest-priority actionable idea, excluding stale work items.
+
+        ``next`` is a bounded queue, not durable evidence.  A high priority
+        suggestion from an old round must not revive a closed/redundant field
+        family merely because newer research has not rewritten the same text.
+        """
+        with_fields = [x for x in self.next if x.get("fields") or x.get("datasets")]
+        if now_round is not None:
+            def last_evidence_round(item):
+                values = [item.get("round", 0), item.get("source", 0)]
+                return max((v for v in values if isinstance(v, int)), default=0)
+            with_fields = [
+                x for x in with_fields
+                if now_round - last_evidence_round(x) <= self.next_max_age_rounds
+            ]
+        if not with_fields:
+            return None
+        return max(with_fields, key=lambda x: self._number(x.get("priority")))
+
+    # ------------------------------------------------------------- lineage
+
+    def lineage_decision(self, lineage_id):
+        return (self.lineages.get(lineage_id) or {}).get("decision", "CONTINUE")
+
+    def record_lineage_result(self, lineage_id, score, label, round_no,
+                              counts_toward_stop=True):
+        """Update CONTINUE / STOP / KILL from resolved research evidence.
+
+        A material score improvement earns another experiment.  Two resolved,
+        non-gaining experiments STOP a lineage; a third KILLs it.  UNKNOWN and
+        system failures never call this method, so they cannot close research.
+
+        Per the 2026-08-22 user policy, the no-gain STOP/KILL discipline only
+        applies to lineages that already reached a submittable standard;
+        callers pass ``counts_toward_stop=False`` for promising-but-unqualified
+        results so those lineages keep iterating with a different variable
+        class instead of being closed by count alone (the observation is still
+        recorded via last_label/last_round).
+        """
+        if not lineage_id:
+            return "CONTINUE"
+        entry = self.lineages.setdefault(lineage_id, {
+            "best_score": None, "no_gain_streak": 0, "decision": "CONTINUE",
+        })
+        best = entry.get("best_score")
+        improved = score is not None and (best is None or score > best + 0.05)
+        if improved:
+            entry["best_score"] = score
+            entry["no_gain_streak"] = 0
+            entry["decision"] = "CONTINUE"
+        elif counts_toward_stop:
+            entry["no_gain_streak"] = entry.get("no_gain_streak", 0) + 1
+            if entry["no_gain_streak"] >= 3:
+                entry["decision"] = "KILL"
+            elif entry["no_gain_streak"] >= 2:
+                entry["decision"] = "STOP"
+        entry["last_label"] = label
+        entry["last_round"] = round_no
+        return entry["decision"]
+
+    # ---------------------------------------------------------- hypotheses
+
+    def register_hypothesis(self, hypothesis):
+        """Mark a hypothesis as attempted (used) and track it as active."""
+        hyp_id = hypothesis.get("id")
+        if hyp_id:
+            self.used_hypotheses.add(str(hyp_id))
+            self._trim_used_hypotheses()
+        for entry in self.active_hypotheses:
+            if entry["id"] == hyp_id:
+                entry["last_round"] = hypothesis.get("_round", entry.get("last_round"))
+                return entry
+        entry = {
+            "id": hyp_id or uuid.uuid4().hex[:8],
+            "statement": hypothesis.get("statement", ""),
+            "tags": list(hypothesis.get("tags") or []),
+            "direction": hypothesis.get("direction"),
+            "datasets": list(hypothesis.get("datasets") or hypothesis.get("dataset_hints") or []),
+            "status": "active",
+            "last_round": hypothesis.get("_round"),
+            "last_verdict": None,
+        }
+        self.active_hypotheses.append(entry)
+        return entry
+
+    def mark_hypothesis(self, hyp_id, verdict, round_no):
+        """verdict: 'success' | 'promising' | 'failed'"""
+        for entry in self.active_hypotheses:
+            if entry["id"] == hyp_id:
+                entry["status"] = verdict
+                entry["last_verdict"] = verdict
+                entry["last_round"] = round_no
+                return entry
+        return None
+
+    # ---------------------------------------------------- expression dedupe
+
+    def remember_expression(self, expression):
+        canonical = canonical_expression(expression)
+        if canonical:
+            self.seen_expressions.add(canonical)
+            self._trim_seen_expressions()
+
+    def forget_expression(self, expression):
+        """Keep UNKNOWN/system failures retryable across restarts."""
+        self.seen_expressions.discard(canonical_expression(expression))
+
+    def is_seen(self, expression):
+        return canonical_expression(expression) in self.seen_expressions
+
+    def _trim_seen_expressions(self):
+        """Keep only a deterministic warm cache, not a second full ledger.
+
+        Exact historical dedupe is performed by Agent against the append-only
+        trajectory.  This set is only a bounded startup/proposal hint, so it
+        must not grow with an all-day factory session.
+        """
+        if len(self.seen_expressions) > self.max_seen_expressions:
+            self.seen_expressions = set(
+                sorted(self.seen_expressions)[-self.max_seen_expressions:]
+            )
+
+    def _trim_used_hypotheses(self):
+        """Keep the hypothesis avoidance cache bounded and deterministic."""
+        if len(self.used_hypotheses) > self.max_used_hypotheses:
+            self.used_hypotheses = set(
+                sorted(self.used_hypotheses)[-self.max_used_hypotheses:]
+            )
+
+    @staticmethod
+    def _pack_expressions(expressions):
+        raw = json.dumps(
+            sorted(expressions), ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        return base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
+
+    @staticmethod
+    def _unpack_expressions(packed):
+        try:
+            raw = zlib.decompress(base64.b64decode(packed.encode("ascii")))
+            values = json.loads(raw.decode("utf-8"))
+            return (
+                {canonical_expression(value) for value in values}
+                if isinstance(values, list) else set()
+            )
+        except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error,
+                zlib.error, json.JSONDecodeError):
+            return set()
+
+    def set_current_best(self, experiment):
+        self.current_best = experiment.to_dict()
+
+    # ------------------------------------------------------------ context
+
+    def context(self, recent_experiments=None, short_term_n=5, garbage_n=3):
+        """The compressed view the model reads — requirement #8. Long-term
+        tiers (best / hypotheses / lessons / avoid / next) plus a small
+        window of short-term entries and a garbage digest for audit."""
+        lessons = sorted(
+            self.lessons, key=lambda x: -x.get("evidence", 0)
+        )[: self.max_lessons]
+        avoid = sorted(self.avoid, key=lambda x: -x.get("updated", 0))[: self.max_avoid]
+        next_ideas = self.top_next(self.max_next)
+        garbage = self.garbage[-garbage_n:] if self.garbage else []
+        return {
+            "current_best": self.current_best,
+            "active_hypotheses": [
+                {k: e[k] for k in ("id", "statement", "status", "last_round", "last_verdict") if k in e}
+                for e in self.active_hypotheses
+            ][: self.max_hypotheses],
+            "recent_key_experiments": recent_experiments or [],
+            "short_term": self.recent_short_term(short_term_n),
+            "garbage_digest": {
+                "stats": self.garbage_stats(),
+                "recent": garbage,
+            },
+            "lessons": lessons,
+            "avoid": avoid,
+            "next": next_ideas,
+        }
+
+    # ----------------------------------------------------------- compress
+
+    def compress(self):
+        # Persisted/AI-authored rows are untrusted input.  Keep only the
+        # minimal shape each tier's consumers can interpret, so one malformed
+        # dictionary cannot abort an unattended factory save or create a
+        # duplicate garbage stream on every retry.
+        self.lessons = [
+            item for item in self._dict_list(self.lessons)
+            if isinstance(item.get("claim"), str) and item["claim"].strip()
+        ]
+        self.avoid = [
+            item for item in self._dict_list(self.avoid)
+            if isinstance(item.get("direction"), str) and item["direction"].strip()
+        ]
+        self.next = [
+            item for item in self._dict_list(self.next)
+            if isinstance(item.get("idea"), str) and item["idea"].strip()
+        ]
+        self.active_hypotheses = [
+            item for item in self._dict_list(self.active_hypotheses)
+            if isinstance(item.get("id"), (str, int)) and str(item["id"]).strip()
+        ]
+        self.short_term = [
+            item for item in self._dict_list(self.short_term)
+            if isinstance(item.get("text"), str) and item["text"].strip()
+        ]
+        merged = []
+        for lesson in sorted(
+            self.lessons, key=lambda x: -self._number(x.get("evidence"))
+        ):
+            if not any(self._similar(lesson["claim"], m["claim"], threshold=0.75) for m in merged):
+                merged.append(lesson)
+        self.lessons = merged[: self.max_lessons]
+        self.avoid = sorted(
+            self.avoid, key=lambda x: -self._number(x.get("updated"))
+        )[: self.max_avoid]
+        self.next = sorted(
+            self.next, key=lambda x: -self._number(x.get("priority"))
+        )[: self.max_next]
+        self.active_hypotheses = sorted(
+            self.active_hypotheses, key=lambda x: -self._number(x.get("last_round"))
+        )[: self.max_hypotheses]
+        self.short_term = sorted(
+            self.short_term,
+            key=lambda x: (
+                -self._number(x.get("updated")),
+                -self._number(x.get("round")),
+            ),
+        )[: self.max_short_term]
+        if len(self.lineages) > self.max_lineages:
+            ordered = sorted(
+                self.lineages.items(),
+                key=lambda item: (
+                    self._number(item[1].get("last_round"))
+                    if isinstance(item[1], dict) else 0,
+                    str(item[0]),
+                ),
+                reverse=True,
+            )
+            self.lineages = dict(ordered[: self.max_lineages])
+        if len(self.garbage) > self.max_garbage:
+            self.garbage = sorted(
+                self._dict_list(self.garbage),
+                key=lambda x: self._number(x.get("moved_at")),
+                reverse=True,
+            )[: self.max_garbage]
+        self.seen_expressions = set(self.seen_expressions)
+        self._trim_seen_expressions()
+        self.used_hypotheses = {
+            str(value) for value in self.used_hypotheses
+            if value and not _EPHEMERAL_HYPOTHESIS_ID.fullmatch(str(value))
+        }
+        self._trim_used_hypotheses()
+
+    # ------------------------------------------------------------- helpers
+
+    @staticmethod
+    def _similar(a, b, threshold=0.8):
+        ta = ExperienceMemory._tokens(a)
+        tb = ExperienceMemory._tokens(b)
+        if not ta or not tb:
+            return False
+        inter = len(set(ta) & set(tb))
+        union = len(set(ta) | set(tb))
+        return inter / union >= threshold
+
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _tokens(text):
+        # Keep words (>2 chars) and numeric tokens (any length) so claims
+        # differing only by numbers are not collapsed by similarity dedupe.
+        tokens = [
+            w
+            for w in re.split(r"[^a-z0-9]+", text.lower())
+            if len(w) > 2 or w.isdigit()
+        ]
+        # Chinese: split each CJK run into overlapping 2-char shingles so
+        # similarity reflects real character overlap, not "one run = one token".
+        for cjk in _CJK_RUN.findall(text):
+            cjk = cjk.strip()
+            if len(cjk) < 2:
+                continue
+            if len(cjk) <= 4:
+                tokens.append(cjk)
+            else:
+                tokens.extend(cjk[i:i + 2] for i in range(len(cjk) - 1))
+        return tokens

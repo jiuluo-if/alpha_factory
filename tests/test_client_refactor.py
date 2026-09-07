@@ -1,0 +1,462 @@
+"""Tests for the client refactor + efficiency optimizations.
+
+Covers what the git_selfbqr comparison contributed:
+- classified client exceptions (WQBRejectedError / WQBRateLimitError /
+  WQBNotFoundError / WQBTimeoutError) and their failure-kind mapping
+- thread-local sessions (concurrent-safe authentication)
+- Trajectory tail loading (only the last N lines are parsed)
+- Trajectory idempotent add (replays never double-record)
+- FieldDiscovery disk cache (cross-run, TTL-bounded)
+- classify_experiment recognizes the new exception names
+"""
+
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from wqb_agent.client import (
+    WQBAuthError,
+    WQBNotFoundError,
+    WQBRateLimitError,
+    WQBRejectedError,
+    WQBSimulationError,
+    WQBTimeoutError,
+    WQBClient,
+)
+from wqb_agent.failures import FailureKind, classify_experiment, classify_error
+from wqb_agent.state import Experiment, Trajectory
+from wqb_agent.discovery import FieldDiscovery
+
+
+class FakeResponse:
+    def __init__(self, status_code=200, text="", headers=None, payload=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+class FakeSession:
+    """Minimal requests.Session stub: returns queued responses for GET/POST."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    def get(self, url, **kwargs):
+        return self.responses.pop(0)
+
+    def post(self, url, **kwargs):
+        return self.responses.pop(0)
+
+    def request(self, method, url, **kwargs):
+        return self.responses.pop(0)
+
+
+def make_client():
+    c = WQBClient.__new__(WQBClient)
+    c._local = threading.local()
+    c._local.authenticated = True  # skip auth handshake
+    c.max_retries = 2
+    c.base_url = "https://api.worldquantbrain.com"
+    return c
+
+
+class TestPollProgressRejectsErrorStatus(unittest.TestCase):
+    """A terminal ERROR payload from the platform (syntax/settings rejection)
+    must raise WQBRejectedError carrying the real platform sim id — not
+    WQBSimulationError/"without alpha id" that used to misclassify it as
+    UNKNOWN and pause the whole dispatch."""
+
+    def test_error_status_raises_rejected_with_real_id(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(
+                status_code=200,
+                headers={},
+                payload={
+                    "id": "2OyvSjcle4UH8LG1cegtJaNS",
+                    "type": "REGULAR",
+                    "status": "ERROR",
+                    "message": 'Required attribute "lookback" must have a value.',
+                },
+            )
+        ])
+        with self.assertRaises(WQBRejectedError) as ctx:
+            c.poll_progress("/simulations/abc")
+        msg = str(ctx.exception)
+        self.assertIn("2OyvSjcle4UH8LG1cegtJaNS", msg)
+        self.assertIn("lookback", msg)
+
+    def test_failed_status_raises_rejected(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(
+                status_code=200,
+                headers={},
+                payload={"id": "sim-1", "type": "REGULAR", "status": "FAILED",
+                         "message": "boom"},
+            )
+        ])
+        with self.assertRaises(WQBRejectedError):
+            c.poll_progress("/simulations/abc")
+
+    def test_fail_status_raises_rejected(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(
+                status_code=200,
+                headers={},
+                payload={"id": "sim-2", "type": "REGULAR", "status": "FAIL"},
+            )
+        ])
+        with self.assertRaises(WQBRejectedError) as ctx:
+            c.poll_progress("/simulations/abc")
+        self.assertIn("status=FAIL", str(ctx.exception))
+        self.assertIn("sim-2", str(ctx.exception))
+
+    def test_complete_returns_alpha_id(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(
+                status_code=200,
+                headers={},
+                payload={"id": "sim-1", "type": "REGULAR", "status": "COMPLETE",
+                         "alpha": "KP73prPz"},
+            )
+        ])
+        self.assertEqual(c.poll_progress("/simulations/abc"), "KP73prPz")
+
+    def test_non_object_progress_payload_fails_closed(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(status_code=200, headers={}, payload=["unexpected"]),
+        ])
+        with self.assertRaises(WQBSimulationError):
+            c.poll_progress("/simulations/abc")
+
+    def test_repeated_progress_401_is_bounded(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(status_code=401),
+            FakeResponse(status_code=401),
+        ])
+        with mock.patch.object(c, "_ensure_auth"), \
+             mock.patch.object(c, "_set_authenticated"):
+            with self.assertRaises(WQBAuthError):
+                c.poll_progress("/simulations/abc", timeout_sec=60)
+
+
+class TestFetchCorrelations(unittest.TestCase):
+    """The diagnostic script must use the client's public correlation adapter."""
+
+    @staticmethod
+    def _load_module():
+        import importlib.util
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        spec = importlib.util.spec_from_file_location(
+            "check_correlation_mod",
+            os.path.join(root, "scripts", "check_correlation.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_fetch_uses_thread_local_session(self):
+        mod = self._load_module()
+
+        class FakeSess:
+            def __init__(self, responses):
+                self.responses = list(responses)
+
+            def get(self, url, timeout=60):
+                return self.responses.pop(0)
+
+        class FakeClient:
+            base_url = "https://api.worldquantbrain.com"
+
+            def __init__(self):
+                self.session = FakeSess([
+                    FakeResponse(200, headers={},
+                                 payload={"max": 0.12, "min": 0.0}),
+                ])
+                self.auth_calls = 0
+
+            def _ensure_auth(self):
+                self.auth_calls += 1
+
+            def _session(self):
+                return self.session
+
+            def _set_authenticated(self, value):
+                pass
+
+            def get_correlation(self, alpha_id, kind="self", timeout_sec=300):
+                while True:
+                    response = self._session().get(
+                        f"{self.base_url}/alphas/{alpha_id}/correlations/{kind}",
+                        timeout=60,
+                    )
+                    if response.status_code == 401:
+                        self._set_authenticated(False)
+                        self._ensure_auth()
+                        continue
+                    return response.json()
+
+        payload = mod.fetch_correlations(FakeClient(), "abc123", kind="self")
+        self.assertEqual(payload["max"], 0.12)
+        # 401 后重认证路径也不触碰不存在的属性
+        client = FakeClient()
+        client.session = FakeSess([
+            FakeResponse(401, text="unauthorized"),
+            FakeResponse(200, headers={}, payload={"max": 0.05}),
+        ])
+        payload = mod.fetch_correlations(client, "abc123", kind="self")
+        self.assertEqual(payload["max"], 0.05)
+        self.assertGreaterEqual(client.auth_calls, 1)
+
+
+class TestRunSimulationReturnsAlphaId(unittest.TestCase):
+    """run_simulation must return the real platform alpha id with the payload
+    so callers no longer need to re-run a simulation just to fetch it."""
+
+    def test_payload_carries_real_alpha_id(self):
+        c = make_client()
+        with mock.patch.object(c, "submit_simulation", return_value="/simulations/s1"),              mock.patch.object(c, "poll_progress", return_value="KP73prPz"),              mock.patch.object(c, "get_alpha", return_value={"is": {"sharpe": 2.05}}):
+            payload = c.run_simulation("rank(x)", {})
+        self.assertEqual(payload["alpha_id"], "KP73prPz")
+        self.assertEqual(payload["is"]["sharpe"], 2.05)  # 旧调用方式仍可用
+
+
+class TestPublicReadAdapters(unittest.TestCase):
+    def test_progress_snapshot_returns_transport_neutral_payload(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, headers={"Retry-After": "1"},
+                         text="pending", payload={"status": "RUNNING"}),
+        ])
+        snapshot = c.get_progress_snapshot("/simulations/s1")
+        self.assertEqual(snapshot["status_code"], 200)
+        self.assertEqual(snapshot["payload"]["status"], "RUNNING")
+        self.assertEqual(snapshot["retry_after_seconds"], 1.0)
+
+
+class TestClassifiedExceptions(unittest.TestCase):
+    def setUp(self):
+        self.client = WQBClient.__new__(WQBClient)
+        self.client._local = threading.local()
+
+    def test_mapping(self):
+        c = self.client
+        self.assertIsInstance(c._classified_exception(401, "auth", "x"), WQBAuthError)
+        self.assertIsInstance(c._classified_exception(429, "slow", "x"), WQBRateLimitError)
+        self.assertIsInstance(c._classified_exception(422, "bad expr", "x"), WQBRejectedError)
+        self.assertIsInstance(c._classified_exception(400, "bad settings", "x"), WQBRejectedError)
+        self.assertIsInstance(c._classified_exception(404, "not found", "x"), WQBNotFoundError)
+        self.assertIsInstance(c._classified_exception(500, "boom", "x"), WQBSimulationError)
+
+    def test_kind_attribute(self):
+        self.assertEqual(WQBRejectedError.kind, FailureKind.SYNTAX)
+        self.assertEqual(WQBRateLimitError.kind, FailureKind.RATE_LIMIT)
+        self.assertEqual(WQBNotFoundError.kind, FailureKind.DATA)
+        self.assertEqual(WQBTimeoutError.kind, FailureKind.TIMEOUT)
+        self.assertEqual(WQBAuthError.kind, FailureKind.AUTH)
+
+    def test_all_are_wqberror(self):
+        from wqb_agent.client import WQBError
+        for exc in (WQBAuthError("a"), WQBRateLimitError("b"),
+                    WQBRejectedError("c"), WQBNotFoundError("d"),
+                    WQBTimeoutError("e")):
+            self.assertIsInstance(exc, WQBError)
+
+    def test_classify_experiment_new_names(self):
+        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
+        exp.status = "FAILED"
+        exp.error = "WQBRejectedError: Simulation rejected (422)"
+        self.assertEqual(classify_experiment(exp), FailureKind.SYNTAX)
+        exp.error = "WQBRateLimitError: 429 too many"
+        self.assertEqual(classify_experiment(exp), FailureKind.RATE_LIMIT)
+        exp.error = "WQBTimeoutError: polling timed out"
+        self.assertEqual(classify_experiment(exp), FailureKind.TIMEOUT)
+        exp.error = "WQBNotFoundError: field not found"
+        self.assertEqual(classify_experiment(exp), FailureKind.DATA)
+
+
+class TestSharedRateLimitGate(unittest.TestCase):
+    def test_retry_after_longer_than_budget_fails_without_sleeping_full_delay(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "3600"}),
+        ])
+        with mock.patch.object(c, "_wait_rate_limit_gate"), \
+             mock.patch.object(c, "_register_rate_limit") as register, \
+             mock.patch("wqb_agent.client.time.sleep") as sleep:
+            with self.assertRaises(WQBRateLimitError):
+                c._request("GET", "/x", context="test", rate_limit_budget_sec=5)
+        register.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_repeated_429_does_not_consume_transport_retries(self):
+        """Even more 429s than max_retries must still reach the success response."""
+        c = make_client()
+        c.max_retries = 1
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "1"}) for _ in range(5)
+        ] + [FakeResponse(200, payload={"ok": True})])
+        with mock.patch.object(c, "_wait_rate_limit_gate"), \
+             mock.patch.object(c, "_register_rate_limit"):
+            response = c._request("GET", "/x", context="test", rate_limit_budget_sec=60)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+
+    def test_retry_after_http_date_is_supported(self):
+        response = FakeResponse(429, headers={
+            "Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"
+        })
+        self.assertGreater(WQBClient._retry_after_seconds(response), 1.0)
+
+    def test_simulation_submissions_are_staggered(self):
+        c = make_client()
+        # Leave enough headroom for busy Windows CI scheduling; 10 ms can
+        # elapse in test/mocking overhead before the second call reaches the
+        # gate, producing a false negative despite correct production logic.
+        c.submit_spacing_sec = 0.05
+        c._submit_lock = threading.Lock()
+        c._next_submit_at = 0.0
+        times = []
+
+        def fake_request(*args, **kwargs):
+            times.append(time.monotonic())
+            return FakeResponse(201, headers={"Location": "/sim/1"})
+
+        import time
+        with mock.patch.object(c, "_request", side_effect=fake_request):
+            c.submit_simulation("rank(a)", {})
+            c.submit_simulation("rank(b)", {})
+        self.assertGreaterEqual(times[1] - times[0], 0.04)
+
+
+class TestTrajectoryTail(unittest.TestCase):
+    def test_non_positive_window_stays_bounded(self):
+        trajectory = Trajectory(max_len=0, path=self.path)
+        experiment = Experiment(1, "h", "rank(x)", {}, ["x"])
+        trajectory.add(experiment)
+        self.assertEqual(trajectory.max_len, 1)
+        self.assertEqual(len(trajectory.experiments), 1)
+
+    def test_from_dict_uses_normalized_window(self):
+        experiments = [
+            Experiment(index, "h", f"rank(f{index})", {}, [f"f{index}"]).to_dict()
+            for index in range(3)
+        ]
+        trajectory = Trajectory.from_dict({"experiments": experiments}, max_len="0")
+        self.assertEqual(trajectory.max_len, 1)
+        self.assertEqual(len(trajectory.experiments), 1)
+        self.assertEqual(trajectory.experiments[0].expression, "rank(f2)")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="wqb_test_traj_")
+        self.path = os.path.join(self.tmp, "trajectory.jsonl")
+
+    def _write_n(self, n):
+        with open(self.path, "w", encoding="utf-8") as f:
+            for i in range(n):
+                exp = Experiment(i + 1, "h", f"rank(f{i})", {}, [f"f{i}"])
+                f.write(json.dumps(exp.to_dict(), ensure_ascii=False) + "\n")
+
+    def test_tail_lines_returns_last_n(self):
+        self._write_n(1000)
+        t = Trajectory(max_len=50, path=self.path)
+        lines = t._tail_lines(50)
+        self.assertEqual(len(lines), 50)
+        first = json.loads(lines[0])
+        last = json.loads(lines[-1])
+        self.assertEqual(first["round"], 951)
+        self.assertEqual(last["round"], 1000)
+
+    def test_load_parses_only_tail(self):
+        self._write_n(500)
+        t = Trajectory(max_len=20, path=self.path)
+        t.load()
+        self.assertEqual(len(t.experiments), 20)
+        self.assertEqual(t.experiments[0].round, 481)
+        self.assertEqual(t.experiments[-1].round, 500)
+
+    def test_add_is_idempotent(self):
+        t = Trajectory(max_len=10, path=self.path)
+        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
+        t.add(exp)
+        t.add(exp)  # same id -> no-op
+        self.assertEqual(len(t.experiments), 1)
+        # a different experiment with the same expression still gets added
+        exp2 = Experiment(1, "h", "rank(x)", {}, ["x"])
+        t.add(exp2)
+        self.assertEqual(len(t.experiments), 2)
+
+
+class TestDiscoveryDiskCache(unittest.TestCase):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+            # field_type 用于区分两轮拉取（MATRIX/VECTOR），生成不同 id，
+            # 以便验证两类型字段都被发现且按 id 去重。
+            prefix = (field_type or "MATRIX").lower()
+            self.calls.append((dataset_id, offset, field_type))
+            results = [
+                {"id": f"{prefix}_{dataset_id}_f{offset + i}", "name": f"n{i}",
+                 "description": "d", "dataset": {"id": dataset_id}}
+                for i in range(limit)
+            ]
+            return results, 200
+
+    def test_cache_hits_disk(self):
+        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_")
+        cache_path = os.path.join(tmp, "fields_cache.json")
+        client = self.FakeClient()
+        d = FieldDiscovery(client, pagination_limit=50, max_pages=20,
+                           cache_path=cache_path, cache_ttl_sec=3600)
+        fields1 = d._fields_for("news18")
+        # MATRIX + VECTOR 各 4 页（count=200），共 400 字段
+        self.assertEqual(len(fields1), 400)
+        self.assertTrue(os.path.exists(cache_path))
+        # 两类型都被拉取（探索 Vector 字段族的前提）
+        self.assertEqual({c[2] for c in client.calls}, {"MATRIX", "VECTOR"})
+        # second instance should hit the disk cache: no API calls
+        client2 = self.FakeClient()
+        d2 = FieldDiscovery(client2, pagination_limit=50, max_pages=20,
+                            cache_path=cache_path, cache_ttl_sec=3600)
+        fields2 = d2._fields_for("news18")
+        self.assertEqual(len(fields2), 400)
+        self.assertEqual(client2.calls, [])
+
+    def test_stale_cache_refetches(self):
+        tmp = tempfile.mkdtemp(prefix="wqb_test_disc2_")
+        cache_path = os.path.join(tmp, "fields_cache.json")
+        client = self.FakeClient()
+        d = FieldDiscovery(client, cache_path=cache_path, cache_ttl_sec=3600)
+        d._fields_for("pv1")
+        # rewrite saved_at to the past so the cache is stale
+        with open(cache_path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["saved_at"] = 0
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        client2 = self.FakeClient()
+        d2 = FieldDiscovery(client2, cache_path=cache_path, cache_ttl_sec=3600)
+        d2._fields_for("pv1")
+        self.assertTrue(client2.calls)  # refetched from the API
+
+
+if __name__ == "__main__":
+    unittest.main()

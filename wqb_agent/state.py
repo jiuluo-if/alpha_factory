@@ -39,6 +39,7 @@ class Experiment:
         self.search_evidence = None
         self.novelty_score = None
         self.allocation_arm = None
+        self.allocation_key = None
         self.factory_session_id = None
         self.self_correlation = None
         self.round = round_no
@@ -104,6 +105,7 @@ class Experiment:
             "search_evidence": self.search_evidence,
             "novelty_score": self.novelty_score,
             "allocation_arm": self.allocation_arm,
+            "allocation_key": self.allocation_key,
             "factory_session_id": self.factory_session_id,
             "self_correlation": self.self_correlation,
             "round": self.round,
@@ -166,6 +168,7 @@ class Experiment:
         exp.search_evidence = data.get("search_evidence")
         exp.novelty_score = data.get("novelty_score")
         exp.allocation_arm = data.get("allocation_arm")
+        exp.allocation_key = data.get("allocation_key")
         exp.factory_session_id = data.get("factory_session_id")
         exp.self_correlation = data.get("self_correlation")
         exp.status = data["status"]

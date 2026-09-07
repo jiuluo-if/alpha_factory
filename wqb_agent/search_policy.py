@@ -1,69 +1,75 @@
-"""Phase-3 search policy: structural, empirical and budget diversity.
-
-The module is deliberately transport/persistence free.  It consumes proposal
-and result dictionaries, so the production submission path remains owned by
-``Agent`` and ``Simulator``.
-"""
+"""Pure search policy, diversity evidence, and bounded arm allocation."""
 
 from collections import Counter, defaultdict
 import math
 import re
 
-
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|[^\s]")
-_OPERATOR_WORDS = {
+_OPERATORS = {
     "rank", "zscore", "ts_mean", "ts_sum", "ts_std_dev", "ts_rank",
     "ts_zscore", "ts_delta", "ts_decay_linear", "delta", "delay",
     "group_neutralize", "group_rank", "scale", "log", "abs", "sign",
     "sqrt", "min", "max", "add", "sub", "mul", "div", "and", "or",
 }
+_ACTIVE = {"RESERVED", "PENDING", "RUNNING", "UNKNOWN"}
+_TERMINAL = {"DONE", "FAILED", "SKIPPED"}
 
 
 def _get(record, key, default=None):
-    if isinstance(record, dict):
-        return record.get(key, default)
-    return getattr(record, key, default)
+    return record.get(key, default) if isinstance(record, dict) else getattr(record, key, default)
 
 
 def _field_ids(record):
-    values = _get(record, "fields_used", None) or _get(record, "fields", None) or []
+    values = _get(record, "fields_used") or _get(record, "fields") or []
     result = []
     for value in values:
-        if isinstance(value, dict):
-            value = value.get("id")
+        value = value.get("id") if isinstance(value, dict) else value
         if isinstance(value, (str, int)) and str(value):
             result.append(str(value).lower())
     return result
 
 
-def structural_fingerprint(expression, fields=None):
-    """Normalize an expression into an AST-like token fingerprint.
+def _window_bucket(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "OTHER"
+    if value <= 10:
+        return "SHORT"
+    if value <= 60:
+        return "MEDIUM"
+    return "LONG"
 
-    This is intentionally a bounded tokenizer rather than a platform parser:
-    it distinguishes operator/window/arity structure, anonymizes known fields,
-    and never executes or evaluates user supplied expressions.
-    """
+
+def structural_fingerprint(expression, fields=None):
+    """Bounded AST-like fingerprint with meaningful window buckets."""
     known = {str(item).lower() for item in (fields or [])}
-    out = []
+    output = []
     for token in _TOKEN_RE.findall(str(expression or "").lower()):
         if token in known:
-            out.append("<field>")
+            output.append("<field>")
         elif re.fullmatch(r"\d+(?:\.\d+)?", token):
-            out.append("<number>")
+            output.append(f"<number:{_window_bucket(token)}>")
         elif re.fullmatch(r"[a-z_][a-z0-9_]*", token):
-            out.append(token if token in _OPERATOR_WORDS else "<identifier>")
+            output.append(token if token in _OPERATORS else "<identifier>")
         else:
-            out.append(token)
-    return " ".join(out)
+            output.append(token)
+    return " ".join(output)
+
+
+def token_ngram_fingerprints(expression, fields=None):
+    """Return token n-grams; this is not claimed to be a parsed AST subtree."""
+    tokens = structural_fingerprint(expression, fields).split()
+    return frozenset(
+        " ".join(tokens[index:index + width])
+        for width in (2, 3, 4, 5)
+        for index in range(max(0, len(tokens) - width + 1))
+    )
 
 
 def subtree_fingerprints(expression, fields=None):
-    """Return bounded contiguous subtrees useful for repeat penalties."""
-    tokens = structural_fingerprint(expression, fields).split()
-    result = set()
-    for width in (2, 3, 4, 5):
-        result.update(" ".join(tokens[i:i + width]) for i in range(max(0, len(tokens) - width + 1)))
-    return frozenset(result)
+    """Compatibility alias; prefer :func:`token_ngram_fingerprints`."""
+    return token_ngram_fingerprints(expression, fields)
 
 
 def syntax_diversity(record, pool):
@@ -71,141 +77,131 @@ def syntax_diversity(record, pool):
     other = [structural_fingerprint(_get(item, "expression", ""), _field_ids(item)) for item in pool]
     if not other:
         return {"status": "NO_POOL", "nearest": None, "score": 1.0}
-    distances = [0.0 if current == item else 1.0 for item in other]
-    nearest = min(distances)
-    return {"status": "AVAILABLE", "nearest": 1.0 - nearest, "score": nearest}
+    same = current in other
+    return {"status": "AVAILABLE", "nearest": 1.0 if same else 0.0, "score": 0.0 if same else 1.0}
 
 
-def _series(record):
+def _series_points(record):
     for key in ("returns", "pnl", "pnl_series", "signal_returns"):
-        value = _get(record, key)
-        if isinstance(value, (list, tuple)):
-            clean = []
-            for item in value:
-                try:
-                    value_f = float(item)
-                except (TypeError, ValueError):
-                    continue
-                if math.isfinite(value_f):
-                    clean.append(value_f)
-            if len(clean) >= 3:
-                return clean
+        values = _get(record, key)
+        if not isinstance(values, (list, tuple)):
+            continue
+        points = []
+        for index, item in enumerate(values):
+            date = None
+            if isinstance(item, dict):
+                date = item.get("date") or item.get("timestamp") or item.get("time")
+                item = item.get("return", item.get("returns", item.get("pnl", item.get("value"))))
+            try:
+                value = float(item)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                points.append((str(date) if date is not None else index, value))
+        if len(points) >= 3:
+            return points
     return None
 
 
-def _corr(left, right):
-    n = min(len(left), len(right))
-    if n < 3:
-        return None
-    a, b = left[:n], right[:n]
-    ma, mb = sum(a) / n, sum(b) / n
-    da = sum((x - ma) ** 2 for x in a)
-    db = sum((y - mb) ** 2 for y in b)
+def _corr_evidence(left, right):
+    if not left or not right:
+        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE", "reason": "missing series"}
+    left, right = dict(left), dict(right)
+    keys = sorted(set(left) & set(right))
+    overlap_ratio = len(keys) / max(len(left), len(right))
+    if len(keys) < 3:
+        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE",
+                "reason": "fewer than 3 date-aligned observations", "overlap_count": len(keys),
+                "overlap_ratio": overlap_ratio}
+    a, b = [left[key] for key in keys], [right[key] for key in keys]
+    ma, mb = sum(a) / len(a), sum(b) / len(b)
+    da = sum((value - ma) ** 2 for value in a)
+    db = sum((value - mb) ** 2 for value in b)
     if da <= 0 or db <= 0:
-        return None
-    return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / math.sqrt(da * db)
+        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE", "reason": "constant series",
+                "overlap_count": len(keys), "overlap_ratio": overlap_ratio}
+    signed = sum((x - ma) * (y - mb) for x, y in zip(a, b)) / math.sqrt(da * db)
+    return {"status": "PASS", "evidence_status": "PASS", "signed_corr": signed,
+            "abs_corr": abs(signed), "overlap_count": len(keys), "overlap_ratio": overlap_ratio}
 
 
 def empirical_pool_summary(record, pool):
-    """Measure behavioral redundancy and incremental value against a pool."""
-    current = _series(record)
-    correlations = []
-    if current:
-        for item in pool:
-            other = _series(item)
-            value = _corr(current, other) if other else None
-            if value is not None:
-                correlations.append(value)
+    rows = [_corr_evidence(_series_points(record), _series_points(item)) for item in pool]
+    correlations = [row["signed_corr"] for row in rows if row.get("signed_corr") is not None]
     if not correlations:
-        return {
-            "status": "UNAVAILABLE", "max_corr": None, "median_corr": None,
-            "nearest_corr": None, "incremental_value": None,
-        }
+        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE", "max_corr": None,
+                "median_corr": None, "nearest_corr": None, "incremental_value": None,
+                "correlations": rows}
     ordered = sorted(correlations)
-    median = ordered[len(ordered) // 2]
-    max_corr = max(correlations)
-    # Incremental value is a conservative residual proxy: highly correlated
-    # returns add little new information; no regression is claimed here.
+    max_corr = max(correlations, key=abs)
     incremental = max(0.0, 1.0 - max(abs(value) for value in correlations))
-    return {
-        "status": "AVAILABLE", "max_corr": max_corr,
-        "median_corr": median, "nearest_corr": max_corr,
-        "incremental_value": incremental,
-    }
+    return {"status": "AVAILABLE", "evidence_status": "PASS", "max_corr": max_corr,
+            "median_corr": ordered[len(ordered) // 2], "nearest_corr": max_corr,
+            "incremental_value": incremental, "correlations": rows}
 
 
 def incremental_novelty(record, pool):
-    """Combine syntax and empirical novelty without hiding unavailable data."""
     syntax = syntax_diversity(record, pool)
     empirical = empirical_pool_summary(record, pool)
-    field_sets = [set(_field_ids(item)) for item in pool]
     fields = set(_field_ids(record))
-    field_overlap = max((len(fields & other) / len(fields | other) for other in field_sets if fields or other), default=0.0)
+    overlap = max((len(fields & set(_field_ids(item))) / len(fields | set(_field_ids(item)))
+                   for item in pool if fields or _field_ids(item)), default=0.0)
     empirical_score = empirical["incremental_value"]
-    if empirical_score is None:
-        score = 0.7 * syntax["score"] + 0.3 * (1.0 - field_overlap)
-    else:
-        score = 0.4 * syntax["score"] + 0.2 * (1.0 - field_overlap) + 0.4 * empirical_score
+    score = (0.4 * syntax["score"] + 0.2 * (1.0 - overlap) + 0.4 * empirical_score
+             if empirical_score is not None else 0.7 * syntax["score"] + 0.3 * (1.0 - overlap))
     return {"score": round(max(0.0, min(1.0, score)), 6), "syntax": syntax,
-            "empirical": empirical, "field_overlap": round(field_overlap, 6)}
+            "empirical": empirical, "field_overlap": round(overlap, 6)}
 
 
 def pareto_front(records):
-    """Return non-dominated records over quality and novelty dimensions."""
     dimensions = ("sharpe", "fitness", "turnover", "margin", "drawdown", "novelty")
     maximize = {"sharpe", "fitness", "margin", "novelty"}
 
-    def value(record, key):
-        raw = _get(record, key)
+    def numeric(row, key):
+        raw = row.get(key)
         if raw is None and key == "novelty":
-            raw = _get(record, "novelty_score", 0.0)
+            raw = row.get("novelty_score", 0.0)
         try:
-            parsed = float(raw)
-            return parsed if math.isfinite(parsed) else None
+            raw = float(raw)
+            return raw if math.isfinite(raw) else None
         except (TypeError, ValueError):
             return None
 
     valid = []
     for record in records or []:
-        metrics = _get(record, "metrics", {}) or {}
         row = dict(record) if isinstance(record, dict) else {key: _get(record, key) for key in dimensions}
+        metrics = _get(record, "metrics", {}) or {}
         for key in dimensions:
             row.setdefault(key, metrics.get(key))
-        if any(value(row, key) is None for key in dimensions):
-            continue
-        valid.append((record, row))
-    front = []
+        if all(numeric(row, key) is not None for key in dimensions):
+            valid.append((record, row))
+    result = []
     for candidate, row in valid:
         dominated = False
         for other, other_row in valid:
             if other is candidate:
                 continue
-            no_worse = True
-            strictly_better = False
-            for key in dimensions:
-                left, right = value(other_row, key), value(row, key)
-                if key in maximize:
-                    no_worse &= left >= right
-                    strictly_better |= left > right
-                else:
-                    no_worse &= left <= right
-                    strictly_better |= left < right
-            if no_worse and strictly_better:
+            comparisons = [(numeric(other_row, key), numeric(row, key), key in maximize) for key in dimensions]
+            no_worse = all(left >= right if high else left <= right for left, right, high in comparisons)
+            better = any(left > right if high else left < right for left, right, high in comparisons)
+            if no_worse and better:
                 dominated = True
                 break
         if not dominated:
-            front.append(candidate)
-    return front
+            result.append(candidate)
+    return result
 
 
 class BudgetAllocator:
-    """Small UCB allocator for dataset-family × mechanism-family arms."""
+    """UCB allocator with explicit proposal-level, idempotent lifecycle."""
 
     def __init__(self, total_budget=100, exploration=1.0, max_pending_per_arm=1):
         self.total_budget = max(0, int(total_budget))
         self.exploration = float(exploration)
         self.max_pending_per_arm = max(1, int(max_pending_per_arm))
-        self.arms = defaultdict(lambda: {"completed": 0, "pending": 0, "unknown": 0, "reserved": 0, "reward": 0.0})
+        self.arms = defaultdict(lambda: {"completed": 0, "pending": 0, "running": 0, "unknown": 0, "reserved": 0, "reward": 0.0})
+        self.proposals = {}
+        self.consumed_budget = 0
 
     @staticmethod
     def arm_key(proposal):
@@ -215,39 +211,96 @@ class BudgetAllocator:
             dataset = "+".join(sorted(str(item) for item in dataset))
         return f"{dataset}::{mechanism}"
 
+    @staticmethod
+    def proposal_key(proposal):
+        if isinstance(proposal, str):
+            return proposal
+        return str(_get(proposal, "proposal_id") or _get(proposal, "id") or
+                   _get(proposal, "submission_fingerprint") or _get(proposal, "expression") or id(proposal))
+
     def _state(self, arm):
         return self.arms[self.arm_key(arm) if isinstance(arm, dict) else str(arm)]
 
     def can_reserve(self, proposal):
+        key = self.proposal_key(proposal)
+        existing = self.proposals.get(key)
+        if existing and existing["status"] in _ACTIVE:
+            return True
+        if self.consumed_budget >= self.total_budget:
+            return False
         state = self._state(proposal)
-        return state["pending"] + state["unknown"] + state["reserved"] < self.max_pending_per_arm
+        return state["pending"] + state["running"] + state["unknown"] + state["reserved"] < self.max_pending_per_arm
 
     def reserve(self, proposal):
+        key = self.proposal_key(proposal)
+        if key in self.proposals:
+            # Reservation is a one-shot admission operation.  Lifecycle
+            # replay is handled by transition(), so a second reserve cannot
+            # look like a fresh budget grant.
+            if self.proposals[key]["status"] not in _TERMINAL:
+                return False
+            if self.consumed_budget >= self.total_budget:
+                return False
+            arm = self.proposals[key]["arm"]
+            state = self.arms[arm]
+            if state["pending"] + state["unknown"] + state["reserved"] >= self.max_pending_per_arm:
+                return False
+            state["reserved"] += 1
+            self.proposals[key]["status"] = "RESERVED"
+            self.consumed_budget += 1
+            return True
         if not self.can_reserve(proposal):
             return False
-        self._state(proposal)["reserved"] += 1
+        arm = self.arm_key(proposal)
+        self.arms[arm]["reserved"] += 1
+        self.proposals[key] = {"arm": arm, "status": "RESERVED"}
+        self.consumed_budget += 1
+        return True
+
+    def transition(self, proposal, status, reward=0.0):
+        status = str(status or "").upper()
+        if status not in _ACTIVE | _TERMINAL:
+            raise ValueError(f"未知 allocator 状态: {status}")
+        key = self.proposal_key(proposal)
+        if key not in self.proposals:
+            if not self.reserve(proposal):
+                return False
+        current = self.proposals[key]
+        if current["status"] == status:
+            return True
+        state = self.arms[current["arm"]]
+        old = current["status"]
+        if old in _ACTIVE:
+            state[old.lower()] = max(0, state[old.lower()] - 1)
+        if status in _ACTIVE:
+            state[status.lower()] += 1
+        elif status in _TERMINAL and old not in _TERMINAL:
+            state["completed"] += 1
+            if status == "DONE":
+                try:
+                    state["reward"] += float(reward)
+                except (TypeError, ValueError):
+                    pass
+        current["status"] = status
         return True
 
     def complete(self, proposal, reward=0.0):
-        state = self._state(proposal)
-        state["reserved"] = max(0, state["reserved"] - 1)
-        state["pending"] = max(0, state["pending"] - 1)
-        state["unknown"] = max(0, state["unknown"] - 1)
-        state["completed"] += 1
-        try:
-            state["reward"] += float(reward)
-        except (TypeError, ValueError):
-            pass
+        return self.transition(proposal, "DONE", reward=reward)
 
     def mark_pending(self, proposal):
-        state = self._state(proposal)
-        state["reserved"] = max(0, state["reserved"] - 1)
-        state["pending"] += 1
+        return self.transition(proposal, "PENDING")
 
     def mark_unknown(self, proposal):
-        state = self._state(proposal)
-        state["reserved"] = max(0, state["reserved"] - 1)
-        state["unknown"] += 1
+        return self.transition(proposal, "UNKNOWN")
+
+    def mark_running(self, proposal):
+        return self.transition(proposal, "RUNNING")
+
+    def mark_failed(self, proposal):
+        return self.transition(proposal, "FAILED")
+
+    def mark_skipped(self, proposal):
+        return self.transition(proposal, "SKIPPED")
 
     def score(self, proposal):
         state = self._state(proposal)
@@ -255,26 +308,35 @@ class BudgetAllocator:
         total = sum(item["completed"] for item in self.arms.values())
         if count == 0:
             return self.exploration + (1.0 if total else 0.0)
-        mean = state["reward"] / count
-        bonus = self.exploration * math.sqrt(math.log(max(2, total + 1)) / count)
-        return mean + bonus
+        return state["reward"] / count + self.exploration * math.sqrt(math.log(max(2, total + 1)) / count)
 
     def snapshot(self):
-        return {key: dict(value) for key, value in self.arms.items()}
+        return {"total_budget": self.total_budget, "consumed_budget": self.consumed_budget,
+                "arms": {key: dict(value) for key, value in self.arms.items()},
+                "proposals": {key: dict(value) for key, value in self.proposals.items()}}
+
+    def restore(self, snapshot):
+        if not isinstance(snapshot, dict):
+            return
+        for key, value in (snapshot.get("arms") or {}).items():
+            if isinstance(value, dict):
+                self.arms[str(key)].update({field: value.get(field, 0) for field in
+                                            ("completed", "pending", "running", "unknown", "reserved", "reward")})
+        self.consumed_budget = int(snapshot.get("consumed_budget", sum(
+            value["completed"] + value["pending"] + value.get("running", 0) + value["unknown"] + value["reserved"]
+            for value in self.arms.values())))
+        self.proposals.update({str(key): dict(value) for key, value in
+                               (snapshot.get("proposals") or {}).items() if isinstance(value, dict)})
 
 
 class SearchPolicy:
-    """Extensible policy facade; MCTS is intentionally reserved for later."""
+    """Pure facade; state restoration is injected by SearchSnapshot/Agent."""
 
     def __init__(self, config=None):
         config = config or {}
         self.enabled = bool(config.get("enabled", False))
-        self.max_pending_per_arm = max(1, int(config.get("max_pending_per_arm", 1)))
-        self.allocator = BudgetAllocator(
-            config.get("max_simulations", 100), config.get("ucb_exploration", 1.0),
-            self.max_pending_per_arm,
-        )
-        self.subtree_counts = Counter()
+        self.allocator = BudgetAllocator(config.get("max_simulations", 100), config.get("ucb_exploration", 1.0),
+                                          config.get("max_pending_per_arm", 1))
         self.family_counts = Counter()
 
     def annotate(self, proposal, pool):
@@ -286,20 +348,20 @@ class SearchPolicy:
     def priority(self, proposal):
         if not self.enabled:
             return 0.0
-        evidence = proposal.get("search_evidence") or {}
-        novelty = float(proposal.get("novelty_score", evidence.get("score", 0.0)))
-        penalty = 0.05 * self.family_counts[proposal.get("template_family")]
-        return novelty + self.allocator.score(proposal) - penalty
+        return float(proposal.get("novelty_score", 0.0)) + self.allocator.score(proposal) - 0.05 * self.family_counts[proposal.get("template_family")]
 
     def accept(self, proposal):
-        if not self.enabled:
-            return True
-        return self.allocator.reserve(proposal)
+        accepted = not self.enabled or self.allocator.reserve(proposal)
+        if accepted and self.enabled:
+            self.family_counts[str(proposal.get("template_family") or "unknown")] += 1
+        return accepted
 
     def release(self, proposal, status="DONE", reward=0.0):
-        if status == "DONE":
-            self.allocator.complete(proposal, reward)
-        elif status == "UNKNOWN":
-            self.allocator.mark_unknown(proposal)
-        else:
-            self.allocator.mark_pending(proposal)
+        if self.enabled:
+            self.allocator.transition(proposal, status, reward=reward)
+
+    def restore(self, snapshot):
+        self.allocator.restore(snapshot)
+
+    def snapshot(self):
+        return self.allocator.snapshot()

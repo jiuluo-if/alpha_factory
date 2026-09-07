@@ -8,9 +8,13 @@ from collections import Counter, defaultdict
 
 from .artifacts import append_jsonl_if_unique, iter_jsonl_objects
 from .expression import canonical_expression
+from .search_policy import structural_fingerprint
 
 
-PHASES = {"generated", "preflight", "submitted", "completed"}
+PHASES = {
+    "generated", "preflight", "submitted", "completed",
+    "candidate_generated", "candidate_rejected", "preflight_accepted",
+}
 
 
 def _text(value, default="unknown"):
@@ -37,7 +41,7 @@ class TrialLedger:
             return trial.get(key, default)
         return getattr(trial, key, default)
 
-    def record(self, trial, phase, *, outcome=None, timestamp=None):
+    def record(self, trial, phase, *, outcome=None, reason=None, timestamp=None):
         if phase not in PHASES:
             raise ValueError(f"未知 trial phase: {phase}")
         trial_id = self._trial_id(trial)
@@ -48,7 +52,7 @@ class TrialLedger:
             "",
         )
         state = _text(self._value(trial, "status"), "UNKNOWN")
-        identity = f"{trial_id}|{phase}|{state}|{outcome or ''}"
+        identity = f"{trial_id}|{phase}|{state}|{outcome or ''}|{reason or ''}"
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
         if not isinstance(fields, (list, tuple)):
@@ -59,14 +63,19 @@ class TrialLedger:
             "trial_id": trial_id,
             "proposal_id": self._value(trial, "proposal_id"),
             "phase": phase,
+            "event_type": phase,
             "outcome": outcome or state,
+            "reason": reason,
             "status": state,
             "sharpe": self._value(self._value(trial, "metrics", {}) or {}, "sharpe"),
+            "fitness": self._value(self._value(trial, "metrics", {}) or {}, "fitness"),
             "round": self._value(trial, "round"),
             "expression_fingerprint": fingerprint,
             "template_family": self._value(trial, "template_family") or "unknown",
             "lineage_id": self._value(trial, "lineage_id") or "unknown",
             "template_id": self._value(trial, "template_id") or "unknown",
+            "dataset_family": self._value(trial, "dataset_family") or self._value(trial, "datasets") or "unknown",
+            "structural_fingerprint": structural_fingerprint(expression, fields),
             "fields": sorted({_text(field) for field in fields if field is not None}),
             "alpha_id": self._value(trial, "alpha_id"),
             "recorded_at": timestamp if timestamp is not None else time.time(),
@@ -84,13 +93,29 @@ class TrialLedger:
         sharpe_count = 0
         sharpe_mean = 0.0
         sharpe_m2 = 0.0
+        event_type_counts = Counter()
+        rejected_candidates = set()
+        submitted_trials = set()
+        structural_trials = set()
+        family_trials = set()
+        latest_by_trial = {}
         for row in iter_jsonl_objects(self.path):
             events += 1
             trial_id = row.get("trial_id")
             if trial_id:
                 trial_ids.add(trial_id)
+            if row.get("structural_fingerprint"):
+                structural_trials.add(row.get("structural_fingerprint"))
+            family_trials.add((row.get("template_family", "unknown"), row.get("dataset_family", "unknown").__str__()))
             if row.get("phase") == "generated" and trial_id:
                 generated_trials.add(trial_id)
+            event_type_counts[row.get("event_type") or row.get("phase", "unknown")] += 1
+            if row.get("phase") == "candidate_rejected" and trial_id:
+                rejected_candidates.add(trial_id)
+            if row.get("phase") == "submitted" and trial_id:
+                submitted_trials.add(trial_id)
+            if trial_id:
+                latest_by_trial[trial_id] = row
             if row.get("phase") == "completed":
                 value = row.get("sharpe")
                 try:
@@ -113,6 +138,13 @@ class TrialLedger:
             "events": events,
             "trial_count": len(trial_ids),
             "generated_trials": len(generated_trials),
+            "candidate_count": sum(1 for key in event_type_counts if key == "candidate_generated") or len(generated_trials),
+            "rejected_candidate_count": len(rejected_candidates),
+            "simulation_count": len(submitted_trials),
+            "structural_trial_count": len(structural_trials),
+            "effective_trial_count": max(1, len(structural_trials or family_trials or trial_ids)),
+            "arm_counts": self._arm_counts(latest_by_trial),
+            "event_type_counts": dict(event_type_counts),
             "trial_sharpe_count": sharpe_count,
             "trial_sharpe_mean": sharpe_mean if sharpe_count else None,
             "trial_sharpe_std": (
@@ -125,3 +157,27 @@ class TrialLedger:
                 for key, values in groups.items()
             },
         }
+
+    @staticmethod
+    def _arm_counts(latest_by_trial):
+        result = defaultdict(lambda: {"completed": 0, "pending": 0, "running": 0,
+                                       "unknown": 0, "reserved": 0, "reward": 0.0})
+        for row in latest_by_trial.values():
+            datasets = row.get("dataset_family") or "unknown-dataset"
+            if isinstance(datasets, list):
+                datasets = "+".join(sorted(str(item) for item in datasets))
+            arm = f"{datasets}::{row.get('template_family') or 'unknown-mechanism'}"
+            status = str(row.get("status") or "UNKNOWN").upper()
+            if status == "DONE":
+                result[arm]["completed"] += 1
+                try:
+                    result[arm]["reward"] += float(row.get("fitness", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    pass
+            elif status in {"PENDING", "SUBMITTING"}:
+                result[arm]["pending"] += 1
+            elif status == "RUNNING":
+                result[arm]["running"] += 1
+            elif status in {"UNKNOWN", "SUBMIT_UNKNOWN"}:
+                result[arm]["unknown"] += 1
+        return dict(result)

@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 import math
+import re
 import statistics
 import time
 
 from .metrics import checks_passed, num, score_of
+from .evidence_status import annotate_evidence
 
 
 REQUIRED_VARIABLES = (
@@ -121,17 +124,17 @@ def probabilistic_sharpe_ratio(returns, observed_sharpe=None, periods_per_year=1
     """
     moments = _moments(returns)
     if moments is None:
-        return {"status": "UNAVAILABLE", "reason": "need at least 3 non-constant returns"}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "need at least 3 non-constant returns"}, status="UNAVAILABLE")
     scale = math.sqrt(max(num(periods_per_year) or 1.0, 1.0))
     sharpe = (moments["mean"] / moments["std"]) * scale if observed_sharpe is None else num(observed_sharpe)
     threshold = num(benchmark)
     if sharpe is None or threshold is None:
-        return {"status": "UNAVAILABLE", "reason": "invalid Sharpe or benchmark"}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "invalid Sharpe or benchmark"}, status="UNAVAILABLE")
     variance = 1.0 - moments["skew"] * sharpe + ((moments["kurtosis"] - 1.0) / 4.0) * sharpe ** 2
     if variance <= 0 or not math.isfinite(variance):
-        return {"status": "UNAVAILABLE", "reason": "non-positive PSR variance"}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "non-positive PSR variance"}, status="UNAVAILABLE")
     z = (sharpe - threshold) * math.sqrt(moments["n"] - 1.0) / math.sqrt(variance)
-    return {
+    return annotate_evidence({
         "status": "AVAILABLE",
         "psr": _normal_cdf(z),
         "observed_sharpe": sharpe,
@@ -139,7 +142,7 @@ def probabilistic_sharpe_ratio(returns, observed_sharpe=None, periods_per_year=1
         "n_observations": moments["n"],
         "skew": moments["skew"],
         "kurtosis": moments["kurtosis"],
-    }
+    }, status="PASS")
 
 
 def _expected_max_standard_normal(n_trials):
@@ -183,10 +186,15 @@ def deflated_sharpe_ratio(returns, observed_sharpe=None, n_trials=1,
                        len(observed_trials) >= 2 if trial_stats_observed is None
                        else bool(trial_stats_observed)
                    )})
+    if result.get("status") != "AVAILABLE":
+        result["evidence_status"] = "UNAVAILABLE"
+    else:
+        result["evidence_status"] = "PASS" if len(observed_trials) >= 2 else "APPROXIMATE"
+    result["method"] = "deflated_sharpe_ratio"
     return result
 
 
-def pbo_cscv(aligned_return_series, n_splits=4):
+def pbo_proxy(aligned_return_series, n_splits=4):
     """Estimate PBO only when multiple aligned series permit CSCV.
 
     Each row is one candidate and each column is the same time point.  The
@@ -197,14 +205,14 @@ def pbo_cscv(aligned_return_series, n_splits=4):
     """
     rows = [list(_finite_series(row)) for row in (aligned_return_series or [])]
     if len(rows) < 2:
-        return {"status": "UNAVAILABLE", "reason": "need at least 2 aligned return series"}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "need at least 2 aligned return series"}, status="UNAVAILABLE")
     lengths = {len(row) for row in rows}
     try:
         splits = int(n_splits)
     except (TypeError, ValueError):
         splits = 0
     if len(lengths) != 1 or not lengths or next(iter(lengths)) < 2 * splits or splits < 2 or splits % 2:
-        return {"status": "UNAVAILABLE", "reason": "need equal aligned series and even CSCV splits >= 4"}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "need equal aligned series and even CSCV splits >= 4"}, status="UNAVAILABLE")
     n_obs = next(iter(lengths))
     half = n_obs // 2
     logits = []
@@ -218,37 +226,76 @@ def pbo_cscv(aligned_return_series, n_splits=4):
         rank = sum(value <= statistics.fmean(rows[winner][i] for i in test) for value in test_values) / len(test_values)
         rank = min(max(rank, 1e-6), 1.0 - 1e-6)
         logits.append(math.log(rank / (1.0 - rank)))
-    return {
+    return annotate_evidence({
         "status": "AVAILABLE",
         "pbo": sum(value <= 0 for value in logits) / len(logits),
         "n_series": len(rows),
         "n_observations": n_obs,
         "n_splits": splits,
         "logit_oos_rank": logits,
-    }
+        "method": "pbo_proxy",
+    }, status="APPROXIMATE")
 
 
-def default_validation_plan(parent, *, budget=5, pnl_capability="UNKNOWN", timestamp=None):
+def pbo_cscv(aligned_return_series, n_splits=4):
+    """Compatibility name; output explicitly identifies the proxy method."""
+    return pbo_proxy(aligned_return_series, n_splits=n_splits)
+
+
+def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", timestamp=None,
+                            statistical_policy="required_when_available"):
     expression = parent.get("expression") if isinstance(parent, dict) else getattr(parent, "expression", "")
     fingerprint = parent.get("submission_fingerprint") if isinstance(parent, dict) else getattr(parent, "submission_fingerprint", None)
-    identity = f"{expression}|{fingerprint or ''}"
+    settings = parent.get("settings", {}) if isinstance(parent, dict) else getattr(parent, "settings", {})
+    fields = parent.get("fields_used", []) if isinstance(parent, dict) else getattr(parent, "fields_used", [])
+    field_analysis = parent.get("field_analysis") if isinstance(parent, dict) else getattr(parent, "field_analysis", None)
+    has_ts_window = bool(re.search(r"\bts_[a-z_]+\s*\(", str(expression).lower()))
+    explicit_metadata = bool(settings is not None or fields)
+    semantic_requirement = "REQUIRED"
+    if explicit_metadata and (not isinstance(field_analysis, dict) or len(field_analysis) < 2):
+        semantic_requirement = "NOT_APPLICABLE"
+    has_decay = isinstance(settings, dict) and "decay" in settings
+    has_truncation = isinstance(settings, dict) and "truncation" in settings
     variables = [
         {"variable": "window_locality", "reason": "检验局部窗口变化而非固定 ±1 的偶然性", "budget": 1,
+         "requirement": "REQUIRED" if has_ts_window or not explicit_metadata else "NOT_APPLICABLE",
          "falsification": "相对窗口变化后 headline 或 checks 明显恶化", "stopping_rule": "完成一个预注册局部窗口集合或首个明确失败"},
         {"variable": "semantic_field_swap", "reason": "检验经济语义相近字段替换后的机制可迁移性", "budget": 1,
+         "requirement": semantic_requirement,
          "falsification": "语义相近替换后信号消失或健康失败", "stopping_rule": "完成一个语义匹配替换"},
         {"variable": "universe_robustness", "reason": "检验信号是否只依赖单一股票覆盖层", "budget": 1,
+         "requirement": "REQUIRED",
          "falsification": "替代 universe 后指标或 checks 失败", "stopping_rule": "完成一个预注册 universe 对照"},
         {"variable": "decay_truncation", "reason": "隔离 decay/truncation 单变量影响", "budget": 1,
+         "requirement": "NOT_APPLICABLE",
          "falsification": "单变量改变导致收益或健康不可接受", "stopping_rule": "只改变一个设置并完成一次对照"},
+        {"variable": "decay", "reason": "只改变 decay，避免与 truncation 混淆", "budget": 1,
+         "requirement": "REQUIRED" if has_decay else "NOT_APPLICABLE",
+         "falsification": "只改变 decay 后收益或健康不可接受", "stopping_rule": "完成一个 decay 对照"},
+        {"variable": "truncation", "reason": "只改变 truncation，避免与 decay 混淆", "budget": 1,
+         "requirement": "REQUIRED" if has_truncation else "NOT_APPLICABLE",
+         "falsification": "只改变 truncation 后收益或健康不可接受", "stopping_rule": "完成一个 truncation 对照"},
         {"variable": "yearly_aggregates", "reason": "要求跨年度结果一致而非单段表现", "budget": 0,
+         "requirement": "REQUIRED",
          "falsification": "任一可用年度未通过阈值", "stopping_rule": "读取完整 yearly aggregates"},
     ]
     if str(pnl_capability).upper() == "LIVE_VERIFIED":
         variables.append({"variable": "pnl_diagnostics", "reason": "PnL capability 已验证，检查 rolling stability 与相关性", "budget": 0,
                           "falsification": "rolling stability 或 bootstrap 诊断失败", "stopping_rule": "使用完整可用 return series"})
+    canonical = {
+        "schema_version": 2,
+        "parent_fingerprint": fingerprint,
+        "parent_expression": expression,
+        "settings": settings or {},
+        "variables": variables,
+        "budget": int(budget),
+        "falsification": "任一 required variable 未通过则 parent 不得 STABLE",
+        "stopping_rule": "预算耗尽、预注册变量全部结算或任一硬失败后停止扩展",
+        "statistical_policy": statistical_policy,
+    }
+    identity = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ValidationPlan({
-        "schema_version": 1,
+        "schema_version": 2,
         "plan_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16],
         "parent_expression": expression,
         "parent_fingerprint": fingerprint,
@@ -258,6 +305,7 @@ def default_validation_plan(parent, *, budget=5, pnl_capability="UNKNOWN", times
         "stopping_rule": "预算耗尽、预注册变量全部结算或任一硬失败后停止扩展",
         "pnl_capability": str(pnl_capability).upper(),
         "preregistered_at": timestamp if timestamp is not None else time.time(),
+        "statistical_policy": statistical_policy,
     })
 
 
@@ -285,6 +333,8 @@ def validate_plan(plan):
         for key in ("variable", "reason", "falsification", "stopping_rule"):
             if not isinstance(item.get(key), str) or not item[key].strip():
                 problems.append(f"validation_plan 变量缺少 {key}")
+        if item.get("requirement", "REQUIRED") not in {"REQUIRED", "OPTIONAL", "NOT_APPLICABLE"}:
+            problems.append("validation_plan variable requirement 非法")
         if num(item.get("budget")) is None or num(item.get("budget")) < 0:
             problems.append("validation_plan 变量 budget 必须为非负数")
     if num(plan.get("budget")) is None or num(plan.get("budget")) < 0:
@@ -315,24 +365,51 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
     plan_ok, plan_errors = validate_plan(plan)
     dimensions = {}
     children = list(robustness_children or [])
+    plan_variables = {
+        item.get("variable"): item for item in (plan.get("variables") or [])
+        if isinstance(item, dict) and item.get("variable")
+    }
     for variable in REQUIRED_VARIABLES:
+        requirement = (plan_variables.get(variable) or {}).get("requirement", "REQUIRED")
+        if requirement == "NOT_APPLICABLE":
+            dimensions[variable] = {"status": "NOT_APPLICABLE", "evidence_status": "NOT_APPLICABLE",
+                                    "requirement": requirement,
+                                    "reason": (plan_variables.get(variable) or {}).get("reason")}
+            continue
         matches = [child for child in children if _child_dimension(child) == variable]
         if variable == "yearly_aggregates":
             evidence = yearly_evidence or {}
             passed = evidence.get("status") == "VERIFIED" and evidence.get("stable") is True
-            dimensions[variable] = {"status": "PASS" if passed else "FAIL", "evidence": evidence}
+            dimensions[variable] = {"status": "PASS" if passed else "FAIL",
+                                    "evidence_status": "PASS" if passed else "FAIL",
+                                    "requirement": requirement, "evidence": evidence}
             continue
         valid = [child for child in matches if _child_status(child) == "DONE" and checks_passed(_child_metrics(child)) is True]
         dimensions[variable] = {
             "status": "PASS" if valid else "FAIL",
+            "evidence_status": "PASS" if valid else "FAIL",
+            "requirement": requirement,
             "count": len(matches),
             "passed": len(valid),
             "scores": [score_of(_child_metrics(child)) for child in valid],
         }
+    for variable in ("decay", "truncation"):
+        spec = plan_variables.get(variable) or {}
+        requirement = spec.get("requirement", "NOT_APPLICABLE")
+        if requirement == "NOT_APPLICABLE":
+            dimensions[variable] = {"status": "NOT_APPLICABLE", "evidence_status": "NOT_APPLICABLE",
+                                    "requirement": requirement, "reason": spec.get("reason")}
+            continue
+        matches = [child for child in children if _child_dimension(child) == variable]
+        valid = [child for child in matches if _child_status(child) == "DONE" and checks_passed(_child_metrics(child)) is True]
+        dimensions[variable] = {"status": "PASS" if valid else "FAIL",
+                                "evidence_status": "PASS" if valid else "FAIL",
+                                "requirement": requirement, "count": len(matches), "passed": len(valid)}
     pnl_status = (plan.get("pnl_capability") or "UNKNOWN").upper() if isinstance(plan, dict) else "UNKNOWN"
     if pnl_status == "LIVE_VERIFIED":
         pnl_ok = isinstance(pnl_evidence, dict) and pnl_evidence.get("status") == "PASS"
-        dimensions["pnl_diagnostics"] = {"status": "PASS" if pnl_ok else "FAIL", "evidence": pnl_evidence}
+        dimensions["pnl_diagnostics"] = {"status": "PASS" if pnl_ok else "FAIL",
+                                          "evidence_status": "PASS" if pnl_ok else "FAIL", "evidence": pnl_evidence}
     platform = platform_evidence or {}
     parent_platform = platform.get("parent") if isinstance(platform, dict) else None
     child_platform = platform.get("children") if isinstance(platform, dict) else None
@@ -355,6 +432,7 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
     )
     dimensions["platform_quality"] = {
         "status": "PASS" if platform_ok else "FAIL",
+        "evidence_status": "PASS" if platform_ok else "FAIL",
         "evidence": platform_evidence,
     }
     selection = (trial_summary or {}).get("generated_trials")
@@ -369,12 +447,32 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             trial_std=(trial_summary or {}).get("trial_sharpe_std"),
             trial_stats_observed=(trial_summary or {}).get("trial_sharpe_count", 0) >= 2,
         ) if return_series else {"status": "UNAVAILABLE", "reason": "return series unavailable", "n_trials": max(1, selection)},
-        "pbo_cscv": pbo_cscv(aligned_return_series),
+        "pbo_cscv": pbo_proxy(aligned_return_series),
         "trial_events": selection,
+        "raw_trial_count": selection,
+        "effective_trial_count": max(1, int((trial_summary or {}).get("effective_trial_count", selection) or selection or 1)),
     }
+    statistical_policy = str((plan or {}).get("statistical_policy", "required_when_available"))
+    has_returns = bool(return_series)
+    dsr = stats["dsr"]
+    if not has_returns:
+        stats["statistical_status"] = "UNAVAILABLE"
+    elif dsr.get("evidence_status") == "APPROXIMATE":
+        stats["statistical_status"] = "APPROXIMATE"
+    else:
+        stats["statistical_status"] = "PASS"
+    if statistical_policy == "required" and stats["statistical_status"] == "UNAVAILABLE":
+        dimensions["statistical_evidence"] = {"status": "FAIL", "evidence_status": "FAIL", "reason": "statistical evidence required"}
+    else:
+        dimensions["statistical_evidence"] = {"status": stats["statistical_status"],
+                                                "evidence_status": stats["statistical_status"]}
     parent_done = _child_status(parent) == "DONE"
     parent_checks = checks_passed(_child_metrics(parent)) is True
-    required_pass = all(item.get("status") == "PASS" for item in dimensions.values())
+    required_pass = all(
+        item.get("status") in {"PASS", "NOT_APPLICABLE", "UNAVAILABLE", "APPROXIMATE"}
+        for item in dimensions.values()
+        if item.get("requirement", "REQUIRED") != "OPTIONAL"
+    )
     status = "PASS" if plan_ok and parent_done and parent_checks and required_pass else "FAIL"
     return ValidationReport({
         "schema_version": 1,

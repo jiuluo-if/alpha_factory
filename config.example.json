@@ -41,6 +41,9 @@
       "max_pending_per_arm": 1,
       "ucb_exploration": 1.0
     },
+    "statistical_policy": {
+      "mode": "required_when_available"
+    },
     "pagination_limit": 50,
     "max_pagination_pages": 20,
     "state_dir": ".wqb_state",

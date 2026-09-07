@@ -41,6 +41,7 @@ class TestArchitectureBoundaries(unittest.TestCase):
         "reflection",
         "research_guard",
         "search_policy",
+        "search_snapshot",
         "simulator",
         "state",
         "submission",

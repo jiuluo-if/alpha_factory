@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .metrics import num
+from .evidence_status import annotate_evidence
 
 
 def _yearly_rows(payload):
@@ -32,10 +33,10 @@ def build_yearly_evidence(payload, *, min_sharpe=0.0, min_fitness=0.0,
         if len(record) > 1:
             rows.append(record)
     if not rows:
-        return {
+        return annotate_evidence({
             "status": "UNKNOWN", "source": "BRAIN /alphas/{id}/aggregates",
             "years": [], "stable": None, "reason": "yearlyData 缺失或为空",
-        }
+        }, status="UNAVAILABLE")
     sharpe = [row["sharpe"] for row in rows if "sharpe" in row]
     fitness = [row["fitness"] for row in rows if "fitness" in row]
     turnover = [row["turnover"] for row in rows if "turnover" in row]
@@ -46,7 +47,7 @@ def build_yearly_evidence(payload, *, min_sharpe=0.0, min_fitness=0.0,
         for row in rows
     )
     stable = passing == len(rows) and bool(sharpe) and bool(fitness)
-    return {
+    return annotate_evidence({
         "status": "VERIFIED",
         "source": "BRAIN /alphas/{id}/aggregates",
         "years": rows,
@@ -62,4 +63,4 @@ def build_yearly_evidence(payload, *, min_sharpe=0.0, min_fitness=0.0,
             "min_sharpe": min_sharpe, "min_fitness": min_fitness,
             "max_turnover": max_turnover,
         },
-    }
+    }, status="PASS" if stable else "FAIL")

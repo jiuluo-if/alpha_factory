@@ -12,6 +12,7 @@ from .artifacts import (
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
 from .search_policy import SearchPolicy
+from .search_snapshot import SearchSnapshot
 from .context import key_experiments, write_context
 from .discovery import FieldDiscovery
 from .diversity import extract_fields, is_redundant
@@ -136,6 +137,9 @@ class Agent:
         self.poll_timeout_sec = agent_cfg.get("poll_timeout_sec", 1500)
         self.context_experiments = agent_cfg.get("context_experiments", 10)
         self.quality_policy = agent_cfg.get("quality", {})
+        self.statistical_policy = (agent_cfg.get("statistical_policy") or {}).get(
+            "mode", "required_when_available"
+        )
         field_selection = agent_cfg.get("field_selection") or {}
         self.max_field_alpha_count = field_selection.get("max_alpha_count")
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md"))
@@ -534,6 +538,7 @@ class Agent:
             [item.get("parent_expression") for item in proposal_list
              if isinstance(item, dict)]
         )
+        candidate_event_records = []
         for raw_proposal in proposal_list:
             if not isinstance(raw_proposal, dict):
                 rejected.append((str(raw_proposal), ["proposal 必须是对象"]))
@@ -541,6 +546,8 @@ class Agent:
             # Keep input immutable on disk, but carry suggestion provenance
             # into the durable experiment/checkpoint record.
             p = dict(raw_proposal)
+            candidate_event_records.append(p)
+            self._record_trial_phase(p, "candidate_generated", outcome="CONSIDERED")
             source = p.get("field_source") or payload.get("field_source")
             if source is None:
                 for profile in discovered_profiles.values():
@@ -651,11 +658,20 @@ class Agent:
                 diversity_rejected.append((expression, [guard_reason]))
                 continue
             try:
-                self._proposal_settings(p.get("settings"))
+                effective_settings = self._proposal_settings(p.get("settings"))
             except ValueError as exc:
                 settings_rejected.append((expression, [str(exc)]))
                 continue
+            p.setdefault(
+                "proposal_id",
+                "p-" + submission_fingerprint(expression, effective_settings)[:16],
+            )
             fresh.append(p)
+        accepted_expressions = {item.get("expression") for item in fresh}
+        for item in candidate_event_records:
+            expression = item.get("expression")
+            if expression and expression not in accepted_expressions:
+                self._record_trial_phase(item, "candidate_rejected", outcome="REJECTED")
         # Each field family gets a core candidate plus at most one explicit
         # perturbation.  This blocks window sweeps while still permitting a
         # falsification test.  Remaining candidates are ordered by a small,
@@ -731,7 +747,7 @@ class Agent:
         # Release reservations for candidates trimmed by the existing hard
         # batch cap.  No second submission path is introduced.
         for p in budget_rejected:
-            self.search_policy.release(p, status="PENDING")
+            self.search_policy.release(p, status="SKIPPED")
         if self.research_allocation:
             role_max = self.research_allocation.get("maximum", {})
             role_counts = {role: 0 for role in RESEARCH_ROLES}
@@ -839,6 +855,7 @@ class Agent:
             exp.search_evidence = p.get("search_evidence")
             exp.novelty_score = p.get("novelty_score")
             exp.allocation_arm = self.search_policy.allocator.arm_key(p)
+            exp.allocation_key = self.search_policy.allocator.proposal_key(p)
             exp.factory_session_id = p.get("factory_session_id")
             exp.mutation = p.get("mutation") or "agent-proposed"
             exp.lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis["id"]
@@ -860,6 +877,7 @@ class Agent:
             experiments.append(exp)
             self._record_trial_phase(exp, "generated", outcome="PENDING")
             self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
+            self._record_trial_phase(exp, "preflight_accepted", outcome="ACCEPTED")
             self.memory.remember_expression(exp.expression)
 
         self.memory.register_hypothesis(hypothesis)
@@ -887,7 +905,8 @@ class Agent:
         if unresolved:
             for exp in experiments:
                 self.search_policy.release(
-                    exp.allocation_arm or {"dataset_family": exp.datasets, "template_family": exp.template_family},
+                    {"proposal_id": exp.allocation_key, "expression": exp.expression,
+                     "dataset_family": exp.datasets, "template_family": exp.template_family},
                     status="UNKNOWN" if exp.status in {"UNKNOWN", "SUBMIT_UNKNOWN"} else "PENDING",
                 )
             self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
@@ -902,7 +921,8 @@ class Agent:
         self.trajectory.add_many(experiments)
         for exp in experiments:
             self.search_policy.release(
-                exp.allocation_arm or {"dataset_family": exp.datasets, "template_family": exp.template_family},
+                {"proposal_id": exp.allocation_key, "expression": exp.expression,
+                 "dataset_family": exp.datasets, "template_family": exp.template_family},
                 status="DONE" if exp.status == "DONE" else exp.status,
                 reward=(exp.metrics or {}).get("fitness", 0.0) if isinstance(exp.metrics, dict) else 0.0,
             )
@@ -1602,11 +1622,36 @@ class Agent:
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
 
+    def _update_search_lifecycle(self, experiment):
+        """Mirror transport state into the in-memory allocator idempotently."""
+        if not hasattr(self, "search_policy"):
+            return
+        status = str(getattr(experiment, "status", "UNKNOWN") or "UNKNOWN").upper()
+        if status == "SUBMIT_UNKNOWN":
+            status = "UNKNOWN"
+        if status in {"SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
+            status = "SKIPPED"
+        if status not in {"RUNNING", "PENDING", "DONE", "FAILED", "UNKNOWN", "SKIPPED"}:
+            return
+        proposal = {
+            "proposal_id": getattr(experiment, "allocation_key", None) or getattr(experiment, "proposal_id", None),
+            "expression": getattr(experiment, "expression", ""),
+            "dataset_family": getattr(experiment, "datasets", []),
+            "template_family": getattr(experiment, "template_family", None),
+        }
+        metrics = getattr(experiment, "metrics", None) or {}
+        reward = metrics.get("fitness", 0.0) if isinstance(metrics, dict) else 0.0
+        try:
+            self.search_policy.release(proposal, status=status, reward=reward)
+        except (TypeError, ValueError):
+            pass
+
     def _on_simulation_update(self, experiment, round_no, hypothesis, experiments):
         if experiment.status in {"RUNNING", "SUBMIT_UNKNOWN"}:
             self._record_trial_phase(
                 experiment, "submitted", outcome=experiment.status
             )
+            self._update_search_lifecycle(experiment)
         self._write_proposal_checkpoint(
             round_no, hypothesis, experiments, complete=False
         )
@@ -1647,6 +1692,7 @@ class Agent:
         # update the already-written JSONL row and would silently lose the
         # correlation snapshot for crash recovery/reporting.
         exp.self_correlation = self_correlation_evidence(exp.metrics)
+        self._update_search_lifecycle(exp)
         self._record_trial_phase(exp, "completed", outcome=exp.status)
         self.trajectory.add(exp)
         self._print_experiment(exp)
@@ -1847,7 +1893,9 @@ class Agent:
                 continue
             plan = plans.get(key)
             if not isinstance(plan, dict):
-                plan = default_validation_plan(parent)
+                plan = default_validation_plan(
+                    parent, statistical_policy=self.statistical_policy
+                )
             parent.self_correlation = self._settled_self_correlation(parent)
             platform_evidence = {
                 "parent": {
@@ -1944,9 +1992,38 @@ class Agent:
     def _load_state(self):
         self.memory.load()
         self.trajectory.load()
+        checkpoint_rows = self._search_checkpoint_rows()
+        snapshot = SearchSnapshot.from_sources(
+            self.trajectory.experiments,
+            self.trial_ledger.summarize(),
+            checkpoint_rows,
+        )
+        self.search_policy.restore(snapshot.allocator_state(
+            self.search_policy.allocator.total_budget
+        ))
         # In-memory window from previous sessions is authoritative for dedupe
         for exp in self.trajectory.experiments:
             self.memory.remember_expression(exp.expression)
+
+    def _search_checkpoint_rows(self):
+        """Read-only projection of unfinished checkpoints for allocator restore."""
+        rows = []
+        try:
+            entries = os.scandir(self.state_dir)
+        except OSError:
+            return rows
+        with entries:
+            for entry in entries:
+                if not re.fullmatch(r"round_\d+\.checkpoint\.json", entry.name):
+                    continue
+                try:
+                    with open(entry.path, encoding="utf-8") as handle:
+                        payload = json.load(handle)
+                    if not payload.get("complete"):
+                        rows.extend(payload.get("experiments") or [])
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    continue
+        return rows
 
     def _ensure_loaded(self):
         if not self._loaded:

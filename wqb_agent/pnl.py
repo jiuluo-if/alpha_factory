@@ -145,9 +145,11 @@ class PnlAdapter:
             "n_observations": len(values),
             "rolling_stability": rolling,
             "correlation": correlation_evidence(dated_benchmark, dated_values) if dated_values and dated_benchmark else (correlation_evidence(benchmark_values, values) if benchmark_values else {
-                "status": "NOT_APPLICABLE", "evidence_status": "NOT_APPLICABLE"
+                "status": "NOT_APPLICABLE", "evidence_status": "NOT_APPLICABLE",
+                "availability": "NOT_APPLICABLE", "quality": None, "decision": "INCONCLUSIVE"
             }),
             "bootstrap": bootstrap,
         }
-        result["evidence_status"] = "PASS" if result["status"] == "PASS" else "FAIL"
+        result = annotate_evidence(result, status=result["status"], availability="AVAILABLE", quality="VERIFIED",
+                                   decision=result["status"])
         return result

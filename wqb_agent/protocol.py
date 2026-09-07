@@ -158,7 +158,10 @@ def fixture_capability(key, payload):
     return {
         "key": key,
         "status": CapabilityStatus.FIXTURE_VERIFIED.value if ok else CapabilityStatus.UNKNOWN.value,
-        "evidence_status": EvidenceStatus.PASS.value if ok else EvidenceStatus.UNAVAILABLE.value,
+        "evidence_status": "INCONCLUSIVE" if ok else EvidenceStatus.UNAVAILABLE.value,
+        "availability": "AVAILABLE" if ok else "UNAVAILABLE",
+        "quality": "VERIFIED" if ok else None,
+        "decision": "INCONCLUSIVE" if ok else "INCONCLUSIVE",
         "source": "fixture",
         "valid": ok,
         "errors": errors,
@@ -177,6 +180,7 @@ def probe_capability_response(key, status_code, payload=None):
     if truth is None:
         return {"key": key, "status": CapabilityStatus.UNKNOWN.value,
                 "evidence_status": EvidenceStatus.UNAVAILABLE.value,
+                "availability": "UNAVAILABLE", "quality": None, "decision": "INCONCLUSIVE",
                 "source": "probe", "valid": False, "errors": ["未知 capability"]}
     try:
         code = int(status_code)
@@ -187,7 +191,10 @@ def probe_capability_response(key, status_code, payload=None):
         return {
             "key": key,
             "status": CapabilityStatus.LIVE_VERIFIED.value if valid else CapabilityStatus.UNKNOWN.value,
-            "evidence_status": EvidenceStatus.PASS.value if valid else EvidenceStatus.UNAVAILABLE.value,
+            "evidence_status": "INCONCLUSIVE" if valid else EvidenceStatus.UNAVAILABLE.value,
+            "availability": "AVAILABLE" if valid else "UNAVAILABLE",
+            "quality": "VERIFIED" if valid else None,
+            "decision": "INCONCLUSIVE",
             "source": "live_probe",
             "valid": valid,
             "errors": errors,
@@ -199,6 +206,9 @@ def probe_capability_response(key, status_code, payload=None):
                    else CapabilityStatus.UNKNOWN.value),
         "evidence_status": (EvidenceStatus.APPROXIMATE.value if truth.status == CapabilityStatus.COMMUNITY_OBSERVED
                              else EvidenceStatus.UNAVAILABLE.value),
+        "availability": "AVAILABLE" if truth.status == CapabilityStatus.COMMUNITY_OBSERVED else "UNAVAILABLE",
+        "quality": "APPROXIMATE" if truth.status == CapabilityStatus.COMMUNITY_OBSERVED else None,
+        "decision": "INCONCLUSIVE",
         "source": "live_probe",
         "valid": False,
         "errors": [f"HTTP {code}"],

@@ -22,6 +22,7 @@ from .evidence import (
     refresh_self_correlation_cache,
 )
 from .expression import canonical_expression, submission_fingerprint
+from .identity import candidate_identity
 from .memory import ExperienceMemory
 from .metrics import check_pass, checks_passed, num
 from .proposal_contract import (
@@ -137,9 +138,8 @@ class Agent:
         self.poll_timeout_sec = agent_cfg.get("poll_timeout_sec", 1500)
         self.context_experiments = agent_cfg.get("context_experiments", 10)
         self.quality_policy = agent_cfg.get("quality", {})
-        self.statistical_policy = (agent_cfg.get("statistical_policy") or {}).get(
-            "mode", "required_when_available"
-        )
+        self.statistical_policy = dict(agent_cfg.get("statistical_policy") or {})
+        self.statistical_policy.setdefault("mode", "required_when_available")
         field_selection = agent_cfg.get("field_selection") or {}
         self.max_field_alpha_count = field_selection.get("max_alpha_count")
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md"))
@@ -541,11 +541,18 @@ class Agent:
         candidate_event_records = []
         for raw_proposal in proposal_list:
             if not isinstance(raw_proposal, dict):
+                malformed = {"round": round_no, "expression": str(raw_proposal or "")}
+                malformed["candidate_id"] = candidate_identity(malformed, round_no=round_no)
+                candidate_event_records.append(malformed)
+                self._record_trial_phase(malformed, "candidate_generated", outcome="CONSIDERED")
+                self._record_candidate_rejection(malformed, "schema", "NOT_OBJECT", "proposal 必须是对象")
                 rejected.append((str(raw_proposal), ["proposal 必须是对象"]))
                 continue
             # Keep input immutable on disk, but carry suggestion provenance
             # into the durable experiment/checkpoint record.
             p = dict(raw_proposal)
+            p["round"] = round_no
+            p["candidate_id"] = candidate_identity(p, round_no=round_no)
             candidate_event_records.append(p)
             self._record_trial_phase(p, "candidate_generated", outcome="CONSIDERED")
             source = p.get("field_source") or payload.get("field_source")
@@ -558,6 +565,7 @@ class Agent:
                 p["field_source"] = source
             expression = (p.get("expression") or "").strip()
             if not expression:
+                self._record_candidate_rejection(p, "schema", "MISSING_EXPRESSION", "expression 不能为空")
                 continue
             # 2026-08-22 用户政策（F>=10% 冲刺）：携带授权 settings 覆盖
             # （universe/truncation/decay）的提案按「settings+表达式」组合键
@@ -582,10 +590,12 @@ class Agent:
                         + "::" + canonical_expression(expression)
                     )
                 if dedup_key in local_seen:
+                    self._record_candidate_rejection(p, "duplicate", "DUPLICATE_LOCAL", "同一表达式与设置已在本批出现")
                     skipped.append(expression)
                     continue
                 local_seen.add(dedup_key)
             elif canonical_expression(expression) in local_seen:
+                self._record_candidate_rejection(p, "duplicate", "DUPLICATE_LOCAL", "同一规范化表达式已在本批出现")
                 skipped.append(expression)
                 continue
             else:
@@ -603,6 +613,7 @@ class Agent:
                 problems.extend(type_problems)
                 ok = False
             if not ok:
+                self._record_candidate_rejection(p, "schema", "PREFLIGHT_REJECTED", "; ".join(problems))
                 rejected.append((expression, problems))
                 continue
             if self.research_allocation:
@@ -611,12 +622,14 @@ class Agent:
                     and source.get("kind") in {"local_catalog", "brain_api"}
                     and "snapshot_date" in source
                 ):
+                    self._record_candidate_rejection(p, "field_source", "INVALID_FIELD_SOURCE", "field_source 必须声明 local_catalog/brain_api 及 snapshot_date")
                     rejected.append((expression, [
                         "field_source 必须声明 local_catalog/brain_api 及 snapshot_date"
                     ]))
                     continue
                 role = p.get("research_role")
                 if role not in RESEARCH_ROLES:
+                    self._record_candidate_rejection(p, "research_guard", "INVALID_RESEARCH_ROLE", "research_role 必须是 EXPLORE/EXPLOIT/VALIDATION")
                     rejected.append((expression, [
                         "research_role 必须是 EXPLORE/EXPLOIT/VALIDATION；FINAL_CHECK 是结果后的检查动作"
                     ]))
@@ -625,14 +638,17 @@ class Agent:
                     p.get("parent_expression"), completed_parent_index
                 )
                 if role == "EXPLORE" and p.get("experiment_stage") != "BASELINE":
+                    self._record_candidate_rejection(p, "research_guard", "EXPLORE_STAGE_MISMATCH", "EXPLORE 必须是新的 BASELINE")
                     rejected.append((expression, ["EXPLORE 必须是新的 BASELINE"])); continue
                 if role in {"EXPLOIT", "VALIDATION"} and parent is None:
+                    self._record_candidate_rejection(p, "research_guard", "PARENT_NOT_DONE", f"{role} 缺少已完成 parent_expression")
                     rejected.append((expression, [
                         f"{role} 只能引用已完成的 parent_expression，不能在同一批提案中预支结果"
                     ])); continue
                 if role == "VALIDATION":
                     parent_verdict = self.reflector._classify(parent).get("label")
                     if parent_verdict not in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}:
+                        self._record_candidate_rejection(p, "research_guard", "PARENT_QUALITY_FAIL", "VALIDATION 的 parent 未通过质量门")
                         rejected.append((expression, [
                             "VALIDATION 的 parent 必须已通过质量门或为需审计的高信号"
                         ])); continue
@@ -646,6 +662,7 @@ class Agent:
                 or (lineage_decision == "STOP" and p.get("experiment_stage") != "ROBUSTNESS")
             )
             if blocked:
+                self._record_candidate_rejection(p, "lineage", f"LINEAGE_{lineage_decision}", f"lineage {lineage_id!r} 已标记 {lineage_decision}")
                 diversity_rejected.append((
                     expression,
                     [f"lineage {lineage_id!r} 已标记 {lineage_decision}，不再消耗探索预算"],
@@ -655,11 +672,13 @@ class Agent:
                 p, default_lineage=p.get("lineage_id") or hypothesis.get("id")
             )
             if not guard_ok:
+                self._record_candidate_rejection(p, "research_guard", "LOOP_GUARD", guard_reason)
                 diversity_rejected.append((expression, [guard_reason]))
                 continue
             try:
                 effective_settings = self._proposal_settings(p.get("settings"))
             except ValueError as exc:
+                self._record_candidate_rejection(p, "settings", "INVALID_SETTINGS", str(exc))
                 settings_rejected.append((expression, [str(exc)]))
                 continue
             p.setdefault(
@@ -667,11 +686,6 @@ class Agent:
                 "p-" + submission_fingerprint(expression, effective_settings)[:16],
             )
             fresh.append(p)
-        accepted_expressions = {item.get("expression") for item in fresh}
-        for item in candidate_event_records:
-            expression = item.get("expression")
-            if expression and expression not in accepted_expressions:
-                self._record_trial_phase(item, "candidate_rejected", outcome="REJECTED")
         # Each field family gets a core candidate plus at most one explicit
         # perturbation.  This blocks window sweeps while still permitting a
         # falsification test.  Remaining candidates are ordered by a small,
@@ -692,6 +706,7 @@ class Agent:
         ):
             role = p.get("research_role")
             if role in role_max and allocation_counts.get(role, 0) >= int(role_max[role]):
+                self._record_candidate_rejection(p, "diversity", "ARM_ROLE_CAP", f"{role} 已达到本轮动态上限 {role_max[role]}")
                 diversity_rejected.append((
                     p["expression"], [f"{role} 已达到本轮动态上限 {role_max[role]}"]
                 ))
@@ -707,6 +722,7 @@ class Agent:
                 family = structural_family_key(p["expression"], p.get("fields") or fields)
             family = str(family)
             if family_counts.get(family, 0) >= 2:
+                self._record_candidate_rejection(p, "diversity", "DIVERSITY_FAMILY_CAP", f"signal family {family!r} 已有两个实验")
                 diversity_rejected.append((
                     p["expression"],
                     [f"signal family {family!r} 已有两个实验，拒绝参数挖掘"],
@@ -719,14 +735,24 @@ class Agent:
             # checks remain necessary, but repeated field parsing is removed.
             redundant, _ = is_redundant(record, diverse_records)
             if redundant:
+                self._record_candidate_rejection(p, "diversity", "DIVERSITY_REDUNDANT", "与本轮更高优先级候选近重复")
                 diversity_rejected.append((p["expression"], ["与本轮更高优先级候选近重复"]))
                 continue
             if not self.search_policy.accept(p):
+                allocator = self.search_policy.allocator
+                budget_exhausted = allocator.consumed_budget >= allocator.total_budget
+                self._record_candidate_rejection(
+                    p,
+                    "simulation_budget" if budget_exhausted else "arm",
+                    "SIMULATION_BUDGET" if budget_exhausted else "ARM_ADMISSION",
+                    "Simulation budget 已耗尽" if budget_exhausted else "同一 dataset/mechanism research arm 已有待定或预留预算",
+                )
                 diversity_rejected.append((
                     p["expression"],
                     ["同一 dataset/mechanism research arm 已有待定或预留预算"],
                 ))
                 continue
+            self._record_trial_phase(p, "candidate_admitted", outcome="ADMITTED")
             family_counts[family] = family_counts.get(family, 0) + 1
             if role in allocation_counts:
                 allocation_counts[role] += 1
@@ -744,10 +770,11 @@ class Agent:
         )
         budget_rejected = diverse[budget_cap:]
         fresh = diverse[:budget_cap]
-        # Release reservations for candidates trimmed by the existing hard
-        # batch cap.  No second submission path is introduced.
+        # Local batch trimming releases admission only; it must not consume
+        # Simulation budget or enter UCB's evaluated denominator.
         for p in budget_rejected:
-            self.search_policy.release(p, status="SKIPPED")
+            self._record_candidate_rejection(p, "batch_budget", "BATCH_CAP", "本地 batch cap 淘汰，未承诺 Simulation")
+            self.search_policy.release(p, status="SKIPPED_LOCAL")
         if self.research_allocation:
             role_max = self.research_allocation.get("maximum", {})
             role_counts = {role: 0 for role in RESEARCH_ROLES}
@@ -771,6 +798,14 @@ class Agent:
                 + ", ".join(f"{role}={role_counts.get(role, 0)}"
                              for role in sorted(RESEARCH_ROLES))
             )
+        committed = []
+        for p in fresh:
+            if self.search_policy.commit(p):
+                committed.append(p)
+            else:
+                self._record_candidate_rejection(p, "simulation_budget", "BUDGET_COMMIT_FAILED", "最终执行集合无法承诺 Simulation budget")
+        if len(committed) != len(fresh):
+            fresh = committed
         if diversity_rejected:
             print(f"[DIVERSITY BLOCKED] {len(diversity_rejected)} 个提案未进入模拟：")
             for expr, problems in diversity_rejected:
@@ -836,6 +871,7 @@ class Agent:
                 fields,
                 datasets=datasets,
             )
+            exp.candidate_id = p.get("candidate_id") or candidate_identity(p, round_no=round_no)
             exp.submission_fingerprint = submission_fingerprint(
                 exp.expression, exp.settings
             )
@@ -1622,6 +1658,23 @@ class Agent:
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
 
+    def _record_candidate_rejection(self, candidate, stage, reason_code, reason):
+        """Record every local rejection against its stable candidate identity."""
+        try:
+            if isinstance(candidate, dict):
+                candidate = dict(candidate)
+                candidate.setdefault("candidate_id", candidate_identity(candidate, round_no=candidate.get("round")))
+            self.trial_ledger.record(
+                candidate,
+                "candidate_rejected",
+                outcome="REJECTED",
+                reason=reason,
+                reason_code=reason_code,
+                stage=stage,
+            )
+        except Exception as exc:
+            print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
+
     def _update_search_lifecycle(self, experiment):
         """Mirror transport state into the in-memory allocator idempotently."""
         if not hasattr(self, "search_policy"):
@@ -1641,8 +1694,12 @@ class Agent:
         }
         metrics = getattr(experiment, "metrics", None) or {}
         reward = metrics.get("fitness", 0.0) if isinstance(metrics, dict) else 0.0
+        error_text = str(getattr(experiment, "error", "") or "").upper()
+        outcome = "INFRA" if status == "FAILED" and any(token in error_text for token in (
+            "TIMEOUT", "RATE_LIMIT", "AUTH", "INFRA", "NETWORK", "HTTP"
+        )) else "RESEARCH"
         try:
-            self.search_policy.release(proposal, status=status, reward=reward)
+            self.search_policy.release(proposal, status=status, reward=reward, outcome=outcome)
         except (TypeError, ValueError):
             pass
 

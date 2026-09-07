@@ -23,7 +23,6 @@ REQUIRED_VARIABLES = (
     "window_locality",
     "semantic_field_swap",
     "universe_robustness",
-    "decay_truncation",
     "yearly_aggregates",
 )
 
@@ -142,7 +141,7 @@ def probabilistic_sharpe_ratio(returns, observed_sharpe=None, periods_per_year=1
         "n_observations": moments["n"],
         "skew": moments["skew"],
         "kurtosis": moments["kurtosis"],
-    }, status="PASS")
+    }, status="INCONCLUSIVE", availability="AVAILABLE", quality="VERIFIED", decision="INCONCLUSIVE")
 
 
 def _expected_max_standard_normal(n_trials):
@@ -187,9 +186,15 @@ def deflated_sharpe_ratio(returns, observed_sharpe=None, n_trials=1,
                        else bool(trial_stats_observed)
                    )})
     if result.get("status") != "AVAILABLE":
-        result["evidence_status"] = "UNAVAILABLE"
+        result = annotate_evidence(result, status="UNAVAILABLE")
     else:
-        result["evidence_status"] = "PASS" if len(observed_trials) >= 2 else "APPROXIMATE"
+        result = annotate_evidence(
+            result,
+            status="INCONCLUSIVE",
+            availability="AVAILABLE",
+            quality="VERIFIED" if len(observed_trials) >= 2 else "APPROXIMATE",
+            decision="INCONCLUSIVE",
+        )
     result["method"] = "deflated_sharpe_ratio"
     return result
 
@@ -266,9 +271,6 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         {"variable": "universe_robustness", "reason": "检验信号是否只依赖单一股票覆盖层", "budget": 1,
          "requirement": "REQUIRED",
          "falsification": "替代 universe 后指标或 checks 失败", "stopping_rule": "完成一个预注册 universe 对照"},
-        {"variable": "decay_truncation", "reason": "隔离 decay/truncation 单变量影响", "budget": 1,
-         "requirement": "NOT_APPLICABLE",
-         "falsification": "单变量改变导致收益或健康不可接受", "stopping_rule": "只改变一个设置并完成一次对照"},
         {"variable": "decay", "reason": "只改变 decay，避免与 truncation 混淆", "budget": 1,
          "requirement": "REQUIRED" if has_decay else "NOT_APPLICABLE",
          "falsification": "只改变 decay 后收益或健康不可接受", "stopping_rule": "完成一个 decay 对照"},
@@ -283,7 +285,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         variables.append({"variable": "pnl_diagnostics", "reason": "PnL capability 已验证，检查 rolling stability 与相关性", "budget": 0,
                           "falsification": "rolling stability 或 bootstrap 诊断失败", "stopping_rule": "使用完整可用 return series"})
     canonical = {
-        "schema_version": 2,
+        "schema_version": 3,
         "parent_fingerprint": fingerprint,
         "parent_expression": expression,
         "settings": settings or {},
@@ -296,7 +298,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
     }
     identity = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ValidationPlan({
-        "schema_version": 2,
+        "schema_version": 3,
         "plan_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16],
         "parent_expression": expression,
         "parent_fingerprint": fingerprint,
@@ -310,7 +312,29 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
     })
 
 
+def migrate_validation_plan(plan):
+    """Migrate legacy v1/v2 plans without rewriting append-only evidence."""
+    if not isinstance(plan, dict):
+        return plan
+    version = int(num(plan.get("schema_version")) or 1)
+    if version >= 3:
+        return dict(plan)
+    migrated = dict(plan)
+    variables = [dict(item) for item in (plan.get("variables") or []) if isinstance(item, dict)]
+    legacy = next((item for item in variables if item.get("variable") == "decay_truncation"), None)
+    variables = [item for item in variables if item.get("variable") != "decay_truncation"]
+    if legacy:
+        for name in ("decay", "truncation"):
+            variables.append(dict(legacy, variable=name))
+    for item in variables:
+        item.setdefault("requirement", "REQUIRED")
+    migrated["variables"] = variables
+    migrated["schema_version"] = 3
+    return migrated
+
+
 def validate_plan(plan):
+    plan = migrate_validation_plan(plan)
     if not isinstance(plan, dict):
         return False, ["validation_plan 必须是对象"]
     problems = []
@@ -363,6 +387,7 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
                             trial_summary=None, pnl_evidence=None, return_series=None,
                             aligned_return_series=None, platform_evidence=None):
     """Aggregate all required evidence; a single child can never pass."""
+    plan = migrate_validation_plan(plan)
     plan_ok, plan_errors = validate_plan(plan)
     dimensions = {}
     children = list(robustness_children or [])
@@ -436,43 +461,71 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
         "evidence_status": "PASS" if platform_ok else "FAIL",
         "evidence": platform_evidence,
     }
-    selection = (trial_summary or {}).get("generated_trials")
+    selection = (trial_summary or {}).get("candidate_count")
+    if selection is None:
+        selection = (trial_summary or {}).get("generated_trials")
     if selection is None:
         selection = (trial_summary or {}).get("trial_count", 0)
     trial_sharpes = (trial_summary or {}).get("trial_sharpes")
     stats = {
-        "psr": probabilistic_sharpe_ratio(return_series) if return_series else {"status": "UNAVAILABLE", "reason": "return series unavailable"},
+        "psr": probabilistic_sharpe_ratio(return_series) if return_series else annotate_evidence({"status": "UNAVAILABLE", "reason": "return series unavailable"}, status="UNAVAILABLE"),
         "dsr": deflated_sharpe_ratio(
             return_series, n_trials=max(1, selection), trial_sharpes=trial_sharpes,
             trial_mean=(trial_summary or {}).get("trial_sharpe_mean"),
             trial_std=(trial_summary or {}).get("trial_sharpe_std"),
             trial_stats_observed=(trial_summary or {}).get("trial_sharpe_count", 0) >= 2,
-        ) if return_series else {"status": "UNAVAILABLE", "reason": "return series unavailable", "n_trials": max(1, selection)},
+        ) if return_series else annotate_evidence({"status": "UNAVAILABLE", "reason": "return series unavailable", "n_trials": max(1, selection)}, status="UNAVAILABLE"),
         "pbo_cscv": pbo_proxy(aligned_return_series),
         "trial_events": selection,
         "raw_trial_count": selection,
         "effective_trial_count": max(1, int((trial_summary or {}).get("effective_trial_count", selection) or selection or 1)),
     }
-    statistical_policy = str((plan or {}).get("statistical_policy", "required_when_available"))
+    statistical_policy = (plan or {}).get("statistical_policy", "required_when_available")
+    if isinstance(statistical_policy, dict):
+        statistical_mode = str(statistical_policy.get("mode", "required_when_available"))
+        min_psr = statistical_policy.get("min_psr")
+        min_dsr = statistical_policy.get("min_dsr")
+        max_pbo = statistical_policy.get("max_pbo_proxy")
+    else:
+        statistical_mode = str(statistical_policy)
+        min_psr = min_dsr = None
+        max_pbo = None
     has_returns = bool(return_series)
     dsr = stats["dsr"]
-    if not has_returns:
+    psr = stats["psr"]
+    if not has_returns or psr.get("availability") == "UNAVAILABLE" or dsr.get("availability") == "UNAVAILABLE":
         stats["statistical_status"] = "UNAVAILABLE"
-    elif dsr.get("evidence_status") == "APPROXIMATE":
+        stats["statistical_decision"] = "INCONCLUSIVE"
+    elif dsr.get("quality") == "APPROXIMATE":
         stats["statistical_status"] = "APPROXIMATE"
+        stats["statistical_decision"] = "INCONCLUSIVE"
     else:
-        stats["statistical_status"] = "PASS"
-    if statistical_policy == "required" and stats["statistical_status"] == "UNAVAILABLE":
-        dimensions["statistical_evidence"] = {"status": "FAIL", "evidence_status": "FAIL", "reason": "statistical evidence required"}
+        checks = []
+        if num(min_psr) is not None:
+            checks.append((num(psr.get("psr")), num(min_psr)))
+        if num(min_dsr) is not None:
+            checks.append((num(dsr.get("psr")), num(min_dsr)))
+        passed = all(value is not None and value >= threshold for value, threshold in checks)
+        pbo_value = num(stats.get("pbo_cscv", {}).get("pbo"))
+        if num(max_pbo) is not None and pbo_value is not None and pbo_value > num(max_pbo):
+            passed = False
+        stats["statistical_decision"] = "PASS" if passed else "FAIL"
+        stats["statistical_status"] = stats["statistical_decision"]
+    stats["policy_mode"] = statistical_mode
+    if stats["statistical_status"] == "UNAVAILABLE" and statistical_mode == "required":
+        dimensions["statistical_evidence"] = {"status": "FAIL", "evidence_status": "FAIL", "requirement": "REQUIRED", "reason": "statistical evidence required"}
     else:
-        dimensions["statistical_evidence"] = {"status": stats["statistical_status"],
-                                                "evidence_status": stats["statistical_status"]}
+        dimensions["statistical_evidence"] = {
+            "status": stats["statistical_status"],
+            "evidence_status": stats["statistical_status"],
+            "requirement": "OPTIONAL" if statistical_mode == "required_when_available" else "REQUIRED",
+        }
     parent_done = _child_status(parent) == "DONE"
     parent_checks = checks_passed(_child_metrics(parent)) is True
     required_pass = all(
-        item.get("status") in {"PASS", "NOT_APPLICABLE", "UNAVAILABLE", "APPROXIMATE"}
+        item.get("status") == "PASS"
         for item in dimensions.values()
-        if item.get("requirement", "REQUIRED") != "OPTIONAL"
+        if item.get("requirement", "REQUIRED") == "REQUIRED"
     )
     status = "PASS" if plan_ok and parent_done and parent_checks and required_pass else "FAIL"
     return ValidationReport({

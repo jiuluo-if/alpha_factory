@@ -23,6 +23,7 @@ class Experiment:
         datasets=None,
     ):
         self.id = uuid.uuid4().hex[:12]
+        self.candidate_id = None
         self.proposal_id = None
         self.submission_fingerprint = None
         self.submission_started_at = None
@@ -89,6 +90,7 @@ class Experiment:
     def to_dict(self):
         return {
             "id": self.id,
+            "candidate_id": self.candidate_id,
             "proposal_id": self.proposal_id,
             "submission_fingerprint": self.submission_fingerprint,
             "submission_started_at": self.submission_started_at,
@@ -152,6 +154,7 @@ class Experiment:
             data.get("datasets"),
         )
         exp.id = data["id"]
+        exp.candidate_id = data.get("candidate_id")
         exp.proposal_id = data.get("proposal_id")
         exp.submission_fingerprint = data.get("submission_fingerprint")
         exp.submission_started_at = data.get("submission_started_at")

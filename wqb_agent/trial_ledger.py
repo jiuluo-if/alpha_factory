@@ -8,12 +8,14 @@ from collections import Counter, defaultdict
 
 from .artifacts import append_jsonl_if_unique, iter_jsonl_objects
 from .expression import canonical_expression
+from .identity import candidate_identity
 from .search_policy import structural_fingerprint
 
 
 PHASES = {
     "generated", "preflight", "submitted", "completed",
     "candidate_generated", "candidate_rejected", "preflight_accepted",
+    "candidate_admitted",
 }
 
 
@@ -24,7 +26,7 @@ def _text(value, default="unknown"):
 class TrialLedger:
     """Record proposal lifecycle facts without replacing trajectory/checkpoint."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path):
         self.path = path
@@ -32,8 +34,8 @@ class TrialLedger:
     @staticmethod
     def _trial_id(trial):
         if isinstance(trial, dict):
-            return _text(trial.get("id") or trial.get("proposal_id"), "")
-        return _text(getattr(trial, "id", None) or getattr(trial, "proposal_id", None), "")
+            return _text(trial.get("candidate_id") or trial.get("id") or trial.get("proposal_id"), "")
+        return _text(getattr(trial, "candidate_id", None) or getattr(trial, "id", None) or getattr(trial, "proposal_id", None), "")
 
     @staticmethod
     def _value(trial, key, default=None):
@@ -41,10 +43,12 @@ class TrialLedger:
             return trial.get(key, default)
         return getattr(trial, key, default)
 
-    def record(self, trial, phase, *, outcome=None, reason=None, timestamp=None):
+    def record(self, trial, phase, *, outcome=None, reason=None, reason_code=None,
+               stage=None, timestamp=None):
         if phase not in PHASES:
             raise ValueError(f"未知 trial phase: {phase}")
-        trial_id = self._trial_id(trial)
+        candidate_id = self._value(trial, "candidate_id") or candidate_identity(trial, round_no=self._value(trial, "round"))
+        trial_id = self._trial_id(trial) or candidate_id
         expression = _text(self._value(trial, "expression", ""), "")
         fingerprint = _text(
             self._value(trial, "submission_fingerprint", "")
@@ -52,7 +56,7 @@ class TrialLedger:
             "",
         )
         state = _text(self._value(trial, "status"), "UNKNOWN")
-        identity = f"{trial_id}|{phase}|{state}|{outcome or ''}|{reason or ''}"
+        identity = f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}"
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
         if not isinstance(fields, (list, tuple)):
@@ -61,11 +65,14 @@ class TrialLedger:
             "schema_version": self.SCHEMA_VERSION,
             "event_id": event_id,
             "trial_id": trial_id,
+            "candidate_id": candidate_id,
             "proposal_id": self._value(trial, "proposal_id"),
             "phase": phase,
             "event_type": phase,
             "outcome": outcome or state,
             "reason": reason,
+            "reason_code": reason_code,
+            "stage": stage,
             "status": state,
             "sharpe": self._value(self._value(trial, "metrics", {}) or {}, "sharpe"),
             "fitness": self._value(self._value(trial, "metrics", {}) or {}, "fitness"),
@@ -96,6 +103,10 @@ class TrialLedger:
         event_type_counts = Counter()
         rejected_candidates = set()
         submitted_trials = set()
+        accepted_candidates = set()
+        completed_trials = set()
+        admitted_families = Counter()
+        admitted_structures = Counter()
         structural_trials = set()
         family_trials = set()
         latest_by_trial = {}
@@ -107,16 +118,23 @@ class TrialLedger:
             if row.get("structural_fingerprint"):
                 structural_trials.add(row.get("structural_fingerprint"))
             family_trials.add((row.get("template_family", "unknown"), row.get("dataset_family", "unknown").__str__()))
-            if row.get("phase") == "generated" and trial_id:
+            if row.get("phase") in {"generated", "candidate_generated"} and trial_id:
                 generated_trials.add(trial_id)
             event_type_counts[row.get("event_type") or row.get("phase", "unknown")] += 1
-            if row.get("phase") == "candidate_rejected" and trial_id:
-                rejected_candidates.add(trial_id)
-            if row.get("phase") == "submitted" and trial_id:
-                submitted_trials.add(trial_id)
+            if row.get("phase") == "candidate_rejected" and row.get("candidate_id"):
+                rejected_candidates.add(row.get("candidate_id"))
+            if row.get("phase") == "preflight_accepted" and row.get("candidate_id"):
+                accepted_candidates.add(row.get("candidate_id"))
+            if row.get("phase") == "submitted" and row.get("proposal_id"):
+                submitted_trials.add(row.get("proposal_id"))
+            if row.get("phase") == "candidate_admitted":
+                admitted_families[str(row.get("template_family") or "unknown")] += 1
+                admitted_structures[str(row.get("structural_fingerprint") or "unknown")] += 1
             if trial_id:
                 latest_by_trial[trial_id] = row
             if row.get("phase") == "completed":
+                if row.get("proposal_id") or trial_id:
+                    completed_trials.add(row.get("proposal_id") or trial_id)
                 value = row.get("sharpe")
                 try:
                     value = float(value)
@@ -138,9 +156,18 @@ class TrialLedger:
             "events": events,
             "trial_count": len(trial_ids),
             "generated_trials": len(generated_trials),
-            "candidate_count": sum(1 for key in event_type_counts if key == "candidate_generated") or len(generated_trials),
+            "candidate_generated_count": len(generated_trials),
+            "candidate_count": len(generated_trials),
+            "candidate_rejected_count": len(rejected_candidates),
             "rejected_candidate_count": len(rejected_candidates),
+            "preflight_accepted_count": len(accepted_candidates),
+            "submitted_count": len(submitted_trials),
+            "completed_count": len(completed_trials),
+            "unique_candidate_count": len({row.get("candidate_id") for row in iter_jsonl_objects(self.path) if row.get("candidate_id")}),
+            "unique_proposal_count": len({row.get("proposal_id") for row in iter_jsonl_objects(self.path) if row.get("proposal_id")}),
             "simulation_count": len(submitted_trials),
+            "family_counts": dict(admitted_families),
+            "structural_family_counts": dict(admitted_structures),
             "structural_trial_count": len(structural_trials),
             "effective_trial_count": max(1, len(structural_trials or family_trials or trial_ids)),
             "arm_counts": self._arm_counts(latest_by_trial),
@@ -152,6 +179,12 @@ class TrialLedger:
             ),
             "phase_counts": dict(phase_counts),
             "status_counts": dict(status_counts),
+            "invariant": {
+                "candidate_generated_ge_preflight_accepted_ge_submitted": (
+                    len(generated_trials) >= len(accepted_candidates) >= len(submitted_trials)
+                ),
+                "note": "append-only recovery may temporarily leave accepted/submitted events incomplete",
+            },
             "trial_counts": {
                 key: {group: dict(counts) for group, counts in values.items()}
                 for key, values in groups.items()
@@ -160,18 +193,31 @@ class TrialLedger:
 
     @staticmethod
     def _arm_counts(latest_by_trial):
-        result = defaultdict(lambda: {"completed": 0, "pending": 0, "running": 0,
-                                       "unknown": 0, "reserved": 0, "reward": 0.0})
+        result = defaultdict(lambda: {
+            "admitted": 0, "submitted": 0, "evaluated": 0, "done": 0,
+            "failed_research": 0, "failed_infra": 0, "skipped_local": 0,
+            "completed": 0, "pending": 0, "running": 0, "unknown": 0,
+            "reserved": 0, "reward_sum": 0.0, "reward_count": 0, "reward": 0.0,
+        })
         for row in latest_by_trial.values():
             datasets = row.get("dataset_family") or "unknown-dataset"
             if isinstance(datasets, list):
                 datasets = "+".join(sorted(str(item) for item in datasets))
             arm = f"{datasets}::{row.get('template_family') or 'unknown-mechanism'}"
             status = str(row.get("status") or "UNKNOWN").upper()
+            if row.get("phase") in {"candidate_admitted", "preflight_accepted", "submitted", "completed"}:
+                result[arm]["admitted"] += 1
+            if row.get("phase") in {"submitted", "completed"}:
+                result[arm]["submitted"] += 1
             if status == "DONE":
                 result[arm]["completed"] += 1
+                result[arm]["done"] += 1
+                result[arm]["evaluated"] += 1
+                result[arm]["reward_count"] += 1
                 try:
-                    result[arm]["reward"] += float(row.get("fitness", 0.0) or 0.0)
+                    reward = float(row.get("fitness", 0.0) or 0.0)
+                    result[arm]["reward"] += reward
+                    result[arm]["reward_sum"] += reward
                 except (TypeError, ValueError):
                     pass
             elif status in {"PENDING", "SUBMITTING"}:
@@ -180,4 +226,10 @@ class TrialLedger:
                 result[arm]["running"] += 1
             elif status in {"UNKNOWN", "SUBMIT_UNKNOWN"}:
                 result[arm]["unknown"] += 1
+            elif status == "FAILED":
+                result[arm]["completed"] += 1
+                if str(row.get("reason_code") or row.get("reason") or "").upper() in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT"}:
+                    result[arm]["failed_infra"] += 1
+                else:
+                    result[arm]["failed_research"] += 1
         return dict(result)

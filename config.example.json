@@ -42,7 +42,10 @@
       "ucb_exploration": 1.0
     },
     "statistical_policy": {
-      "mode": "required_when_available"
+      "mode": "required_when_available",
+      "min_psr": 0.95,
+      "min_dsr": 0.95,
+      "max_pbo_proxy": null
     },
     "pagination_limit": 50,
     "max_pagination_pages": 20,

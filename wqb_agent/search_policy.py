@@ -4,6 +4,8 @@ from collections import Counter, defaultdict
 import math
 import re
 
+from .evidence_status import annotate_evidence
+
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|[^\s]")
 _OPERATORS = {
     "rank", "zscore", "ts_mean", "ts_sum", "ts_std_dev", "ts_rank",
@@ -12,7 +14,7 @@ _OPERATORS = {
     "sqrt", "min", "max", "add", "sub", "mul", "div", "and", "or",
 }
 _ACTIVE = {"RESERVED", "PENDING", "RUNNING", "UNKNOWN"}
-_TERMINAL = {"DONE", "FAILED", "SKIPPED"}
+_TERMINAL = {"DONE", "FAILED", "SKIPPED", "SKIPPED_LOCAL"}
 
 
 def _get(record, key, default=None):
@@ -105,39 +107,44 @@ def _series_points(record):
 
 def _corr_evidence(left, right):
     if not left or not right:
-        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE", "reason": "missing series"}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "missing series"}, status="UNAVAILABLE")
     left, right = dict(left), dict(right)
     keys = sorted(set(left) & set(right))
     overlap_ratio = len(keys) / max(len(left), len(right))
     if len(keys) < 3:
-        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE",
-                "reason": "fewer than 3 date-aligned observations", "overlap_count": len(keys),
-                "overlap_ratio": overlap_ratio}
+        return annotate_evidence({"status": "UNAVAILABLE",
+                                  "reason": "fewer than 3 date-aligned observations", "overlap_count": len(keys),
+                                  "overlap_ratio": overlap_ratio}, status="UNAVAILABLE")
     a, b = [left[key] for key in keys], [right[key] for key in keys]
     ma, mb = sum(a) / len(a), sum(b) / len(b)
     da = sum((value - ma) ** 2 for value in a)
     db = sum((value - mb) ** 2 for value in b)
     if da <= 0 or db <= 0:
-        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE", "reason": "constant series",
-                "overlap_count": len(keys), "overlap_ratio": overlap_ratio}
+        return annotate_evidence({"status": "UNAVAILABLE", "reason": "constant series",
+                                  "overlap_count": len(keys), "overlap_ratio": overlap_ratio}, status="UNAVAILABLE")
     signed = sum((x - ma) * (y - mb) for x, y in zip(a, b)) / math.sqrt(da * db)
-    return {"status": "PASS", "evidence_status": "PASS", "signed_corr": signed,
-            "abs_corr": abs(signed), "overlap_count": len(keys), "overlap_ratio": overlap_ratio}
+    return annotate_evidence({"status": "AVAILABLE", "signed_corr": signed,
+                              "abs_corr": abs(signed), "overlap_count": len(keys),
+                              "overlap_ratio": overlap_ratio},
+                             status="INCONCLUSIVE", availability="AVAILABLE",
+                             quality="VERIFIED", decision="INCONCLUSIVE")
 
 
 def empirical_pool_summary(record, pool):
     rows = [_corr_evidence(_series_points(record), _series_points(item)) for item in pool]
     correlations = [row["signed_corr"] for row in rows if row.get("signed_corr") is not None]
     if not correlations:
-        return {"status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE", "max_corr": None,
-                "median_corr": None, "nearest_corr": None, "incremental_value": None,
-                "correlations": rows}
+        return annotate_evidence({"status": "UNAVAILABLE", "max_corr": None,
+                                  "median_corr": None, "nearest_corr": None, "incremental_value": None,
+                                  "correlations": rows}, status="UNAVAILABLE")
     ordered = sorted(correlations)
     max_corr = max(correlations, key=abs)
     incremental = max(0.0, 1.0 - max(abs(value) for value in correlations))
-    return {"status": "AVAILABLE", "evidence_status": "PASS", "max_corr": max_corr,
-            "median_corr": ordered[len(ordered) // 2], "nearest_corr": max_corr,
-            "incremental_value": incremental, "correlations": rows}
+    return annotate_evidence({"status": "AVAILABLE", "max_corr": max_corr,
+                               "median_corr": ordered[len(ordered) // 2], "nearest_corr": max_corr,
+                               "incremental_value": incremental, "correlations": rows},
+                              status="INCONCLUSIVE", availability="AVAILABLE",
+                              quality="VERIFIED", decision="INCONCLUSIVE")
 
 
 def incremental_novelty(record, pool):
@@ -199,7 +206,13 @@ class BudgetAllocator:
         self.total_budget = max(0, int(total_budget))
         self.exploration = float(exploration)
         self.max_pending_per_arm = max(1, int(max_pending_per_arm))
-        self.arms = defaultdict(lambda: {"completed": 0, "pending": 0, "running": 0, "unknown": 0, "reserved": 0, "reward": 0.0})
+        self.arms = defaultdict(lambda: {
+            "admitted": 0, "submitted": 0, "evaluated": 0, "done": 0,
+            "failed_research": 0, "failed_infra": 0, "skipped_local": 0,
+            "completed": 0, "pending": 0, "running": 0, "unknown": 0,
+            "reserved": 0, "reward_sum": 0.0, "reward_count": 0,
+            "reward": 0.0,
+        })
         self.proposals = {}
         self.consumed_budget = 0
 
@@ -231,7 +244,8 @@ class BudgetAllocator:
         state = self._state(proposal)
         return state["pending"] + state["running"] + state["unknown"] + state["reserved"] < self.max_pending_per_arm
 
-    def reserve(self, proposal):
+    def reserve(self, proposal, *, committed=True):
+        """Reserve an arm; legacy callers commit immediately by default."""
         key = self.proposal_key(proposal)
         if key in self.proposals:
             # Reservation is a one-shot admission operation.  Lifecycle
@@ -243,33 +257,60 @@ class BudgetAllocator:
                 return False
             arm = self.proposals[key]["arm"]
             state = self.arms[arm]
-            if state["pending"] + state["unknown"] + state["reserved"] >= self.max_pending_per_arm:
+            if state["pending"] + state["running"] + state["unknown"] + state["reserved"] >= self.max_pending_per_arm:
                 return False
             state["reserved"] += 1
             self.proposals[key]["status"] = "RESERVED"
-            self.consumed_budget += 1
+            self.proposals[key]["committed"] = bool(committed)
+            self.proposals[key].setdefault("submitted", False)
+            state["admitted"] += 1
+            if committed:
+                self.consumed_budget += 1
             return True
         if not self.can_reserve(proposal):
             return False
         arm = self.arm_key(proposal)
         self.arms[arm]["reserved"] += 1
-        self.proposals[key] = {"arm": arm, "status": "RESERVED"}
+        self.arms[arm]["admitted"] += 1
+        self.proposals[key] = {"arm": arm, "status": "RESERVED", "committed": bool(committed), "submitted": False}
+        if committed:
+            self.consumed_budget += 1
+        return True
+
+    def admit(self, proposal):
+        """Admit a candidate without consuming Simulation budget."""
+        return self.reserve(proposal, committed=False)
+
+    def commit(self, proposal):
+        key = self.proposal_key(proposal)
+        if key not in self.proposals:
+            if not self.admit(proposal):
+                return False
+        current = self.proposals[key]
+        if current.get("committed"):
+            return True
+        if self.consumed_budget >= self.total_budget:
+            return False
+        current["committed"] = True
         self.consumed_budget += 1
         return True
 
-    def transition(self, proposal, status, reward=0.0):
+    def transition(self, proposal, status, reward=0.0, *, outcome=None):
         status = str(status or "").upper()
         if status not in _ACTIVE | _TERMINAL:
             raise ValueError(f"未知 allocator 状态: {status}")
         key = self.proposal_key(proposal)
         if key not in self.proposals:
-            if not self.reserve(proposal):
+            if not self.reserve(proposal, committed=True):
                 return False
         current = self.proposals[key]
         if current["status"] == status:
             return True
         state = self.arms[current["arm"]]
         old = current["status"]
+        if status in {"RUNNING", "UNKNOWN"} and not current.get("submitted"):
+            state["submitted"] += 1
+            current["submitted"] = True
         if old in _ACTIVE:
             state[old.lower()] = max(0, state[old.lower()] - 1)
         if status in _ACTIVE:
@@ -277,10 +318,23 @@ class BudgetAllocator:
         elif status in _TERMINAL and old not in _TERMINAL:
             state["completed"] += 1
             if status == "DONE":
+                state["done"] += 1
+                state["evaluated"] += 1
+                state["reward_count"] += 1
                 try:
-                    state["reward"] += float(reward)
+                    value = float(reward)
+                    state["reward_sum"] += value
+                    state["reward"] += value
                 except (TypeError, ValueError):
                     pass
+            elif status == "SKIPPED_LOCAL":
+                state["skipped_local"] += 1
+            elif status == "FAILED":
+                category = str(outcome or "").upper()
+                if category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN"}:
+                    state["failed_infra"] += 1
+                else:
+                    state["failed_research"] += 1
         current["status"] = status
         return True
 
@@ -296,19 +350,22 @@ class BudgetAllocator:
     def mark_running(self, proposal):
         return self.transition(proposal, "RUNNING")
 
-    def mark_failed(self, proposal):
-        return self.transition(proposal, "FAILED")
+    def mark_failed(self, proposal, outcome=None):
+        return self.transition(proposal, "FAILED", outcome=outcome)
 
     def mark_skipped(self, proposal):
         return self.transition(proposal, "SKIPPED")
 
+    def mark_skipped_local(self, proposal):
+        return self.transition(proposal, "SKIPPED_LOCAL")
+
     def score(self, proposal):
         state = self._state(proposal)
-        count = state["completed"]
-        total = sum(item["completed"] for item in self.arms.values())
+        count = state.get("reward_count", state.get("done", 0))
+        total = sum(item.get("reward_count", item.get("done", 0)) for item in self.arms.values())
         if count == 0:
             return self.exploration + (1.0 if total else 0.0)
-        return state["reward"] / count + self.exploration * math.sqrt(math.log(max(2, total + 1)) / count)
+        return state.get("reward_sum", state.get("reward", 0.0)) / count + self.exploration * math.sqrt(math.log(max(2, total + 1)) / count)
 
     def snapshot(self):
         return {"total_budget": self.total_budget, "consumed_budget": self.consumed_budget,
@@ -320,11 +377,14 @@ class BudgetAllocator:
             return
         for key, value in (snapshot.get("arms") or {}).items():
             if isinstance(value, dict):
-                self.arms[str(key)].update({field: value.get(field, 0) for field in
-                                            ("completed", "pending", "running", "unknown", "reserved", "reward")})
+                self.arms[str(key)].update({field: value.get(field, 0) for field in (
+                    "admitted", "submitted", "evaluated", "done", "failed_research", "failed_infra",
+                    "skipped_local", "completed", "pending", "running", "unknown", "reserved",
+                    "reward_sum", "reward_count", "reward")})
         self.consumed_budget = int(snapshot.get("consumed_budget", sum(
-            value["completed"] + value["pending"] + value.get("running", 0) + value["unknown"] + value["reserved"]
-            for value in self.arms.values())))
+            1 for value in (snapshot.get("proposals") or {}).values()
+            if isinstance(value, dict) and value.get("committed")
+        )))
         self.proposals.update({str(key): dict(value) for key, value in
                                (snapshot.get("proposals") or {}).items() if isinstance(value, dict)})
 
@@ -351,17 +411,27 @@ class SearchPolicy:
         return float(proposal.get("novelty_score", 0.0)) + self.allocator.score(proposal) - 0.05 * self.family_counts[proposal.get("template_family")]
 
     def accept(self, proposal):
-        accepted = not self.enabled or self.allocator.reserve(proposal)
+        accepted = not self.enabled or self.allocator.admit(proposal)
         if accepted and self.enabled:
             self.family_counts[str(proposal.get("template_family") or "unknown")] += 1
         return accepted
 
-    def release(self, proposal, status="DONE", reward=0.0):
+    def commit(self, proposal):
+        return not self.enabled or self.allocator.commit(proposal)
+
+    def release(self, proposal, status="DONE", reward=0.0, outcome=None):
         if self.enabled:
-            self.allocator.transition(proposal, status, reward=reward)
+            if status == "SKIPPED_LOCAL":
+                self.allocator.mark_skipped_local(proposal)
+            else:
+                self.allocator.transition(proposal, status, reward=reward, outcome=outcome)
+
+    def snapshot(self):
+        snapshot = self.allocator.snapshot()
+        snapshot["family_counts"] = dict(self.family_counts)
+        return snapshot
 
     def restore(self, snapshot):
         self.allocator.restore(snapshot)
-
-    def snapshot(self):
-        return self.allocator.snapshot()
+        self.family_counts.update({str(key): int(value) for key, value in
+                                   (snapshot.get("family_counts") or {}).items()})

@@ -97,6 +97,8 @@ def audit_state(state_dir):
         pass
     if not submitted.issubset(committed) or not settled.issubset(submitted):
         errors.append("lifecycle_order")
+    if checkpoint_terminal and not os.path.isfile(ledger_path):
+        errors.append("ledger_missing")
     if any(proposal_id not in ledger_terminal for proposal_id in checkpoint_terminal):
         errors.append("checkpoint_ledger_mismatch")
 

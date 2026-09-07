@@ -125,6 +125,17 @@ class Phase8ReleaseTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("checkpoint_ledger_mismatch", result["errors"])
 
+    def test_audit_reports_missing_ledger_for_terminal_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
+                json.dump({"complete": True, "experiments": [{
+                    "status": "DONE", "proposal_id": "p"
+                }]}, handle)
+            result = audit_state(tmp)
+            self.assertFalse(result["ok"])
+            self.assertIn("ledger_missing", result["errors"])
+            self.assertIn("checkpoint_ledger_mismatch", result["errors"])
+
     def test_audit_detects_orphan_validation_parent(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "validation_reports.jsonl"), "w", encoding="utf-8") as handle:

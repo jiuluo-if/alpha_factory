@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from wqb_agent.config import parse_config
 from wqb_agent.schema import CURRENT_SCHEMA_VERSION, migrate_artifact, ARTIFACT_SCHEMAS
@@ -51,6 +52,14 @@ class Phase8ReleaseTests(unittest.TestCase):
             self.assertTrue(result["config_valid"])
             self.assertEqual(result["pnl_capability"], "UNAVAILABLE")
             self.assertEqual(result["incremental_capability"], "UNAVAILABLE")
+
+    def test_doctor_and_audit_are_network_free(self):
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "requests.Session", side_effect=AssertionError("网络调用不应发生")
+        ):
+            result = run_doctor({"simulation": {}, "agent": {"state_dir": tmp}}, offline=True)
+            self.assertTrue(result["config_valid"])
+            self.assertTrue(audit_state(tmp)["ok"])
 
     def test_audit_detects_orphan_submission(self):
         with tempfile.TemporaryDirectory() as tmp:

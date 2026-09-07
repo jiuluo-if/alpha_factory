@@ -17,6 +17,7 @@ from wqb_agent.state import Experiment
 from wqb_agent.diagnostics import DiagnosticEvent
 from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.behavior import extract_behavior_series
+from wqb_agent.protocol import retry_after_seconds
 import main as main_entry
 
 
@@ -64,7 +65,7 @@ class Phase8ReleaseTests(unittest.TestCase):
             "authentication.json", "simulation_progress.json", "alpha.json",
             "aggregates.json", "alpha_check.json", "pnl.json",
             "data_fields.json", "data_sets.json", "operators.json",
-            "self_correlation.json",
+            "self_correlation.json", "retry_after.json",
         }
         actual = {name for name in os.listdir(fixture_dir) if name.endswith(".json")}
         self.assertEqual(actual, expected)
@@ -89,6 +90,9 @@ class Phase8ReleaseTests(unittest.TestCase):
             extract_behavior_series({"pnl": pnl_payload["pnl"]})["availability"],
             "UNAVAILABLE",
         )
+        with open(os.path.join(fixture_dir, "retry_after.json"), encoding="utf-8") as handle:
+            retry_payload = json.load(handle)
+        self.assertEqual(retry_after_seconds(retry_payload["headers"]), 2.0)
 
     def test_legacy_v2_and_current_migrations_are_idempotent(self):
         for payload in ({"schema_version": 2}, {"schema_version": CURRENT_SCHEMA_VERSION,

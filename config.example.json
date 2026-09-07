@@ -39,7 +39,8 @@
       "enabled": true,
       "max_simulations": 100,
       "max_pending_per_arm": 1,
-      "ucb_exploration": 1.0
+      "ucb_exploration": 1.0,
+      "validation_max_simulations": 4
     },
     "statistical_policy": {
       "mode": "required_when_available",

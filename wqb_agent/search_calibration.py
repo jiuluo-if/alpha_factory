@@ -1,0 +1,209 @@
+"""Read-only efficiency metrics and no-look-ahead policy replay."""
+
+from collections import Counter, defaultdict
+import math
+
+
+def _get(row, key, default=None):
+    return row.get(key, default) if isinstance(row, dict) else getattr(row, key, default)
+
+
+def _finite(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _outcome_dict(outcome):
+    if isinstance(outcome, dict):
+        return outcome
+    if hasattr(outcome, "as_dict"):
+        return outcome.as_dict()
+    return {}
+
+
+def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), trajectory=()):
+    """Build a compact, historical efficiency report without writing state."""
+    summary = ledger_summary if isinstance(ledger_summary, dict) else {}
+    outcome_rows = [_outcome_dict(item) for item in outcomes]
+    evaluated = [row for row in outcome_rows if row.get("evaluated") is True]
+    promising = [row for row in outcome_rows if str(row.get("base_quality", "")).upper()
+                 in {"PROMISING", "SUCCESS", "SUSPICIOUS_HIGH_SIGNAL", "STABLE"}]
+    stable = [row for row in outcome_rows if str(row.get("robustness", "")).upper()
+              in {"STABLE", "PASS"}]
+    committed = int(summary.get("committed_simulations", summary.get("submitted_count", 0)) or 0)
+    if not committed:
+        committed = sum(1 for row in outcome_rows if row.get("proposal_id"))
+    submitted = int(summary.get("submitted_count", 0) or 0)
+    if not submitted:
+        submitted = committed
+    role_budget = Counter()
+    for row in outcome_rows:
+        role = str(row.get("research_role") or "UNKNOWN")
+        role_budget[role] += 1
+
+    rejection = Counter()
+    for row in events or ():
+        if str(_get(row, "phase", "")) == "candidate_rejected":
+            rejection[str(_get(row, "reason_code", "UNKNOWN"))] += 1
+    duplicate = rejection.get("DUPLICATE_LOCAL", 0) + rejection.get("DIVERSITY_REDUNDANT", 0)
+    local = rejection.get("BATCH_CAP", 0) + rejection.get("ARM_ADMISSION", 0)
+    infra = sum(1 for row in outcome_rows if row.get("infrastructure_failure") is True)
+    unknown = sum(1 for row in outcome_rows if str(row.get("base_quality", "")).upper() == "UNRESOLVED")
+
+    def ratio(numerator, denominator):
+        return numerator / denominator if denominator else None
+
+    return {
+        "candidate_count": int(summary.get("candidate_count", summary.get("candidate_generated_count", 0)) or 0),
+        "submitted_count": submitted,
+        "evaluated_count": len(evaluated),
+        "promising_count": len(promising),
+        "stable_count": len(stable),
+        "simulation_per_promising": ratio(committed, len(promising)),
+        "simulation_per_stable": ratio(committed, len(stable)),
+        "arm_evaluations": dict(Counter(str(row.get("arm") or "unknown") for row in evaluated)),
+        "arm_mean_reward": _arm_mean(evaluated),
+        "arm_success_rate": _arm_success(evaluated),
+        "explore_budget": role_budget.get("EXPLORE", 0),
+        "exploit_budget": role_budget.get("EXPLOIT", 0),
+        "validation_budget": role_budget.get("VALIDATION", 0),
+        "infra_failure_rate": ratio(infra, submitted),
+        "unknown_rate": ratio(unknown, submitted),
+        "duplicate_rejection_rate": ratio(duplicate, summary.get("candidate_count", 0) or 0),
+        "local_rejection_rate": ratio(local, summary.get("candidate_count", 0) or 0),
+        "promising_over_evaluated": ratio(len(promising), len(evaluated)),
+        "stable_over_evaluated": ratio(len(stable), len(evaluated)),
+        "stable_over_committed": ratio(len(stable), committed),
+        "unique_structures_over_committed": ratio(
+            len({row.get("structural_fingerprint") for row in events
+                 if _get(row, "structural_fingerprint")}), committed
+        ),
+        "infra_failures_over_submitted": ratio(infra, submitted),
+        "unknown_over_submitted": ratio(unknown, submitted),
+        "simulations_to_first_promising": next(
+            (index for index, row in enumerate(outcome_rows, 1)
+             if str(row.get("base_quality", "")).upper()
+             in {"PROMISING", "SUCCESS", "SUSPICIOUS_HIGH_SIGNAL", "STABLE"}),
+            None,
+        ),
+        "simulations_to_first_stable": next(
+            (index for index, row in enumerate(outcome_rows, 1)
+             if str(row.get("robustness", "")).upper() in {"STABLE", "PASS"}),
+            None,
+        ),
+        "role_budget": dict(role_budget),
+    }
+
+
+def _arm_mean(rows):
+    values = defaultdict(list)
+    for row in rows:
+        reward = _finite(row.get("reward"))
+        if reward is not None:
+            values[str(row.get("arm") or "unknown")].append(reward)
+    return {key: sum(items) / len(items) for key, items in values.items() if items}
+
+
+def _arm_success(rows):
+    totals, successes = Counter(), Counter()
+    for row in rows:
+        arm = str(row.get("arm") or "unknown")
+        totals[arm] += 1
+        if _finite(row.get("reward")) is not None and float(row.get("reward")) > 0:
+            successes[arm] += 1
+    return {arm: successes[arm] / count for arm, count in totals.items()}
+
+
+class SearchPolicyReplay:
+    """Replay historical candidate order using evidence available at each step."""
+
+    def __init__(self, candidates):
+        self.candidates = [dict(row) for row in candidates or ()]
+
+    @staticmethod
+    def _score(row, observed, family_counts, exploration, family_penalty):
+        arm = str(row.get("arm") or "unknown")
+        arm_rows = observed.get(arm, [])
+        count = len(arm_rows)
+        mean = sum(arm_rows) / count if count else 0.0
+        total = sum(len(items) for items in observed.values())
+        ucb = (exploration if not count else
+               mean + exploration * math.sqrt(math.log(max(2, total + 1)) / count))
+        novelty = _finite(row.get("novelty")) or 0.0
+        family = str(row.get("family") or arm)
+        return ucb + novelty - family_penalty * family_counts[family]
+
+    def run(self, *, strategy="current", exploration=1.0, family_penalty=0.05,
+            checkpoints=(10, 25, 50, 100)):
+        remaining = list(enumerate(self.candidates))
+        observed = defaultdict(list)
+        family_counts = Counter()
+        selected = []
+        result = []
+        step = 0
+        while remaining:
+            if strategy == "fifo":
+                position, row = remaining.pop(0)
+            else:
+                position, row = max(
+                    remaining,
+                    key=lambda item: self._score(item[1], observed, family_counts,
+                                                 exploration, family_penalty),
+                )
+                remaining.remove((position, row))
+            selected.append(row)
+            step += 1
+            reward = _finite(row.get("reward"))
+            if reward is not None:
+                observed[str(row.get("arm") or "unknown")].append(reward)
+            family_counts[str(row.get("family") or row.get("arm") or "unknown")] += 1
+            if step in checkpoints:
+                result.append(self._checkpoint(step, selected))
+        if not result and selected:
+            result.append(self._checkpoint(len(selected), selected))
+        return {"strategy": strategy, "checkpoints": result,
+                "selected_proposal_ids": [row.get("proposal_id") for row in selected]}
+
+    @staticmethod
+    def _checkpoint(n, rows):
+        rewards = [_finite(row.get("reward")) for row in rows]
+        rewards = [value for value in rewards if value is not None]
+        return {
+            "n": n,
+            "reward_at_n": sum(rewards),
+            "promising_at_n": sum(bool(row.get("promising")) for row in rows),
+            "stable_at_n": sum(bool(row.get("stable")) for row in rows),
+            "unique_structures_at_n": len({row.get("structural_fingerprint") for row in rows
+                                           if row.get("structural_fingerprint")}),
+        }
+
+
+def calibrate_replay(candidates, *, checkpoints=(10, 25, 50, 100)):
+    """Compare a declared small grid without modifying historical evidence."""
+    replay = SearchPolicyReplay(candidates)
+    parameter_rows = []
+    for exploration in (0.5, 1.0, 1.5):
+        result = replay.run(strategy="current", exploration=exploration,
+                            family_penalty=0.05, checkpoints=checkpoints)
+        parameter_rows.append({"exploration": exploration, "result": result})
+    selected = max(
+        parameter_rows,
+        key=lambda row: (row["result"]["checkpoints"][-1]["reward_at_n"]
+                         if row["result"]["checkpoints"] else 0.0),
+    )
+    penalties = {}
+    for name, penalty in (("none", 0.0), ("weak", 0.025), ("current", 0.05)):
+        penalties[name] = replay.run(strategy="current", exploration=selected["exploration"],
+                                      family_penalty=penalty, checkpoints=checkpoints)
+    return {
+        "tested_parameters": [row["exploration"] for row in parameter_rows],
+        "selection_metric": "reward_at_n",
+        "selected_parameter": selected["exploration"],
+        "exploration_grid": parameter_rows,
+        "family_penalty_comparison": penalties,
+        "baseline_fifo": replay.run(strategy="fifo", checkpoints=checkpoints),
+        "current_policy": selected["result"],
+    }

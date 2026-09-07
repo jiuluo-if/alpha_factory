@@ -1,6 +1,8 @@
 from .diversity import deduplicate, extract_fields, is_redundant
 from .search_policy import BudgetAllocator, SearchPolicy
 from .search_snapshot import SearchSnapshot
+from .search_outcome import SearchOutcome, parent_relative_delta, reward_v1, staged_promotion
+from .search_calibration import SearchPolicyReplay, build_search_calibration
 from .identity import candidate_identity
 from .failures import (
     FailureKind,
@@ -18,6 +20,12 @@ __all__ = [
     "BudgetAllocator",
     "SearchPolicy",
     "SearchSnapshot",
+    "SearchOutcome",
+    "parent_relative_delta",
+    "reward_v1",
+    "staged_promotion",
+    "SearchPolicyReplay",
+    "build_search_calibration",
     "candidate_identity",
     "HighSignalValidator",
     "FailureKind",

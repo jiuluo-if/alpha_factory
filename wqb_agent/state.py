@@ -38,6 +38,7 @@ class Experiment:
         self.template_ref = None
         self.template_slots = None
         self.search_evidence = None
+        self.search_outcome = None
         self.novelty_score = None
         self.allocation_arm = None
         self.allocation_key = None
@@ -65,6 +66,7 @@ class Experiment:
         # baseline or one explicit variable change.
         self.lineage_id = None
         self.experiment_stage = None
+        self.research_role = None
         self.change_type = None
         self.parent_expression = None
         self.changed_variable = None
@@ -105,6 +107,7 @@ class Experiment:
             "template_ref": self.template_ref,
             "template_slots": self.template_slots,
             "search_evidence": self.search_evidence,
+            "search_outcome": self.search_outcome,
             "novelty_score": self.novelty_score,
             "allocation_arm": self.allocation_arm,
             "allocation_key": self.allocation_key,
@@ -125,6 +128,7 @@ class Experiment:
             "mutation": self.mutation,
             "lineage_id": self.lineage_id,
             "experiment_stage": self.experiment_stage,
+            "research_role": self.research_role,
             "change_type": self.change_type,
             "parent_expression": self.parent_expression,
             "changed_variable": self.changed_variable,
@@ -169,6 +173,7 @@ class Experiment:
         exp.template_ref = data.get("template_ref")
         exp.template_slots = data.get("template_slots")
         exp.search_evidence = data.get("search_evidence")
+        exp.search_outcome = data.get("search_outcome")
         exp.novelty_score = data.get("novelty_score")
         exp.allocation_arm = data.get("allocation_arm")
         exp.allocation_key = data.get("allocation_key")
@@ -183,6 +188,7 @@ class Experiment:
         exp.mutation = data.get("mutation")
         exp.lineage_id = data.get("lineage_id")
         exp.experiment_stage = data.get("experiment_stage")
+        exp.research_role = data.get("research_role")
         exp.change_type = data.get("change_type")
         exp.parent_expression = data.get("parent_expression")
         exp.changed_variable = data.get("changed_variable")

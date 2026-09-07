@@ -31,11 +31,25 @@ class Decision(str, Enum):
 
 
 def evidence_status(value, *, default=EvidenceStatus.UNAVAILABLE):
-    """Normalize legacy evidence statuses to the conservative vocabulary."""
+    """Compatibility-only normalizer; research logic must read ``decision``.
+
+    Availability or verification alone is not a research decision.  The
+    explicit ``decision`` field is therefore required before this helper can
+    return PASS for mapping-shaped evidence.
+    """
     if isinstance(value, dict):
-        value = value.get("evidence_status", value.get("status"))
+        explicit_decision = value.get("decision")
+        if explicit_decision is not None:
+            value = explicit_decision
+        else:
+            availability = str(value.get("availability", "")).upper()
+            if availability == Availability.AVAILABLE.value:
+                return EvidenceStatus.INCONCLUSIVE.value
+            value = value.get("evidence_status", value.get("status"))
     text = str(value or "").upper()
-    if text in {"PASS", "VERIFIED", "AVAILABLE", "STABLE"}:
+    if text in {"AVAILABLE", "VERIFIED"}:
+        return EvidenceStatus.INCONCLUSIVE.value
+    if text in {"PASS", "STABLE"}:
         return EvidenceStatus.PASS.value
     if text in {"FAIL", "FAILED"}:
         return EvidenceStatus.FAIL.value

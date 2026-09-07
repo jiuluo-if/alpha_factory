@@ -17,6 +17,29 @@ _ACTIVE = {"RESERVED", "PENDING", "RUNNING", "UNKNOWN"}
 _TERMINAL = {"DONE", "FAILED", "SKIPPED", "SKIPPED_LOCAL"}
 
 
+def validate_budget_hierarchy(*, factory_max_simulations, search_max_simulations,
+                              research_max_simulations):
+    """Fail closed when nested Simulation budgets contradict their scope."""
+    values = {
+        "factory.max_simulations": factory_max_simulations,
+        "search_policy.max_simulations": search_max_simulations,
+        "research_allocation.max_simulations": research_max_simulations,
+    }
+    parsed = {}
+    for name, value in values.items():
+        try:
+            parsed[name] = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} 必须是非负整数")
+        if parsed[name] < 0:
+            raise ValueError(f"{name} 必须是非负整数")
+    if parsed["search_policy.max_simulations"] > parsed["factory.max_simulations"]:
+        raise ValueError("search_policy.max_simulations 不得超过 factory.max_simulations")
+    if parsed["research_allocation.max_simulations"] > parsed["search_policy.max_simulations"]:
+        raise ValueError("research_allocation.max_simulations 不得超过 search_policy.max_simulations")
+    return parsed
+
+
 def _get(record, key, default=None):
     return record.get(key, default) if isinstance(record, dict) else getattr(record, key, default)
 
@@ -295,7 +318,7 @@ class BudgetAllocator:
         self.consumed_budget += 1
         return True
 
-    def transition(self, proposal, status, reward=0.0, *, outcome=None):
+    def transition(self, proposal, status, reward=None, *, outcome=None):
         status = str(status or "").upper()
         if status not in _ACTIVE | _TERMINAL:
             raise ValueError(f"未知 allocator 状态: {status}")
@@ -317,24 +340,33 @@ class BudgetAllocator:
             state[status.lower()] += 1
         elif status in _TERMINAL and old not in _TERMINAL:
             state["completed"] += 1
+            category = str(outcome or "").upper()
+            infrastructure = category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN"}
+            has_reward = reward is not None and not infrastructure
             if status == "DONE":
                 state["done"] += 1
-                state["evaluated"] += 1
-                state["reward_count"] += 1
-                try:
+                if has_reward:
+                    state["evaluated"] += 1
+                    state["reward_count"] += 1
                     value = float(reward)
                     state["reward_sum"] += value
                     state["reward"] += value
-                except (TypeError, ValueError):
-                    pass
             elif status == "SKIPPED_LOCAL":
                 state["skipped_local"] += 1
             elif status == "FAILED":
-                category = str(outcome or "").upper()
-                if category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN"}:
+                if infrastructure:
                     state["failed_infra"] += 1
                 else:
                     state["failed_research"] += 1
+                    # A completed Simulation whose evidence falsifies the
+                    # mechanism is a valid zero-reward observation when the
+                    # caller explicitly supplies reward=0.0.
+                    if has_reward:
+                        state["evaluated"] += 1
+                        state["reward_count"] += 1
+                        value = float(reward)
+                        state["reward_sum"] += value
+                        state["reward"] += value
         current["status"] = status
         return True
 
@@ -350,8 +382,8 @@ class BudgetAllocator:
     def mark_running(self, proposal):
         return self.transition(proposal, "RUNNING")
 
-    def mark_failed(self, proposal, outcome=None):
-        return self.transition(proposal, "FAILED", outcome=outcome)
+    def mark_failed(self, proposal, outcome=None, reward=None):
+        return self.transition(proposal, "FAILED", reward=reward, outcome=outcome)
 
     def mark_skipped(self, proposal):
         return self.transition(proposal, "SKIPPED")
@@ -398,6 +430,13 @@ class SearchPolicy:
         self.allocator = BudgetAllocator(config.get("max_simulations", 100), config.get("ucb_exploration", 1.0),
                                           config.get("max_pending_per_arm", 1))
         self.family_counts = Counter()
+        self.validation_budget = max(0, int(config.get("validation_max_simulations", 0) or 0))
+        self.validation_proposals = {}
+        self.validation_committed = 0
+
+    @staticmethod
+    def _is_validation(proposal):
+        return str(_get(proposal, "research_role", "")).upper() == "VALIDATION"
 
     def annotate(self, proposal, pool):
         evidence = incremental_novelty(proposal, pool)
@@ -411,16 +450,45 @@ class SearchPolicy:
         return float(proposal.get("novelty_score", 0.0)) + self.allocator.score(proposal) - 0.05 * self.family_counts[proposal.get("template_family")]
 
     def accept(self, proposal):
+        if self.enabled and self._is_validation(proposal):
+            key = self.allocator.proposal_key(proposal)
+            if key in self.validation_proposals:
+                return False
+            if self.validation_budget and len(self.validation_proposals) >= self.validation_budget:
+                return False
+            self.validation_proposals[key] = {"status": "RESERVED", "committed": False}
+            return True
         accepted = not self.enabled or self.allocator.admit(proposal)
         if accepted and self.enabled:
             self.family_counts[str(proposal.get("template_family") or "unknown")] += 1
         return accepted
 
     def commit(self, proposal):
+        if self.enabled and self._is_validation(proposal):
+            key = self.allocator.proposal_key(proposal)
+            current = self.validation_proposals.get(key)
+            if current is None:
+                return False
+            if current["committed"]:
+                return True
+            current["committed"] = True
+            self.validation_committed += 1
+            return True
         return not self.enabled or self.allocator.commit(proposal)
 
-    def release(self, proposal, status="DONE", reward=0.0, outcome=None):
+    def release(self, proposal, status="DONE", reward=None, outcome=None):
         if self.enabled:
+            if self._is_validation(proposal):
+                key = self.allocator.proposal_key(proposal)
+                current = self.validation_proposals.get(key)
+                if current is not None:
+                    current["status"] = str(status or "DONE").upper()
+                return
+            if outcome is not None and hasattr(outcome, "reward"):
+                reward = outcome.reward
+                outcome = "INFRA" if outcome.infrastructure_failure else (
+                    "RESEARCH" if outcome.base_quality in {"FAILED", "FAIL"} else None
+                )
             if status == "SKIPPED_LOCAL":
                 self.allocator.mark_skipped_local(proposal)
             else:
@@ -429,9 +497,18 @@ class SearchPolicy:
     def snapshot(self):
         snapshot = self.allocator.snapshot()
         snapshot["family_counts"] = dict(self.family_counts)
+        snapshot["validation_budget"] = self.validation_budget
+        snapshot["validation_proposals"] = {key: dict(value) for key, value in self.validation_proposals.items()}
+        snapshot["validation_committed"] = self.validation_committed
         return snapshot
 
     def restore(self, snapshot):
         self.allocator.restore(snapshot)
         self.family_counts.update({str(key): int(value) for key, value in
                                    (snapshot.get("family_counts") or {}).items()})
+        self.validation_budget = int(snapshot.get("validation_budget", self.validation_budget) or 0)
+        self.validation_proposals.update({str(key): dict(value) for key, value in
+                                          (snapshot.get("validation_proposals") or {}).items()})
+        self.validation_committed = int(snapshot.get("validation_committed", sum(
+            1 for value in self.validation_proposals.values() if value.get("committed")
+        )) or 0)

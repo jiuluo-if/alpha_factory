@@ -11,7 +11,8 @@ from .artifacts import (
     iter_jsonl_objects,
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
-from .search_policy import SearchPolicy
+from .search_policy import SearchPolicy, validate_budget_hierarchy
+from .search_outcome import SearchOutcome
 from .search_snapshot import SearchSnapshot
 from .context import key_experiments, write_context
 from .discovery import FieldDiscovery
@@ -131,6 +132,19 @@ class Agent:
             search_cfg["max_simulations"] = self.research_allocation.get(
                 "max_simulations", 100
             )
+        validate_budget_hierarchy(
+            factory_max_simulations=self.factory_config.get(
+                "max_simulations", search_cfg["max_simulations"]
+            ),
+            search_max_simulations=search_cfg["max_simulations"],
+            research_max_simulations=self.research_allocation.get(
+                "max_simulations", search_cfg["max_simulations"]
+            ),
+        )
+        search_cfg.setdefault(
+            "validation_max_simulations",
+            (self.research_allocation.get("maximum") or {}).get("VALIDATION", 0),
+        )
         self.search_policy = SearchPolicy(search_cfg)
         self.fields_per_discovery = agent_cfg.get("fields_per_discovery", 6)
         self.pagination_limit = agent_cfg.get("pagination_limit", 50)
@@ -802,8 +816,13 @@ class Agent:
         for p in fresh:
             if self.search_policy.commit(p):
                 committed.append(p)
+                self._record_trial_phase(p, "simulation_committed", outcome="COMMITTED")
             else:
                 self._record_candidate_rejection(p, "simulation_budget", "BUDGET_COMMIT_FAILED", "最终执行集合无法承诺 Simulation budget")
+                # A failed final commit is a local admission failure.  Close
+                # the provisional reservation immediately so it cannot
+                # occupy an arm slot until process restart.
+                self.search_policy.release(p, status="SKIPPED_LOCAL")
         if len(committed) != len(fresh):
             fresh = committed
         if diversity_rejected:
@@ -896,6 +915,7 @@ class Agent:
             exp.mutation = p.get("mutation") or "agent-proposed"
             exp.lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis["id"]
             exp.experiment_stage = p.get("experiment_stage")
+            exp.research_role = p.get("research_role")
             exp.change_type = p.get("change_type") or "baseline"
             exp.parent_expression = p.get("parent_expression")
             exp.changed_variable = p.get("changed_variable")
@@ -1651,10 +1671,13 @@ class Agent:
 
     # ------------------------------------------------------------ helpers
 
-    def _record_trial_phase(self, experiment, phase, outcome=None):
+    def _record_trial_phase(self, experiment, phase, outcome=None, reason=None, reason_code=None):
         """Best-effort audit only; never changes Simulation safety semantics."""
         try:
-            self.trial_ledger.record(experiment, phase, outcome=outcome)
+            self.trial_ledger.record(
+                experiment, phase, outcome=outcome, reason=reason,
+                reason_code=reason_code,
+            )
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
 
@@ -1675,7 +1698,7 @@ class Agent:
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
 
-    def _update_search_lifecycle(self, experiment):
+    def _update_search_lifecycle(self, experiment, outcome=None):
         """Mirror transport state into the in-memory allocator idempotently."""
         if not hasattr(self, "search_policy"):
             return
@@ -1692,14 +1715,16 @@ class Agent:
             "dataset_family": getattr(experiment, "datasets", []),
             "template_family": getattr(experiment, "template_family", None),
         }
-        metrics = getattr(experiment, "metrics", None) or {}
-        reward = metrics.get("fitness", 0.0) if isinstance(metrics, dict) else 0.0
+        reward = outcome.reward if outcome is not None else None
         error_text = str(getattr(experiment, "error", "") or "").upper()
-        outcome = "INFRA" if status == "FAILED" and any(token in error_text for token in (
+        failure_category = "INFRA" if status == "FAILED" and any(token in error_text for token in (
             "TIMEOUT", "RATE_LIMIT", "AUTH", "INFRA", "NETWORK", "HTTP"
         )) else "RESEARCH"
         try:
-            self.search_policy.release(proposal, status=status, reward=reward, outcome=outcome)
+            self.search_policy.release(
+                proposal, status=status, reward=reward,
+                outcome=outcome or failure_category,
+            )
         except (TypeError, ValueError):
             pass
 
@@ -1707,6 +1732,9 @@ class Agent:
         if experiment.status in {"RUNNING", "SUBMIT_UNKNOWN"}:
             self._record_trial_phase(
                 experiment, "submitted", outcome=experiment.status
+            )
+            self._record_trial_phase(
+                experiment, "simulation_submitted", outcome=experiment.status
             )
             self._update_search_lifecycle(experiment)
         self._write_proposal_checkpoint(
@@ -1749,11 +1777,26 @@ class Agent:
         # update the already-written JSONL row and would silently lose the
         # correlation snapshot for crash recovery/reporting.
         exp.self_correlation = self_correlation_evidence(exp.metrics)
-        self._update_search_lifecycle(exp)
+        verdict = self.reflector._classify(exp)
+        outcome = SearchOutcome.from_experiment(
+            exp,
+            validation=getattr(exp, "validation_report", None),
+            parent=self._completed_parent(getattr(exp, "parent_expression", None)),
+            quality_label=verdict.get("label"),
+        )
+        exp.search_outcome = outcome.as_dict()
+        self._update_search_lifecycle(exp, outcome=outcome)
         self._record_trial_phase(exp, "completed", outcome=exp.status)
+        self._record_trial_phase(
+            exp, "simulation_settled", outcome=exp.status,
+            reason=exp.error,
+            reason_code=("INFRA" if exp.status == "FAILED" and
+                         any(token in str(exp.error or "").upper() for token in
+                             ("TIMEOUT", "RATE_LIMIT", "AUTH", "INFRA", "NETWORK", "HTTP"))
+                         else ("RESEARCH" if exp.status == "FAILED" else None)),
+        )
         self.trajectory.add(exp)
         self._print_experiment(exp)
-        verdict = self.reflector._classify(exp)
         metrics = exp.metrics or {}
         failed_checks = []
         for check in metrics.get("checks") or []:
@@ -2061,6 +2104,24 @@ class Agent:
         # In-memory window from previous sessions is authoritative for dedupe
         for exp in self.trajectory.experiments:
             self.memory.remember_expression(exp.expression)
+
+    def search_calibration_report(self):
+        """Return a read-only historical Search Calibration report."""
+        from .search_calibration import build_search_calibration
+
+        events = list(iter_jsonl_objects(self.trial_ledger.path))
+        outcomes = []
+        trajectory_path = getattr(self.trajectory, "path", None)
+        if trajectory_path and os.path.exists(trajectory_path):
+            for row in iter_jsonl_objects(trajectory_path):
+                stored = row.get("search_outcome")
+                if isinstance(stored, dict):
+                    outcomes.append(stored)
+        summary = self.trial_ledger.summarize()
+        summary["committed_simulations"] = sum(
+            1 for row in events if row.get("phase") == "simulation_committed"
+        )
+        return build_search_calibration(summary, outcomes=outcomes, events=events)
 
     def _search_checkpoint_rows(self):
         """Read-only projection of unfinished checkpoints for allocator restore."""

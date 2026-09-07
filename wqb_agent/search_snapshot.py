@@ -19,6 +19,7 @@ class SearchSnapshot(dict):
         })
         family_counts = Counter()
         structural_counts = Counter()
+        validation_proposals = {}
         candidate_count = 0
         simulation_count = 0
         proposal_states = {}
@@ -81,6 +82,21 @@ class SearchSnapshot(dict):
                     arms[key]["submitted"] += 1
 
         if isinstance(ledger_summary, dict):
+            lifecycle_arms = ledger_summary.get("lifecycle_arm_counts") or {}
+            lifecycle_proposals = ledger_summary.get("lifecycle_proposals") or {}
+            # Explicit Simulation lifecycle evidence outranks trajectory
+            # status during recovery.  Candidate-only ledger rows are never
+            # projected into allocator occupancy.
+            for key, value in lifecycle_arms.items():
+                arms[str(key)] = dict(value)
+            for proposal_id, value in lifecycle_proposals.items():
+                if isinstance(value, dict):
+                    proposal_states[str(proposal_id)] = dict(value)
+                    if str(value.get("research_role", "")).upper() == "VALIDATION":
+                        validation_proposals[str(proposal_id)] = {
+                            "status": value.get("status", "RESERVED"),
+                            "committed": bool(value.get("committed")),
+                        }
             for key, value in (ledger_summary.get("arm_counts") or {}).items():
                 if key not in arms and isinstance(value, dict):
                     arms[key].update(value)
@@ -102,6 +118,10 @@ class SearchSnapshot(dict):
             "candidate_count": candidate_count,
             "simulation_count": simulation_count,
             "proposals": proposal_states,
+            "validation_proposals": validation_proposals,
+            "validation_committed": sum(
+                1 for value in validation_proposals.values() if value.get("committed")
+            ),
         })
 
     def allocator_state(self, total_budget=100):
@@ -113,4 +133,6 @@ class SearchSnapshot(dict):
             "arms": self.get("arms", {}),
             "proposals": self.get("proposals", {}),
             "family_counts": self.get("family_counts", {}),
+            "validation_proposals": self.get("validation_proposals", {}),
+            "validation_committed": self.get("validation_committed", 0),
         }

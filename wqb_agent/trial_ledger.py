@@ -16,6 +16,12 @@ PHASES = {
     "generated", "preflight", "submitted", "completed",
     "candidate_generated", "candidate_rejected", "preflight_accepted",
     "candidate_admitted",
+    "simulation_committed", "simulation_submitted", "simulation_settled",
+}
+
+SIMULATION_PHASES = {
+    "simulation_committed", "simulation_submitted", "simulation_settled",
+    "submitted", "completed",
 }
 
 
@@ -79,12 +85,19 @@ class TrialLedger:
             "round": self._value(trial, "round"),
             "expression_fingerprint": fingerprint,
             "template_family": self._value(trial, "template_family") or "unknown",
+            "research_role": self._value(trial, "research_role") or "EXPLORE",
+            "experiment_stage": self._value(trial, "experiment_stage") or "BASELINE",
             "lineage_id": self._value(trial, "lineage_id") or "unknown",
             "template_id": self._value(trial, "template_id") or "unknown",
             "dataset_family": self._value(trial, "dataset_family") or self._value(trial, "datasets") or "unknown",
             "structural_fingerprint": structural_fingerprint(expression, fields),
             "fields": sorted({_text(field) for field in fields if field is not None}),
             "alpha_id": self._value(trial, "alpha_id"),
+            "reward": self._value(trial, "reward") or (
+                (self._value(trial, "search_outcome") or {}).get("reward")
+                if isinstance(self._value(trial, "search_outcome"), dict) else None
+            ),
+            "search_outcome": self._value(trial, "search_outcome"),
             "recorded_at": timestamp if timestamp is not None else time.time(),
         }
         return append_jsonl_if_unique(self.path, row, ("event_id",))
@@ -110,6 +123,9 @@ class TrialLedger:
         structural_trials = set()
         family_trials = set()
         latest_by_trial = {}
+        unique_candidates = set()
+        unique_proposals = set()
+        lifecycle_rows = defaultdict(list)
         for row in iter_jsonl_objects(self.path):
             events += 1
             trial_id = row.get("trial_id")
@@ -123,18 +139,25 @@ class TrialLedger:
             event_type_counts[row.get("event_type") or row.get("phase", "unknown")] += 1
             if row.get("phase") == "candidate_rejected" and row.get("candidate_id"):
                 rejected_candidates.add(row.get("candidate_id"))
+            if row.get("candidate_id"):
+                unique_candidates.add(row.get("candidate_id"))
+            if row.get("proposal_id"):
+                unique_proposals.add(row.get("proposal_id"))
             if row.get("phase") == "preflight_accepted" and row.get("candidate_id"):
                 accepted_candidates.add(row.get("candidate_id"))
-            if row.get("phase") == "submitted" and row.get("proposal_id"):
+            if row.get("phase") in {"submitted", "simulation_submitted", "simulation_settled"} and row.get("proposal_id"):
                 submitted_trials.add(row.get("proposal_id"))
             if row.get("phase") == "candidate_admitted":
                 admitted_families[str(row.get("template_family") or "unknown")] += 1
                 admitted_structures[str(row.get("structural_fingerprint") or "unknown")] += 1
             if trial_id:
                 latest_by_trial[trial_id] = row
-            if row.get("phase") == "completed":
+            if row.get("phase") in SIMULATION_PHASES and row.get("proposal_id"):
+                lifecycle_rows[str(row.get("proposal_id"))].append(row)
+            if row.get("phase") in {"completed", "simulation_settled"}:
                 if row.get("proposal_id") or trial_id:
                     completed_trials.add(row.get("proposal_id") or trial_id)
+            if row.get("phase") == "completed":
                 value = row.get("sharpe")
                 try:
                     value = float(value)
@@ -163,14 +186,16 @@ class TrialLedger:
             "preflight_accepted_count": len(accepted_candidates),
             "submitted_count": len(submitted_trials),
             "completed_count": len(completed_trials),
-            "unique_candidate_count": len({row.get("candidate_id") for row in iter_jsonl_objects(self.path) if row.get("candidate_id")}),
-            "unique_proposal_count": len({row.get("proposal_id") for row in iter_jsonl_objects(self.path) if row.get("proposal_id")}),
+            "unique_candidate_count": len(unique_candidates),
+            "unique_proposal_count": len(unique_proposals),
             "simulation_count": len(submitted_trials),
             "family_counts": dict(admitted_families),
             "structural_family_counts": dict(admitted_structures),
             "structural_trial_count": len(structural_trials),
             "effective_trial_count": max(1, len(structural_trials or family_trials or trial_ids)),
             "arm_counts": self._arm_counts(latest_by_trial),
+            "lifecycle_arm_counts": self._lifecycle_arm_counts(lifecycle_rows),
+            "lifecycle_proposals": self._lifecycle_proposals(lifecycle_rows),
             "event_type_counts": dict(event_type_counts),
             "trial_sharpe_count": sharpe_count,
             "trial_sharpe_mean": sharpe_mean if sharpe_count else None,
@@ -200,6 +225,11 @@ class TrialLedger:
             "reserved": 0, "reward_sum": 0.0, "reward_count": 0, "reward": 0.0,
         })
         for row in latest_by_trial.values():
+            # Candidate/search-attempt rows are not Simulation lifecycle
+            # evidence.  A rejected candidate usually has status UNKNOWN;
+            # counting it here would restore a phantom occupied slot.
+            if row.get("phase") not in SIMULATION_PHASES:
+                continue
             datasets = row.get("dataset_family") or "unknown-dataset"
             if isinstance(datasets, list):
                 datasets = "+".join(sorted(str(item) for item in datasets))
@@ -232,4 +262,85 @@ class TrialLedger:
                     result[arm]["failed_infra"] += 1
                 else:
                     result[arm]["failed_research"] += 1
+        return dict(result)
+
+    @staticmethod
+    def _arm_for_row(row):
+        datasets = row.get("dataset_family") or "unknown-dataset"
+        if isinstance(datasets, list):
+            datasets = "+".join(sorted(str(item) for item in datasets))
+        return f"{datasets}::{row.get('template_family') or 'unknown-mechanism'}"
+
+    @staticmethod
+    def _lifecycle_status(rows):
+        latest = rows[-1]
+        phase = latest.get("phase")
+        if phase == "simulation_settled":
+            outcome = str(latest.get("outcome") or latest.get("status") or "").upper()
+            if outcome in {"DONE", "FAILED", "SKIPPED", "SKIPPED_LOCAL"}:
+                return outcome
+        if phase == "simulation_submitted":
+            outcome = str(latest.get("outcome") or "RUNNING").upper()
+            if "UNKNOWN" in outcome:
+                return "UNKNOWN"
+            if outcome == "PENDING":
+                return "PENDING"
+            return "RUNNING"
+        return "RESERVED"
+
+    @classmethod
+    def _lifecycle_proposals(cls, lifecycle_rows):
+        result = {}
+        for proposal_id, rows in lifecycle_rows.items():
+            result[proposal_id] = {
+                "arm": cls._arm_for_row(rows[-1]),
+                "status": cls._lifecycle_status(rows),
+                "committed": any(row.get("phase") == "simulation_committed" for row in rows),
+                "research_role": rows[-1].get("research_role") or "EXPLORE",
+            }
+        return result
+
+    @classmethod
+    def _lifecycle_arm_counts(cls, lifecycle_rows):
+        result = defaultdict(lambda: {
+            "admitted": 0, "submitted": 0, "evaluated": 0, "done": 0,
+            "failed_research": 0, "failed_infra": 0, "skipped_local": 0,
+            "completed": 0, "pending": 0, "running": 0, "unknown": 0,
+            "reserved": 0, "reward_sum": 0.0, "reward_count": 0, "reward": 0.0,
+        })
+        for rows in lifecycle_rows.values():
+            if not rows:
+                continue
+            state = result[cls._arm_for_row(rows[-1])]
+            state["admitted"] += 1
+            state["submitted"] += int(any(
+                row.get("phase") in {"simulation_submitted", "simulation_settled", "completed"}
+                for row in rows
+            ))
+            status = cls._lifecycle_status(rows)
+            if status == "RESERVED":
+                state["reserved"] += 1
+            elif status in {"RUNNING", "PENDING", "UNKNOWN"}:
+                state[status.lower()] += 1
+            elif status == "DONE":
+                state["completed"] += 1
+                state["done"] += 1
+                state["evaluated"] += 1
+                state["reward_count"] += 1
+                try:
+                    reward = float(rows[-1].get("reward"))
+                except (TypeError, ValueError):
+                    reward = 0.0
+                state["reward"] += reward
+                state["reward_sum"] += reward
+            elif status == "SKIPPED_LOCAL":
+                state["completed"] += 1
+                state["skipped_local"] += 1
+            elif status == "FAILED":
+                state["completed"] += 1
+                category = str(rows[-1].get("reason_code") or rows[-1].get("reason") or "").upper()
+                if category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN"}:
+                    state["failed_infra"] += 1
+                else:
+                    state["failed_research"] += 1
         return dict(result)

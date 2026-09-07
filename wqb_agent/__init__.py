@@ -3,6 +3,7 @@ from .search_policy import BudgetAllocator, SearchPolicy
 from .search_snapshot import SearchSnapshot
 from .search_outcome import (
     SearchOutcome, extract_statistical_decision, parent_relative_delta,
+    resolve_reward,
     reward_v1, settle_search_outcome, staged_promotion,
 )
 from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
@@ -34,6 +35,7 @@ __all__ = [
     "parent_relative_delta",
     "reward_v1",
     "extract_statistical_decision",
+    "resolve_reward",
     "settle_search_outcome",
     "staged_promotion",
     "SearchPolicyReplay",

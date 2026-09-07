@@ -19,6 +19,13 @@ class Phase8ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_config({"simulation": {}, "agent": {"incremental_value": {"mode": "unknown"}}})
 
+    def test_discovery_plus_validation_budget_cannot_exceed_factory_cap(self):
+        with self.assertRaises(ValueError):
+            parse_config({"simulation": {}, "agent": {
+                "factory": {"max_simulations": 5},
+                "search_policy": {"max_simulations": 4, "validation_max_simulations": 2},
+            }})
+
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}
         once = migrate_artifact("submission_pool", legacy)

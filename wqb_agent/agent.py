@@ -58,7 +58,7 @@ from .validation_report import (
 from .config import AppConfig
 from .research_evidence import ResearchEvidenceBundle
 from .schema import (CREATED_BY_VERSION, CHECKPOINT_VERSION, VALIDATION_VERSION,
-                      SIMULATION_RESULTS_VERSION)
+                      SIMULATION_RESULTS_VERSION, migrate_artifact)
 
 SEED_HYPOTHESES = [
     {
@@ -120,7 +120,8 @@ EXPLORATION_HYPOTHESES = [
 class Agent:
     def __init__(self, client, config):
         self.client = client
-        if isinstance(config, AppConfig):
+        typed_config = config if isinstance(config, AppConfig) else None
+        if typed_config is not None:
             config = config.as_dict()
         self.simulation_settings = config["simulation"]
         agent_cfg = config["agent"]
@@ -173,12 +174,19 @@ class Agent:
             "max_drawdown_multiple": 1.5,
             "require_checks_passed": True,
         })
-        incremental_cfg = dict(agent_cfg.get("incremental_value") or {})
-        self.incremental_policy = IncrementalValuePolicy(
-            mode=incremental_cfg.get("mode", "required_when_available"),
-            max_abs_correlation=incremental_cfg.get("max_abs_correlation", 0.7),
-            min_overlap=incremental_cfg.get("min_overlap", 60),
-        )
+        if typed_config is not None:
+            self.incremental_policy = IncrementalValuePolicy(
+                typed_config.incremental_value.mode,
+                typed_config.incremental_value.max_abs_correlation,
+                typed_config.incremental_value.min_overlap,
+            )
+        else:
+            incremental_cfg = dict(agent_cfg.get("incremental_value") or {})
+            self.incremental_policy = IncrementalValuePolicy(
+                mode=incremental_cfg.get("mode", "required_when_available"),
+                max_abs_correlation=incremental_cfg.get("max_abs_correlation", 0.7),
+                min_overlap=incremental_cfg.get("min_overlap", 60),
+            )
         field_selection = agent_cfg.get("field_selection") or {}
         self.max_field_alpha_count = field_selection.get("max_alpha_count")
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md"))
@@ -1260,6 +1268,7 @@ class Agent:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+            data = migrate_artifact("checkpoint", data)
             if (not isinstance(data, dict)
                     or data.get("round_no") != round_no
                     or not isinstance(data.get("experiments"), list)

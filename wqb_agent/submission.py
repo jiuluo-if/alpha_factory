@@ -12,7 +12,7 @@ import time
 from .artifacts import atomic_write_json_if_changed
 from .metrics import check_pass
 from .incremental_policy import incremental_gate
-from .schema import CREATED_BY_VERSION, SUBMISSION_POOL_VERSION
+from .schema import CREATED_BY_VERSION, SUBMISSION_POOL_VERSION, migrate_artifact
 
 
 _SELF_CORRELATION = re.compile(r"self[-_ ]?correlation", re.I)
@@ -101,6 +101,7 @@ class SubmissionPool:
         try:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
+            data = migrate_artifact("submission_pool", data)
             if not isinstance(data, dict):
                 return {"schema_version": SUBMISSION_POOL_VERSION, "created_by_version": CREATED_BY_VERSION, "candidates": []}
             candidates = data.get("candidates")

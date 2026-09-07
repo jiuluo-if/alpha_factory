@@ -98,6 +98,8 @@ def parse_config(raw):
         max_simulations=factory_max,
         max_runtime_sec=int(factory_raw.get("max_runtime_sec", 86400)),
     )
+    if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
+        raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
     return AppConfig(
         simulation=copy.deepcopy(raw.get("simulation", {})),
         agent=copy.deepcopy(agent),

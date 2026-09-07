@@ -14,7 +14,7 @@ from wqb_agent.behavior import extract_behavior_series
 from wqb_agent.research_evidence import ResearchEvidenceBundle, classify_research
 from wqb_agent.robustness import evaluate_robustness, retention
 from wqb_agent.search_calibration import SearchPolicyReplay, reward_v2, build_search_calibration
-from wqb_agent.search_outcome import SearchOutcome, extract_statistical_decision, reward_v1
+from wqb_agent.search_outcome import SearchOutcome, extract_statistical_decision, reward_v1, resolve_reward
 from wqb_agent.search_policy import SearchPolicy
 from wqb_agent.submission import SubmissionPool, submission_eligibility
 from wqb_agent.state import Experiment
@@ -24,6 +24,10 @@ from wqb_agent.yearly import build_yearly_evidence
 
 
 class Phase7Tests(unittest.TestCase):
+    def test_reward_recovery_precedence_is_explicit(self):
+        self.assertEqual(resolve_reward({"reward": 1.0}, {"reward": 0.2}, 0.1)["quality"], "FINAL_EVIDENCE")
+        self.assertEqual(resolve_reward(None, {"reward": 0.2}, 0.1)["quality"], "PROVISIONAL_EVIDENCE")
+        self.assertEqual(resolve_reward(None, None, 0.1)["quality"], "LEGACY_APPROXIMATE")
     def test_calibration_does_not_report_zero_behavior_clusters(self):
         report = build_search_calibration({"submitted_count": 1}, outcomes=[{"proposal_id": "p"}])
         self.assertNotIn("behavior_cluster_count", report)

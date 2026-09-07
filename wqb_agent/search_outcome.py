@@ -12,6 +12,20 @@ import math
 REWARD_VERSION = "reward_v1"
 
 
+def resolve_reward(final_settlement, simulation_settlement, legacy_fitness):
+    """Recover one reward using final > provisional > legacy precedence."""
+    if isinstance(final_settlement, dict) and final_settlement.get("reward") is not None:
+        return {"reward": final_settlement.get("reward"),
+                "reward_version": final_settlement.get("reward_version", REWARD_VERSION),
+                "quality": "FINAL_EVIDENCE"}
+    if isinstance(simulation_settlement, dict) and simulation_settlement.get("reward") is not None:
+        return {"reward": simulation_settlement.get("reward"),
+                "reward_version": simulation_settlement.get("reward_version", REWARD_VERSION),
+                "quality": "PROVISIONAL_EVIDENCE"}
+    return {"reward": legacy_fitness, "reward_version": REWARD_VERSION,
+            "quality": "LEGACY_APPROXIMATE"}
+
+
 def extract_statistical_decision(validation_report):
     """Read only the canonical nested ValidationReport evidence path."""
     if not isinstance(validation_report, dict):

@@ -17,6 +17,7 @@ import time
 
 from .metrics import checks_passed, num, score_of
 from .evidence_status import annotate_evidence
+from .robustness import evaluate_robustness
 
 
 REQUIRED_VARIABLES = (
@@ -248,7 +249,8 @@ def pbo_cscv(aligned_return_series, n_splits=4):
 
 
 def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", timestamp=None,
-                            statistical_policy="required_when_available"):
+                            statistical_policy="required_when_available",
+                            robustness_policy=None):
     expression = parent.get("expression") if isinstance(parent, dict) else getattr(parent, "expression", "")
     fingerprint = parent.get("submission_fingerprint") if isinstance(parent, dict) else getattr(parent, "submission_fingerprint", None)
     settings = parent.get("settings", {}) if isinstance(parent, dict) else getattr(parent, "settings", {})
@@ -261,6 +263,15 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         semantic_requirement = "NOT_APPLICABLE"
     has_decay = isinstance(settings, dict) and "decay" in settings
     has_truncation = isinstance(settings, dict) and "truncation" in settings
+    policy = {
+        "min_sharpe_retention": 0.7,
+        "min_fitness_retention": 0.6,
+        "max_turnover_multiple": 1.5,
+        "max_drawdown_multiple": 1.5,
+        "require_checks_passed": True,
+    }
+    if isinstance(robustness_policy, dict):
+        policy.update(robustness_policy)
     variables = [
         {"variable": "window_locality", "reason": "检验局部窗口变化而非固定 ±1 的偶然性", "budget": 1,
          "requirement": "REQUIRED" if has_ts_window or not explicit_metadata else "NOT_APPLICABLE",
@@ -284,6 +295,9 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
     if str(pnl_capability).upper() == "LIVE_VERIFIED":
         variables.append({"variable": "pnl_diagnostics", "reason": "PnL capability 已验证，检查 rolling stability 与相关性", "budget": 0,
                           "falsification": "rolling stability 或 bootstrap 诊断失败", "stopping_rule": "使用完整可用 return series"})
+    for item in variables:
+        if item.get("requirement") == "REQUIRED" and item.get("variable") != "yearly_aggregates":
+            item["acceptance"] = dict(policy)
     canonical = {
         "schema_version": 3,
         "parent_fingerprint": fingerprint,
@@ -295,6 +309,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         "stopping_rule": "预算耗尽、预注册变量全部结算或任一硬失败后停止扩展",
         "statistical_policy": statistical_policy,
         "pnl_capability": str(pnl_capability).upper(),
+        "robustness_policy": policy,
     }
     identity = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ValidationPlan({
@@ -309,6 +324,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         "pnl_capability": str(pnl_capability).upper(),
         "preregistered_at": timestamp if timestamp is not None else time.time(),
         "statistical_policy": statistical_policy,
+        "robustness_policy": policy,
     })
 
 
@@ -328,6 +344,15 @@ def migrate_validation_plan(plan):
             variables.append(dict(legacy, variable=name))
     for item in variables:
         item.setdefault("requirement", "REQUIRED")
+        if (item.get("requirement") == "REQUIRED"
+                and item.get("variable") != "yearly_aggregates"):
+            item.setdefault("acceptance", {
+                "min_sharpe_retention": 0.7,
+                "min_fitness_retention": 0.6,
+                "max_turnover_multiple": 1.5,
+                "max_drawdown_multiple": 1.5,
+                "require_checks_passed": True,
+            })
     migrated["variables"] = variables
     migrated["schema_version"] = 3
     return migrated
@@ -362,6 +387,9 @@ def validate_plan(plan):
             problems.append("validation_plan variable requirement 非法")
         if num(item.get("budget")) is None or num(item.get("budget")) < 0:
             problems.append("validation_plan 变量 budget 必须为非负数")
+        if item.get("requirement") == "REQUIRED" and item.get("variable") != "yearly_aggregates":
+            if not isinstance(item.get("acceptance"), dict):
+                problems.append("required robustness variable 缺少 acceptance")
     if num(plan.get("budget")) is None or num(plan.get("budget")) < 0:
         problems.append("validation_plan budget 必须为非负数")
     elif sum(num(item.get("budget")) or 0 for item in variables if isinstance(item, dict)) > num(plan.get("budget")):
@@ -410,7 +438,21 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
                                     "evidence_status": "PASS" if passed else "FAIL",
                                     "requirement": requirement, "evidence": evidence}
             continue
-        valid = [child for child in matches if _child_status(child) == "DONE" and checks_passed(_child_metrics(child)) is True]
+        valid = []
+        valid_evidence = []
+        criterion = (plan_variables.get(variable) or {}).get("acceptance") or {}
+        for child in matches:
+            if _child_status(child) != "DONE":
+                continue
+            evidence = child.get("robustness_evidence") if isinstance(child, dict) else getattr(child, "robustness_evidence", None)
+            if not isinstance(evidence, dict):
+                evidence = evaluate_robustness(
+                    variable, _child_metrics(parent) or {}, _child_metrics(child) or {},
+                    criterion, checks_passed(_child_metrics(child)),
+                ).as_dict()
+            if evidence.get("decision") == "PASS":
+                valid.append(child)
+                valid_evidence.append(evidence)
         dimensions[variable] = {
             "status": "PASS" if valid else "FAIL",
             "evidence_status": "PASS" if valid else "FAIL",
@@ -418,6 +460,7 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             "count": len(matches),
             "passed": len(valid),
             "scores": [score_of(_child_metrics(child)) for child in valid],
+            "evidence": valid_evidence,
         }
     for variable in ("decay", "truncation"):
         spec = plan_variables.get(variable) or {}
@@ -427,10 +470,25 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
                                     "requirement": requirement, "reason": spec.get("reason")}
             continue
         matches = [child for child in children if _child_dimension(child) == variable]
-        valid = [child for child in matches if _child_status(child) == "DONE" and checks_passed(_child_metrics(child)) is True]
+        valid = []
+        valid_evidence = []
+        criterion = spec.get("acceptance") or {}
+        for child in matches:
+            if _child_status(child) != "DONE":
+                continue
+            evidence = child.get("robustness_evidence") if isinstance(child, dict) else getattr(child, "robustness_evidence", None)
+            if not isinstance(evidence, dict):
+                evidence = evaluate_robustness(
+                    variable, _child_metrics(parent) or {}, _child_metrics(child) or {},
+                    criterion, checks_passed(_child_metrics(child)),
+                ).as_dict()
+            if evidence.get("decision") == "PASS":
+                valid.append(child)
+                valid_evidence.append(evidence)
         dimensions[variable] = {"status": "PASS" if valid else "FAIL",
                                 "evidence_status": "PASS" if valid else "FAIL",
-                                "requirement": requirement, "count": len(matches), "passed": len(valid)}
+                                "requirement": requirement, "count": len(matches), "passed": len(valid),
+                                "evidence": valid_evidence}
     pnl_status = (plan.get("pnl_capability") or "UNKNOWN").upper() if isinstance(plan, dict) else "UNKNOWN"
     if pnl_status == "LIVE_VERIFIED":
         pnl_ok = isinstance(pnl_evidence, dict) and pnl_evidence.get("status") == "PASS"

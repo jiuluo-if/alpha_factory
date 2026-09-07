@@ -117,6 +117,17 @@ class SubmissionPool:
                 "validation_status": experiment.validation_status,
                 "yearly_evidence": experiment.yearly_evidence,
                 "validation_report": experiment.validation_report,
+                "research_classification": getattr(experiment, "research_classification", None),
+                "robustness_status": (getattr(experiment, "robustness_evidence", None) or {}).get("decision")
+                    if isinstance(getattr(experiment, "robustness_evidence", None), dict) else getattr(experiment, "validation_status", None),
+                "statistical_status": (getattr(experiment, "validation_report", None) or {}).get("statistical_evidence", {}).get("statistical_decision")
+                    if isinstance(getattr(experiment, "validation_report", None), dict) else None,
+                "incremental_status": (getattr(experiment, "incremental_evidence", None) or {}).get("decision")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else "UNKNOWN",
+                "nearest_alpha": (getattr(experiment, "incremental_evidence", None) or {}).get("nearest_alpha_id")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "max_abs_corr": (getattr(experiment, "incremental_evidence", None) or {}).get("max_abs_corr")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
                 "rating": rating,
                 "self_correlation": correlation,
                 "active_snapshot": active_snapshot,

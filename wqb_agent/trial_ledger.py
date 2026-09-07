@@ -17,6 +17,7 @@ PHASES = {
     "candidate_generated", "candidate_rejected", "preflight_accepted",
     "candidate_admitted",
     "simulation_committed", "simulation_submitted", "simulation_settled",
+    "research_outcome_settled",
 }
 
 SIMULATION_PHASES = {
@@ -50,7 +51,7 @@ class TrialLedger:
         return getattr(trial, key, default)
 
     def record(self, trial, phase, *, outcome=None, reason=None, reason_code=None,
-               stage=None, timestamp=None):
+               stage=None, timestamp=None, reward=None, settlement=None):
         if phase not in PHASES:
             raise ValueError(f"未知 trial phase: {phase}")
         candidate_id = self._value(trial, "candidate_id") or candidate_identity(trial, round_no=self._value(trial, "round"))
@@ -62,7 +63,7 @@ class TrialLedger:
             "",
         )
         state = _text(self._value(trial, "status"), "UNKNOWN")
-        identity = f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}"
+        identity = f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{timestamp or ''}|{reward}"
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
         if not isinstance(fields, (list, tuple)):
@@ -93,14 +94,36 @@ class TrialLedger:
             "structural_fingerprint": structural_fingerprint(expression, fields),
             "fields": sorted({_text(field) for field in fields if field is not None}),
             "alpha_id": self._value(trial, "alpha_id"),
-            "reward": self._value(trial, "reward") or (
+            "reward": reward if reward is not None else self._value(trial, "reward") or (
                 (self._value(trial, "search_outcome") or {}).get("reward")
                 if isinstance(self._value(trial, "search_outcome"), dict) else None
             ),
             "search_outcome": self._value(trial, "search_outcome"),
+            "settlement": settlement,
             "recorded_at": timestamp if timestamp is not None else time.time(),
         }
         return append_jsonl_if_unique(self.path, row, ("event_id",))
+
+    def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
+                               base_quality=None, robustness=None,
+                               statistical_decision=None, incremental_decision=None,
+                               research_classification=None,
+                               timestamp=None):
+        settled_at = timestamp if timestamp is not None else time.time()
+        settlement = {
+            "proposal_id": self._value(trial, "proposal_id"),
+            "reward": reward,
+            "reward_version": reward_version,
+            "base_quality": base_quality,
+            "robustness": robustness,
+            "statistical_decision": statistical_decision,
+            "incremental_decision": incremental_decision,
+            "research_classification": research_classification,
+            "settled_at": settled_at,
+        }
+        return self.record(trial, "research_outcome_settled", outcome="SETTLED",
+                           reason_code="FINAL", timestamp=settled_at, reward=reward,
+                           settlement=settlement)
 
     def summarize(self):
         phase_counts = Counter()
@@ -126,6 +149,7 @@ class TrialLedger:
         unique_candidates = set()
         unique_proposals = set()
         lifecycle_rows = defaultdict(list)
+        settlement_rows = {}
         for row in iter_jsonl_objects(self.path):
             events += 1
             trial_id = row.get("trial_id")
@@ -154,6 +178,8 @@ class TrialLedger:
                 latest_by_trial[trial_id] = row
             if row.get("phase") in SIMULATION_PHASES and row.get("proposal_id"):
                 lifecycle_rows[str(row.get("proposal_id"))].append(row)
+            if row.get("phase") == "research_outcome_settled" and row.get("proposal_id"):
+                settlement_rows[str(row.get("proposal_id"))] = row
             if row.get("phase") in {"completed", "simulation_settled"}:
                 if row.get("proposal_id") or trial_id:
                     completed_trials.add(row.get("proposal_id") or trial_id)
@@ -174,6 +200,23 @@ class TrialLedger:
                 groups[key][row.get(key, "unknown")][row.get("phase", "unknown")] += 1
             for field in row.get("fields") or []:
                 groups["field"][field][row.get("phase", "unknown")] += 1
+        lifecycle_proposals = self._lifecycle_proposals(lifecycle_rows)
+        lifecycle_arm_counts = self._lifecycle_arm_counts(lifecycle_rows)
+        for proposal_id, settlement in settlement_rows.items():
+            proposal = lifecycle_proposals.get(proposal_id)
+            if not isinstance(proposal, dict):
+                continue
+            arm = proposal.get("arm")
+            try:
+                final_reward = float(settlement.get("reward"))
+            except (TypeError, ValueError):
+                continue
+            previous_reward = float(proposal.get("reward") or 0.0)
+            if arm in lifecycle_arm_counts:
+                lifecycle_arm_counts[arm]["reward_sum"] += final_reward - previous_reward
+                lifecycle_arm_counts[arm]["reward"] += final_reward - previous_reward
+            proposal["reward"] = final_reward
+            proposal["final_outcome"] = settlement.get("settlement")
         return {
             "schema_version": self.SCHEMA_VERSION,
             "events": events,
@@ -194,8 +237,13 @@ class TrialLedger:
             "structural_trial_count": len(structural_trials),
             "effective_trial_count": max(1, len(structural_trials or family_trials or trial_ids)),
             "arm_counts": self._arm_counts(latest_by_trial),
-            "lifecycle_arm_counts": self._lifecycle_arm_counts(lifecycle_rows),
-            "lifecycle_proposals": self._lifecycle_proposals(lifecycle_rows),
+            "lifecycle_arm_counts": lifecycle_arm_counts,
+            "lifecycle_proposals": lifecycle_proposals,
+            "settled_observation_count": len(settlement_rows),
+            "settled_rewards": {
+                proposal_id: row.get("reward")
+                for proposal_id, row in settlement_rows.items()
+            },
             "event_type_counts": dict(event_type_counts),
             "trial_sharpe_count": sharpe_count,
             "trial_sharpe_mean": sharpe_mean if sharpe_count else None,
@@ -297,6 +345,7 @@ class TrialLedger:
                 "status": cls._lifecycle_status(rows),
                 "committed": any(row.get("phase") == "simulation_committed" for row in rows),
                 "research_role": rows[-1].get("research_role") or "EXPLORE",
+                "reward": rows[-1].get("reward"),
             }
         return result
 

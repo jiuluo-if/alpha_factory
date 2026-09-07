@@ -12,6 +12,17 @@ import math
 REWARD_VERSION = "reward_v1"
 
 
+def extract_statistical_decision(validation_report):
+    """Read only the canonical nested ValidationReport evidence path."""
+    if not isinstance(validation_report, dict):
+        return None
+    evidence = validation_report.get("statistical_evidence")
+    if not isinstance(evidence, dict):
+        return None
+    decision = evidence.get("statistical_decision")
+    return str(decision).upper() if decision is not None else None
+
+
 def staged_promotion(*, base_quality, validation_status=None,
                      budget_used=0, budget_limit=None):
     """Return the next bounded research stage and its explicit stop reason."""
@@ -115,6 +126,35 @@ def reward_v1(*, status, infrastructure_failure, base_quality, robustness,
     return max(0.0, min(1.0, float(reward)))
 
 
+def settle_search_outcome(provisional, *, validation_report=None,
+                          incremental_decision=None, yearly_evidence=None,
+                          platform_pass=None):
+    """Replace a provisional observation with one final, evidence-backed value."""
+    row = provisional.as_dict() if hasattr(provisional, "as_dict") else dict(provisional or {})
+    report = validation_report if isinstance(validation_report, dict) else {}
+    robustness = "PASS" if report.get("status") == "PASS" else row.get("robustness", "")
+    statistical = extract_statistical_decision(report)
+    base_quality = row.get("base_quality", "UNRESOLVED")
+    reward = reward_v1(
+        status="DONE" if row.get("evaluated") else "UNKNOWN",
+        infrastructure_failure=bool(row.get("infrastructure_failure")),
+        base_quality=base_quality,
+        robustness=robustness,
+        statistical_decision=statistical,
+        parent_delta=row.get("parent_delta"),
+    )
+    row.update({
+        "robustness": robustness,
+        "statistical_decision": statistical,
+        "incremental_decision": incremental_decision or "UNAVAILABLE",
+        "yearly_coverage": (yearly_evidence or {}).get("coverage_status") if isinstance(yearly_evidence, dict) else None,
+        "platform_pass": platform_pass,
+        "reward": reward,
+        "outcome_kind": "FINAL",
+    })
+    return row
+
+
 @dataclass(frozen=True)
 class SearchOutcome:
     proposal_id: str
@@ -144,7 +184,7 @@ class SearchOutcome:
             _value(experiment, "validation_status", "")
         ).upper()
         parent_delta = parent_relative_delta(experiment, parent)
-        statistical = (validation or {}).get("statistical_decision") if isinstance(validation, dict) else None
+        statistical = extract_statistical_decision(validation)
         reward = reward_v1(
             status=status,
             infrastructure_failure=infrastructure_failure,
@@ -188,4 +228,5 @@ class SearchOutcome:
             "parent_delta": self.parent_delta,
             "reward": self.reward,
             "reward_version": self.reward_version,
+            "outcome_kind": "PROVISIONAL",
         }

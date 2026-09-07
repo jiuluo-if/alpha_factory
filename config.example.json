@@ -48,6 +48,21 @@
       "min_dsr": 0.95,
       "max_pbo_proxy": null
     },
+    "robustness_policy": {
+      "min_sharpe_retention": 0.7,
+      "min_fitness_retention": 0.6,
+      "max_turnover_multiple": 1.5,
+      "max_drawdown_multiple": 1.5,
+      "require_checks_passed": true
+    },
+    "incremental_value": {
+      "max_abs_correlation": 0.7,
+      "min_overlap": 60,
+      "mode": "required_when_available"
+    },
+    "yearly_policy": {
+      "min_years": 2
+    },
     "pagination_limit": 50,
     "max_pagination_pages": 20,
     "state_dir": ".wqb_state",

@@ -351,6 +351,7 @@ class BudgetAllocator:
                     value = float(reward)
                     state["reward_sum"] += value
                     state["reward"] += value
+                    current["reward"] = value
             elif status == "SKIPPED_LOCAL":
                 state["skipped_local"] += 1
             elif status == "FAILED":
@@ -367,11 +368,30 @@ class BudgetAllocator:
                         value = float(reward)
                         state["reward_sum"] += value
                         state["reward"] += value
+                        current["reward"] = value
         current["status"] = status
         return True
 
     def complete(self, proposal, reward=0.0):
         return self.transition(proposal, "DONE", reward=reward)
+
+    def replace_reward(self, proposal, reward):
+        """Replace one observation after final evidence, without recounting it."""
+        key = self.proposal_key(proposal)
+        current = self.proposals.get(key)
+        if not current or current.get("status") != "DONE":
+            return False
+        try:
+            value = float(reward)
+        except (TypeError, ValueError):
+            return False
+        previous = current.get("settled_reward", current.get("reward", 0.0))
+        state = self.arms[current["arm"]]
+        state["reward_sum"] += value - float(previous or 0.0)
+        state["reward"] += value - float(previous or 0.0)
+        current["settled_reward"] = value
+        current["reward"] = value
+        return True
 
     def mark_pending(self, proposal):
         return self.transition(proposal, "PENDING")
@@ -493,6 +513,11 @@ class SearchPolicy:
                 self.allocator.mark_skipped_local(proposal)
             else:
                 self.allocator.transition(proposal, status, reward=reward, outcome=outcome)
+
+    def replace_reward(self, proposal, reward):
+        if not self.enabled or self._is_validation(proposal):
+            return False
+        return self.allocator.replace_reward(proposal, reward)
 
     def snapshot(self):
         snapshot = self.allocator.snapshot()

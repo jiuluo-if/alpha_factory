@@ -1,8 +1,14 @@
 from .diversity import deduplicate, extract_fields, is_redundant
 from .search_policy import BudgetAllocator, SearchPolicy
 from .search_snapshot import SearchSnapshot
-from .search_outcome import SearchOutcome, parent_relative_delta, reward_v1, staged_promotion
-from .search_calibration import SearchPolicyReplay, build_search_calibration
+from .search_outcome import (
+    SearchOutcome, extract_statistical_decision, parent_relative_delta,
+    reward_v1, settle_search_outcome, staged_promotion,
+)
+from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
+from .robustness import RobustnessEvidence, evaluate_robustness, retention
+from .incremental_value import IncrementalValueEvidence, build_incremental_value, select_trusted_pool
+from .research_evidence import ResearchEvidenceBundle, classify_research
 from .identity import candidate_identity
 from .failures import (
     FailureKind,
@@ -23,9 +29,20 @@ __all__ = [
     "SearchOutcome",
     "parent_relative_delta",
     "reward_v1",
+    "extract_statistical_decision",
+    "settle_search_outcome",
     "staged_promotion",
     "SearchPolicyReplay",
     "build_search_calibration",
+    "reward_v2",
+    "RobustnessEvidence",
+    "evaluate_robustness",
+    "retention",
+    "IncrementalValueEvidence",
+    "build_incremental_value",
+    "select_trusted_pool",
+    "ResearchEvidenceBundle",
+    "classify_research",
     "candidate_identity",
     "HighSignalValidator",
     "FailureKind",

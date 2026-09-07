@@ -18,7 +18,7 @@ def _yearly_rows(payload):
 
 
 def build_yearly_evidence(payload, *, min_sharpe=0.0, min_fitness=0.0,
-                          max_turnover=None):
+                          max_turnover=None, min_years=1):
     """Create compact annual evidence without retaining the raw payload."""
     rows = []
     for raw in _yearly_rows(payload):
@@ -35,7 +35,8 @@ def build_yearly_evidence(payload, *, min_sharpe=0.0, min_fitness=0.0,
     if not rows:
         return annotate_evidence({
             "status": "UNKNOWN", "source": "BRAIN /alphas/{id}/aggregates",
-            "years": [], "stable": None, "reason": "yearlyData 缺失或为空",
+            "years": [], "year_count": 0, "coverage_status": "UNAVAILABLE",
+            "stable": None, "reason": "yearlyData 缺失或为空",
         }, status="UNAVAILABLE")
     sharpe = [row["sharpe"] for row in rows if "sharpe" in row]
     fitness = [row["fitness"] for row in rows if "fitness" in row]
@@ -46,12 +47,15 @@ def build_yearly_evidence(payload, *, min_sharpe=0.0, min_fitness=0.0,
         and (max_turnover is None or row.get("turnover", float("inf")) <= float(max_turnover))
         for row in rows
     )
-    stable = passing == len(rows) and bool(sharpe) and bool(fitness)
+    coverage_status = "VERIFIED" if len(rows) >= int(min_years) else "INCONCLUSIVE"
+    stable = (coverage_status == "VERIFIED" and passing == len(rows)
+              and bool(sharpe) and bool(fitness))
     return annotate_evidence({
         "status": "VERIFIED",
         "source": "BRAIN /alphas/{id}/aggregates",
         "years": rows,
         "year_count": len(rows),
+        "coverage_status": coverage_status,
         "passing_years": passing,
         "stable": bool(stable),
         "summary": {

@@ -39,6 +39,11 @@ class Experiment:
         self.template_slots = None
         self.search_evidence = None
         self.search_outcome = None
+        self.provisional_outcome = None
+        self.final_outcome = None
+        self.robustness_evidence = None
+        self.incremental_evidence = None
+        self.research_classification = None
         self.novelty_score = None
         self.allocation_arm = None
         self.allocation_key = None
@@ -108,6 +113,11 @@ class Experiment:
             "template_slots": self.template_slots,
             "search_evidence": self.search_evidence,
             "search_outcome": self.search_outcome,
+            "provisional_outcome": self.provisional_outcome,
+            "final_outcome": self.final_outcome,
+            "robustness_evidence": self.robustness_evidence,
+            "incremental_evidence": self.incremental_evidence,
+            "research_classification": self.research_classification,
             "novelty_score": self.novelty_score,
             "allocation_arm": self.allocation_arm,
             "allocation_key": self.allocation_key,
@@ -174,6 +184,11 @@ class Experiment:
         exp.template_slots = data.get("template_slots")
         exp.search_evidence = data.get("search_evidence")
         exp.search_outcome = data.get("search_outcome")
+        exp.provisional_outcome = data.get("provisional_outcome")
+        exp.final_outcome = data.get("final_outcome")
+        exp.robustness_evidence = data.get("robustness_evidence")
+        exp.incremental_evidence = data.get("incremental_evidence")
+        exp.research_classification = data.get("research_classification")
         exp.novelty_score = data.get("novelty_score")
         exp.allocation_arm = data.get("allocation_arm")
         exp.allocation_key = data.get("allocation_key")

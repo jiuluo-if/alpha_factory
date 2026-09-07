@@ -12,7 +12,8 @@ from .artifacts import (
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
 from .search_policy import SearchPolicy, validate_budget_hierarchy
-from .search_outcome import SearchOutcome
+from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
+from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
 from .context import key_experiments, write_context
 from .discovery import FieldDiscovery
@@ -154,6 +155,13 @@ class Agent:
         self.quality_policy = agent_cfg.get("quality", {})
         self.statistical_policy = dict(agent_cfg.get("statistical_policy") or {})
         self.statistical_policy.setdefault("mode", "required_when_available")
+        self.robustness_policy = dict(agent_cfg.get("robustness_policy") or {
+            "min_sharpe_retention": 0.7,
+            "min_fitness_retention": 0.6,
+            "max_turnover_multiple": 1.5,
+            "max_drawdown_multiple": 1.5,
+            "require_checks_passed": True,
+        })
         field_selection = agent_cfg.get("field_selection") or {}
         self.max_field_alpha_count = field_selection.get("max_alpha_count")
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md"))
@@ -212,6 +220,7 @@ class Agent:
                 "min_sharpe": (self.quality_policy or {}).get("promising_sharpe", 0.0),
                 "min_fitness": (self.quality_policy or {}).get("promising_fitness", 0.0),
                 "max_turnover": (self.quality_policy or {}).get("max_turnover"),
+                "min_years": (agent_cfg.get("yearly_policy") or {}).get("min_years", 2),
             },
         )
         _REFLECTOR_KWARGS = {
@@ -1784,7 +1793,8 @@ class Agent:
             parent=self._completed_parent(getattr(exp, "parent_expression", None)),
             quality_label=verdict.get("label"),
         )
-        exp.search_outcome = outcome.as_dict()
+        exp.provisional_outcome = outcome.as_dict()
+        exp.search_outcome = exp.provisional_outcome
         self._update_search_lifecycle(exp, outcome=outcome)
         self._record_trial_phase(exp, "completed", outcome=exp.status)
         self._record_trial_phase(
@@ -1994,7 +2004,8 @@ class Agent:
             plan = plans.get(key)
             if not isinstance(plan, dict):
                 plan = default_validation_plan(
-                    parent, statistical_policy=self.statistical_policy
+                    parent, statistical_policy=self.statistical_policy,
+                    robustness_policy=self.robustness_policy,
                 )
             parent.self_correlation = self._settled_self_correlation(parent)
             platform_evidence = {
@@ -2035,8 +2046,49 @@ class Agent:
                 child.validation_report = report
                 child.validation_status = "VALIDATED" if report["status"] == "PASS" else "FAILED"
             parent.validation_status = "STABLE" if report["status"] == "PASS" else "UNVALIDATED"
+            self._settle_research_outcome(parent, report)
             if report["status"] == "PASS":
                 self._validation_candidates.append((parent, report))
+
+    def _settle_research_outcome(self, experiment, report):
+        """Append one final replacement observation after aggregate evidence."""
+        provisional = getattr(experiment, "provisional_outcome", None) or getattr(experiment, "search_outcome", None)
+        if not isinstance(provisional, dict) or not isinstance(report, dict):
+            return None
+        incremental = getattr(experiment, "incremental_evidence", None) or {}
+        incremental_decision = incremental.get("decision", "UNAVAILABLE") if isinstance(incremental, dict) else "UNAVAILABLE"
+        platform = (report.get("dimensions") or {}).get("platform_quality") or {}
+        platform_pass = platform.get("status") == "PASS"
+        final = settle_search_outcome(
+            provisional,
+            validation_report=report,
+            incremental_decision=incremental_decision,
+            yearly_evidence=getattr(experiment, "yearly_evidence", None),
+            platform_pass=platform_pass,
+        )
+        quality = "STABLE" if report.get("status") == "PASS" else provisional.get("base_quality")
+        robustness = "PASS" if report.get("status") == "PASS" else "FAIL"
+        statistical = extract_statistical_decision(report)
+        experiment.final_outcome = final
+        experiment.search_outcome = final
+        experiment.research_classification = classify_research(
+            quality, robustness, statistical, incremental_decision,
+            "PASS" if platform_pass else "FAIL",
+        )
+        self.trial_ledger.record_outcome_settled(
+            experiment, reward=final.get("reward"),
+            reward_version=final.get("reward_version", "reward_v1"),
+            base_quality=quality, robustness=robustness,
+            statistical_decision=statistical,
+            incremental_decision=incremental_decision,
+            research_classification=experiment.research_classification,
+            timestamp=final.get("settled_at") or time.time(),
+        )
+        try:
+            self.search_policy.replace_reward(experiment, final.get("reward"))
+        except (TypeError, ValueError):
+            pass
+        return final
 
     def _alpha_rating(self, metrics):
         """Internal Excellent/Spectacular discipline from AGENTS.md."""
@@ -2121,6 +2173,20 @@ class Agent:
         summary["committed_simulations"] = sum(
             1 for row in events if row.get("phase") == "simulation_committed"
         )
+        final_by_proposal = {
+            str(row.get("proposal_id")): dict(row.get("settlement") or {})
+            for row in events
+            if row.get("phase") == "research_outcome_settled" and row.get("proposal_id")
+        }
+        if final_by_proposal:
+            merged = []
+            for row in outcomes:
+                replacement = final_by_proposal.get(str(row.get("proposal_id")))
+                if replacement:
+                    merged.append(dict(row, **replacement, outcome_kind="FINAL"))
+                else:
+                    merged.append(row)
+            outcomes = merged
         return build_search_calibration(summary, outcomes=outcomes, events=events)
 
     def _search_checkpoint_rows(self):

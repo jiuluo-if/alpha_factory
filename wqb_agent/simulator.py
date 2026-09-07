@@ -242,6 +242,7 @@ class Simulator:
                                 min_sharpe=self.yearly_policy.get("min_sharpe", 0.0),
                                 min_fitness=self.yearly_policy.get("min_fitness", 0.0),
                                 max_turnover=self.yearly_policy.get("max_turnover"),
+                                min_years=self.yearly_policy.get("min_years", 1),
                             )
                         except Exception as exc:
                             # Annual evidence is read-only advisory evidence;

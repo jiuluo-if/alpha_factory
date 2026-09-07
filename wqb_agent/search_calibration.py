@@ -33,6 +33,10 @@ def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), tra
                  in {"PROMISING", "SUCCESS", "SUSPICIOUS_HIGH_SIGNAL", "STABLE"}]
     stable = [row for row in outcome_rows if str(row.get("robustness", "")).upper()
               in {"STABLE", "PASS"}]
+    incremental_pass = [row for row in outcome_rows if str(row.get("incremental_decision", "")).upper() == "PASS"]
+    portfolio = [row for row in outcome_rows if str(row.get("research_classification", "")).upper() == "PORTFOLIO_CANDIDATE"]
+    cluster_sizes = [int(row.get("cluster_size")) for row in outcome_rows
+                     if isinstance(row.get("cluster_size"), (int, float)) and row.get("cluster_size") > 0]
     committed = int(summary.get("committed_simulations", summary.get("submitted_count", 0)) or 0)
     if not committed:
         committed = sum(1 for row in outcome_rows if row.get("proposal_id"))
@@ -77,6 +81,16 @@ def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), tra
         "promising_over_evaluated": ratio(len(promising), len(evaluated)),
         "stable_over_evaluated": ratio(len(stable), len(evaluated)),
         "stable_over_committed": ratio(len(stable), committed),
+        "incremental_pass_count": len(incremental_pass),
+        "portfolio_candidate_count": len(portfolio),
+        "stable_to_incremental_rate": ratio(len(incremental_pass), len(stable)),
+        "incremental_pass_per_simulation": ratio(len(incremental_pass), committed),
+        "portfolio_candidate_per_simulation": ratio(len(portfolio), committed),
+        "behavior_cluster_count": len({row.get("cluster_id") for row in outcome_rows if row.get("cluster_id")}),
+        "mean_cluster_size": (sum(cluster_sizes) / len(cluster_sizes) if cluster_sizes else None),
+        "redundancy_rate": ratio(sum(1 for row in outcome_rows
+                                      if str(row.get("incremental_decision", "")).upper() == "FAIL"),
+                                  len([row for row in outcome_rows if row.get("incremental_decision") is not None])),
         "unique_structures_over_committed": ratio(
             len({row.get("structural_fingerprint") for row in events
                  if _get(row, "structural_fingerprint")}), committed
@@ -96,6 +110,19 @@ def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), tra
         ),
         "role_budget": dict(role_budget),
     }
+
+
+def reward_v2(*, reward, incremental_decision=None):
+    """Offline-only stage adjustment; production SearchPolicy never calls it."""
+    value = _finite(reward)
+    if value is None:
+        return None
+    decision = str(incremental_decision or "").upper()
+    if decision == "PASS":
+        value += (1.0 - value) * 0.25
+    elif decision == "INCONCLUSIVE":
+        value += (1.0 - value) * 0.05
+    return max(0.0, min(1.0, value))
 
 
 def _arm_mean(rows):
@@ -120,8 +147,25 @@ def _arm_success(rows):
 class SearchPolicyReplay:
     """Replay historical candidate order using evidence available at each step."""
 
-    def __init__(self, candidates):
+    def __init__(self, candidates, pool=()):
         self.candidates = [dict(row) for row in candidates or ()]
+        self.pool = [dict(row) for row in pool or () if isinstance(row, dict)]
+
+    @staticmethod
+    def _time(row, position):
+        for key in ("candidate_available_at", "generated_at", "sequence", "round"):
+            value = _finite(row.get(key))
+            if value is not None:
+                return value
+        return float(position)
+
+    @staticmethod
+    def _observed_at(row, position):
+        for key in ("outcome_observed_at", "settled_at"):
+            value = _finite(row.get(key))
+            if value is not None:
+                return value
+        return float(position)
 
     @staticmethod
     def _score(row, observed, family_counts, exploration, family_penalty):
@@ -138,34 +182,83 @@ class SearchPolicyReplay:
 
     def run(self, *, strategy="current", exploration=1.0, family_penalty=0.05,
             checkpoints=(10, 25, 50, 100)):
-        remaining = list(enumerate(self.candidates))
+        indexed = [(index, row, self._time(row, index + 1))
+                   for index, row in enumerate(self.candidates)]
+        for _, row, decision_time in indexed:
+            observed_at = self._observed_at(row, 0)
+            explicit_decision = _finite(row.get("decision_timestamp"))
+            if explicit_decision is not None and observed_at > explicit_decision:
+                raise ValueError("evidence_timestamp exceeds decision_timestamp")
+            entered = _finite(row.get("pool_entered_at"))
+            if explicit_decision is not None and entered is not None and entered > explicit_decision:
+                raise ValueError("pool evidence is from the future")
+        remaining = list(indexed)
         observed = defaultdict(list)
         family_counts = Counter()
+        observed_ids = set()
         selected = []
         result = []
+        observed_snapshots = {}
+        pool_snapshots = {}
         step = 0
         while remaining:
+            decision_time = min(item[2] for item in remaining)
+            for index, row, available_at in selected:
+                if index in observed_ids:
+                    continue
+                if self._observed_at(row, index + 1) <= decision_time:
+                    reward = _finite(row.get("reward"))
+                    if reward is not None:
+                        observed[str(row.get("arm") or "unknown")].append(reward)
+                    observed_ids.add(index)
+            visible = [item for item in remaining if item[2] <= decision_time]
+            if not visible:
+                decision_time = min(item[2] for item in remaining)
+                visible = [item for item in remaining if item[2] <= decision_time]
             if strategy == "fifo":
-                position, row = remaining.pop(0)
+                chosen = min(visible, key=lambda item: item[0])
             else:
-                position, row = max(
-                    remaining,
+                chosen = max(
+                    visible,
                     key=lambda item: self._score(item[1], observed, family_counts,
                                                  exploration, family_penalty),
                 )
-                remaining.remove((position, row))
-            selected.append(row)
+            remaining.remove(chosen)
+            position, row, available_at = chosen
+            selected.append((position, row, available_at))
             step += 1
-            reward = _finite(row.get("reward"))
-            if reward is not None:
-                observed[str(row.get("arm") or "unknown")].append(reward)
             family_counts[str(row.get("family") or row.get("arm") or "unknown")] += 1
             if step in checkpoints:
-                result.append(self._checkpoint(step, selected))
+                result.append(self._checkpoint(step, [item[1] for item in selected]))
+                observed_snapshots[str(step)] = {
+                    key: list(values) for key, values in observed.items()
+                }
+                pool_snapshots[str(step)] = [
+                    row.get("alpha_id") for row in self.pool
+                    if (_finite(row.get("pool_entered_at")) is None
+                        or _finite(row.get("pool_entered_at")) <= decision_time)
+                ]
         if not result and selected:
-            result.append(self._checkpoint(len(selected), selected))
+            result.append(self._checkpoint(len(selected), [item[1] for item in selected]))
+            observed_snapshots[str(len(selected))] = {
+                key: list(values) for key, values in observed.items()
+            }
+            pool_snapshots[str(len(selected))] = [
+                row.get("alpha_id") for row in self.pool
+                if (_finite(row.get("pool_entered_at")) is None
+                    or _finite(row.get("pool_entered_at")) <= decision_time)
+            ]
+        selected_rows = [row for _, row, _ in selected]
         return {"strategy": strategy, "checkpoints": result,
-                "selected_proposal_ids": [row.get("proposal_id") for row in selected]}
+                "selected_proposal_ids": [row.get("proposal_id") for row in selected_rows],
+                "observed_history_at_checkpoints": observed_snapshots,
+                "pool_snapshot_at_checkpoints": pool_snapshots}
+
+    def compare_rewards(self):
+        return {
+            "reward_v1": sum(_finite(row.get("reward")) or 0.0 for row in self.candidates),
+            "reward_v2": sum(_finite(row.get("reward_v2")) or 0.0 for row in self.candidates),
+        }
 
     @staticmethod
     def _checkpoint(n, rows):

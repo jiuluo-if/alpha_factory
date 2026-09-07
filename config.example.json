@@ -35,6 +35,12 @@
         "VALIDATION": 4
       }
     },
+    "search_policy": {
+      "enabled": true,
+      "max_simulations": 100,
+      "max_pending_per_arm": 1,
+      "ucb_exploration": 1.0
+    },
     "pagination_limit": 50,
     "max_pagination_pages": 20,
     "state_dir": ".wqb_state",

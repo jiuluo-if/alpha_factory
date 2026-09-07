@@ -40,6 +40,7 @@ class TestArchitectureBoundaries(unittest.TestCase):
         "proposal_contract",
         "reflection",
         "research_guard",
+        "search_policy",
         "simulator",
         "state",
         "submission",

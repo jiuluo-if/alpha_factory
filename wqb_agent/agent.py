@@ -11,6 +11,7 @@ from .artifacts import (
     iter_jsonl_objects,
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
+from .search_policy import SearchPolicy
 from .context import key_experiments, write_context
 from .discovery import FieldDiscovery
 from .diversity import extract_fields, is_redundant
@@ -122,6 +123,13 @@ class Agent:
         except (TypeError, ValueError):
             self.max_proposals_per_round = 18
         self.research_allocation = agent_cfg.get("research_allocation") or {}
+        search_cfg = dict(agent_cfg.get("search_policy") or {})
+        search_cfg.setdefault("enabled", bool(self.research_allocation))
+        if "max_simulations" not in search_cfg:
+            search_cfg["max_simulations"] = self.research_allocation.get(
+                "max_simulations", 100
+            )
+        self.search_policy = SearchPolicy(search_cfg)
         self.fields_per_discovery = agent_cfg.get("fields_per_discovery", 6)
         self.pagination_limit = agent_cfg.get("pagination_limit", 50)
         self.max_pagination_pages = agent_cfg.get("max_pagination_pages", 20)
@@ -656,9 +664,16 @@ class Agent:
         diverse_records = []
         family_counts = {}
         allocation_counts = {role: 0 for role in RESEARCH_ROLES}
+        historical_pool = list(self.trajectory.experiments)
         role_max = (self.research_allocation.get("maximum", {})
                     if self.research_allocation else {})
-        for p in sorted(fresh, key=proposal_priority, reverse=True):
+        for p in fresh:
+            self.search_policy.annotate(p, historical_pool + diverse_records)
+        for p in sorted(
+            fresh,
+            key=lambda item: (self.search_policy.priority(item), proposal_priority(item)),
+            reverse=True,
+        ):
             role = p.get("research_role")
             if role in role_max and allocation_counts.get(role, 0) >= int(role_max[role]):
                 diversity_rejected.append((
@@ -690,6 +705,12 @@ class Agent:
             if redundant:
                 diversity_rejected.append((p["expression"], ["与本轮更高优先级候选近重复"]))
                 continue
+            if not self.search_policy.accept(p):
+                diversity_rejected.append((
+                    p["expression"],
+                    ["同一 dataset/mechanism research arm 已有待定或预留预算"],
+                ))
+                continue
             family_counts[family] = family_counts.get(family, 0) + 1
             if role in allocation_counts:
                 allocation_counts[role] += 1
@@ -707,6 +728,10 @@ class Agent:
         )
         budget_rejected = diverse[budget_cap:]
         fresh = diverse[:budget_cap]
+        # Release reservations for candidates trimmed by the existing hard
+        # batch cap.  No second submission path is introduced.
+        for p in budget_rejected:
+            self.search_policy.release(p, status="PENDING")
         if self.research_allocation:
             role_max = self.research_allocation.get("maximum", {})
             role_counts = {role: 0 for role in RESEARCH_ROLES}
@@ -811,6 +836,9 @@ class Agent:
             exp.template_stage_path = p.get("template_stage_path")
             exp.template_ref = p.get("template_ref")
             exp.template_slots = p.get("template_slots")
+            exp.search_evidence = p.get("search_evidence")
+            exp.novelty_score = p.get("novelty_score")
+            exp.allocation_arm = self.search_policy.allocator.arm_key(p)
             exp.factory_session_id = p.get("factory_session_id")
             exp.mutation = p.get("mutation") or "agent-proposed"
             exp.lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis["id"]
@@ -857,6 +885,11 @@ class Agent:
             if exp.status in ("PENDING", "RUNNING", "SUBMITTING", "SUBMIT_UNKNOWN", "UNKNOWN")
         ]
         if unresolved:
+            for exp in experiments:
+                self.search_policy.release(
+                    exp.allocation_arm or {"dataset_family": exp.datasets, "template_family": exp.template_family},
+                    status="UNKNOWN" if exp.status in {"UNKNOWN", "SUBMIT_UNKNOWN"} else "PENDING",
+                )
             self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
             self._write_sims_results(round_no, experiments, total_elapsed_sec=_round_elapsed)
             print(
@@ -867,6 +900,12 @@ class Agent:
         # Preserve undispatched PENDING jobs too: terminal-expression recovery
         # uses them to avoid permanently deduping work paused by a local fault.
         self.trajectory.add_many(experiments)
+        for exp in experiments:
+            self.search_policy.release(
+                exp.allocation_arm or {"dataset_family": exp.datasets, "template_family": exp.template_family},
+                status="DONE" if exp.status == "DONE" else exp.status,
+                reward=(exp.metrics or {}).get("fitness", 0.0) if isinstance(exp.metrics, dict) else 0.0,
+            )
 
         self._refresh_self_correlation_evidence(experiments)
         self._mark_robustness_stability(experiments)

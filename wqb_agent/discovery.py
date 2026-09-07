@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -288,6 +289,18 @@ class FieldDiscovery:
                 score += 2.0
             if kw in haystack_desc:
                 score += 1.0
+        # Catalog metadata is evidence, not a hard filter: coverage rewards
+        # usable history, while prior alpha usage is a small exploration cost.
+        try:
+            coverage = float(field.get("coverage") or field.get("coveragePercentage") or 0.0)
+            score += min(2.0, max(0.0, coverage / 100.0))
+        except (TypeError, ValueError):
+            pass
+        try:
+            alpha_count = float(field.get("alphaCount"))
+            score -= min(1.5, math.log1p(max(0.0, alpha_count)) / 10.0)
+        except (TypeError, ValueError):
+            pass
         return score
 
     @staticmethod

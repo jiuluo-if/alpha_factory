@@ -1,4 +1,5 @@
 from .diversity import deduplicate, extract_fields, is_redundant
+from .search_policy import BudgetAllocator, SearchPolicy
 from .failures import (
     FailureKind,
     classify_error,
@@ -12,6 +13,8 @@ __all__ = [
     "extract_fields",
     "is_redundant",
     "deduplicate",
+    "BudgetAllocator",
+    "SearchPolicy",
     "HighSignalValidator",
     "FailureKind",
     "classify_error",

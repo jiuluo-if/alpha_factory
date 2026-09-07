@@ -36,6 +36,9 @@ class Experiment:
         self.template_stage_path = None
         self.template_ref = None
         self.template_slots = None
+        self.search_evidence = None
+        self.novelty_score = None
+        self.allocation_arm = None
         self.factory_session_id = None
         self.self_correlation = None
         self.round = round_no
@@ -98,6 +101,9 @@ class Experiment:
             "template_stage_path": self.template_stage_path,
             "template_ref": self.template_ref,
             "template_slots": self.template_slots,
+            "search_evidence": self.search_evidence,
+            "novelty_score": self.novelty_score,
+            "allocation_arm": self.allocation_arm,
             "factory_session_id": self.factory_session_id,
             "self_correlation": self.self_correlation,
             "round": self.round,
@@ -157,6 +163,9 @@ class Experiment:
         exp.template_stage_path = data.get("template_stage_path")
         exp.template_ref = data.get("template_ref")
         exp.template_slots = data.get("template_slots")
+        exp.search_evidence = data.get("search_evidence")
+        exp.novelty_score = data.get("novelty_score")
+        exp.allocation_arm = data.get("allocation_arm")
         exp.factory_session_id = data.get("factory_session_id")
         exp.self_correlation = data.get("self_correlation")
         exp.status = data["status"]

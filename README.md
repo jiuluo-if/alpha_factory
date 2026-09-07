@@ -28,12 +28,14 @@ python main.py --factory-stop
 本地只读诊断使用：
 
 ```powershell
-python main.py --doctor --config config.json
-python main.py --audit-state --config config.json
+python main.py --doctor --offline
+python main.py --audit-state --offline --state-dir .wqb_state
 ```
 
 `--doctor` 不构造网络客户端、不提交 Simulation 或 Alpha；`--audit-state`
 只检查本地状态不变量。能力缺失保持 `UNKNOWN/UNAVAILABLE`，不会被当作通过。
+在新 checkout 尚未创建 `config.json` 时，两个离线命令会使用只读的
+`config.example.json` 作为配置 schema；生产入口仍要求用户自行创建并配置 `config.json`。
 
 需要人工核对平台只读能力时可使用：
 
@@ -67,6 +69,9 @@ AI 可在 hypothesis 中显式指定 `template_ids`、`template_family` 或 `tem
 - `SUBMIT_UNKNOWN` 只能只读对账，绝不自动重复 POST；Alpha 提交始终由用户在 BRAIN 手工完成。
 
 ## 安装与配置
+
+项目要求 Python 3.11 或更高版本；依赖版本以 `pyproject.toml` 为唯一来源，
+`requirements.txt` 仅保留为兼容安装入口。
 
 ```powershell
 pip install -r requirements.txt

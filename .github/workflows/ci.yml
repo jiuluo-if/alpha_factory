@@ -19,6 +19,6 @@ jobs:
       - name: Unit layer
         run: python -m unittest discover -s tests
       - name: Offline doctor
-        run: python main.py --doctor --config config.example.json --state-dir .ci_state
+        run: python main.py --doctor --offline --state-dir .ci_state
       - name: Offline state audit
-        run: python main.py --audit-state --config config.example.json --state-dir tests/fixtures
+        run: python main.py --audit-state --offline --state-dir tests/fixtures

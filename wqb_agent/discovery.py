@@ -6,7 +6,7 @@ import re
 import time
 
 from .artifacts import atomic_write_json_if_changed
-from .schema import SCHEMA_VERSION, CREATED_BY_VERSION
+from .schema import FIELDS_CACHE_VERSION, CREATED_BY_VERSION
 
 DATASET_CATEGORIES = {
     "analyst": ["analyst4"],
@@ -198,7 +198,7 @@ class FieldDiscovery:
     def _save_disk_cache(self):
         if not self.cache_path or self._using_catalog:
             return
-        data = {"schema": self.CACHE_SCHEMA, "schema_version": SCHEMA_VERSION,
+        data = {"schema": self.CACHE_SCHEMA, "schema_version": FIELDS_CACHE_VERSION,
                 "created_by_version": CREATED_BY_VERSION, "saved_at": time.time(),
                 "datasets": self._disk_cache}
         try:

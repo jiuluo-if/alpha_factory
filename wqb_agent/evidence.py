@@ -19,6 +19,7 @@ import time
 from .artifacts import atomic_write_json_if_changed
 from .client import WQBError
 from .metrics import check_pass, checks_passed
+from .schema import EVIDENCE_CACHE_VERSION, CREATED_BY_VERSION
 
 EVIDENCE_FILE = "evidence_cache.json"
 SELF_CORRELATION_LIMIT = 0.5
@@ -37,7 +38,11 @@ def load_evidence_cache(state_dir):
             cache = json.load(f)
     except (OSError, ValueError):
         return {}
-    return _bounded_cache(cache)
+    cache = _bounded_cache(cache)
+    for entry in cache.values():
+        entry.setdefault("schema_version", EVIDENCE_CACHE_VERSION)
+        entry.setdefault("created_by_version", CREATED_BY_VERSION)
+    return cache
 
 
 def _bounded_cache(cache, max_entries=EVIDENCE_CACHE_MAX_ENTRIES):
@@ -73,6 +78,11 @@ def _bounded_cache(cache, max_entries=EVIDENCE_CACHE_MAX_ENTRIES):
 def save_evidence_cache(state_dir, cache):
     os.makedirs(state_dir, exist_ok=True)
     cache = _bounded_cache(cache)
+    cache = {
+        key: dict(value, schema_version=EVIDENCE_CACHE_VERSION,
+                  created_by_version=CREATED_BY_VERSION)
+        for key, value in cache.items()
+    }
     atomic_write_json_if_changed(
         evidence_path(state_dir), cache, ignored_keys=("updated_at",),
         sort_keys=True,

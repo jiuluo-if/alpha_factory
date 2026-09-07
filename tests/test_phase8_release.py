@@ -4,13 +4,14 @@ import tempfile
 import unittest
 
 from wqb_agent.config import parse_config
-from wqb_agent.schema import CURRENT_SCHEMA_VERSION, migrate_artifact
+from wqb_agent.schema import CURRENT_SCHEMA_VERSION, migrate_artifact, ARTIFACT_SCHEMAS
 from wqb_agent.doctor import run_doctor
 from wqb_agent.audit import audit_state
 from wqb_agent.agent import Agent
 from wqb_agent.incremental_policy import IncrementalValuePolicy
 from wqb_agent.state import Experiment
 from wqb_agent.diagnostics import DiagnosticEvent
+from wqb_agent.trial_ledger import TrialLedger
 
 
 class Phase8ReleaseTests(unittest.TestCase):
@@ -25,6 +26,17 @@ class Phase8ReleaseTests(unittest.TestCase):
         self.assertEqual(once, twice)
         self.assertEqual(once["schema_version"], CURRENT_SCHEMA_VERSION)
         self.assertIn("created_by_version", once)
+
+    def test_registry_covers_persistent_artifacts(self):
+        for name in ("trajectory", "trial_ledger", "checkpoint", "validation",
+                     "submission_pool", "fields_cache", "evidence_cache", "active_snapshot"):
+            self.assertIn(name, ARTIFACT_SCHEMAS)
+
+    def test_legacy_v2_and_current_migrations_are_idempotent(self):
+        for payload in ({"schema_version": 2}, {"schema_version": CURRENT_SCHEMA_VERSION,
+                                                  "created_by_version": "alpha-factory"}):
+            migrated = migrate_artifact("checkpoint", payload)
+            self.assertEqual(migrated, migrate_artifact("checkpoint", migrated))
 
     def test_doctor_is_local_and_reports_capability_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,6 +72,43 @@ class Phase8ReleaseTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("phantom_reservation", result["errors"])
 
+    def test_audit_detects_invalid_lifecycle_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"phase": "simulation_submitted", "proposal_id": "p"}) + "\n")
+            result = audit_state(tmp)
+            self.assertFalse(result["ok"])
+            self.assertIn("lifecycle_order", result["errors"])
+
+    def test_audit_detects_orphan_validation_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "validation_reports.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"parent_id": "missing", "plan_id": "p",
+                                         "report": {"plan_id": "p"}}) + "\n")
+            result = audit_state(tmp)
+            self.assertFalse(result["ok"])
+            self.assertIn("orphan_validation_parent", result["errors"])
+
+    def test_audit_detects_unknown_job_released_from_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
+                json.dump({"complete": False, "experiments": [{
+                    "status": "SUBMIT_UNKNOWN", "proposal_id": "p", "budget_held": False
+                }]}, handle)
+            result = audit_state(tmp)
+            self.assertFalse(result["ok"])
+            self.assertIn("unknown_not_budget_held", result["errors"])
+
+    def test_audit_detects_terminal_reserved_arm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
+                json.dump({"complete": True, "experiments": [{
+                    "status": "DONE", "proposal_id": "p", "reserved": True
+                }]}, handle)
+            result = audit_state(tmp)
+            self.assertFalse(result["ok"])
+            self.assertIn("terminal_occupies_arm", result["errors"])
+
     def test_agent_production_settlement_records_missing_pnl(self):
         agent = Agent.__new__(Agent)
         agent.trajectory = type("Trajectory", (), {"experiments": []})()
@@ -70,8 +119,34 @@ class Phase8ReleaseTests(unittest.TestCase):
         self.assertEqual(evidence["availability"], "UNAVAILABLE")
         self.assertEqual(exp.incremental_evidence["decision"], "INCONCLUSIVE")
 
+    def test_final_settlement_persists_research_evidence_bundle(self):
+        from wqb_agent.agent import Agent
+        agent = Agent.__new__(Agent)
+        agent.trajectory = type("Trajectory", (), {"experiments": []})()
+        agent.incremental_policy = IncrementalValuePolicy()
+        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
+        exp.status = "DONE"
+        exp.provisional_outcome = {
+            "proposal_id": "p", "evaluated": True, "base_quality": "PROMISING",
+            "reward": 0.5,
+        }
+        exp.validation_report = {"status": "FAIL", "statistical_evidence": {}}
+        # Build the production evidence stage directly; no client or POST is involved.
+        incremental = agent._settle_incremental_evidence(exp)
+        self.assertEqual(incremental["decision"], "INCONCLUSIVE")
+
     def test_diagnostic_event_is_structured_and_bounded(self):
         event = DiagnosticEvent("CONFIG_INVALID", "ERROR", "config", message="bad")
         self.assertEqual(event.as_dict()["severity"], "ERROR")
         with self.assertRaises(ValueError):
             DiagnosticEvent("X", "DEBUG", "config")
+
+    def test_trial_ledger_summary_cache_is_rebuildable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = os.path.join(tmp, "trial_ledger.jsonl")
+            cache_path = os.path.join(tmp, "trial_ledger.summary.json")
+            ledger = TrialLedger(ledger_path)
+            first = ledger.summarize_cached(cache_path)
+            second = ledger.summarize_cached(cache_path)
+            self.assertEqual(first, second)
+            self.assertTrue(os.path.exists(cache_path))

@@ -21,4 +21,4 @@ jobs:
       - name: Offline doctor
         run: python main.py --doctor --config config.example.json --state-dir .ci_state
       - name: Offline state audit
-        run: python main.py --audit-state --config config.example.json --state-dir tests/fixtures/state
+        run: python main.py --audit-state --config config.example.json --state-dir tests/fixtures

@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 import re
 
 from .search_policy import BudgetAllocator, structural_fingerprint
-from .schema import CREATED_BY_VERSION
+from .schema import CREATED_BY_VERSION, SEARCH_SNAPSHOT_VERSION
 
 
 class SearchSnapshot(dict):
@@ -112,7 +112,7 @@ class SearchSnapshot(dict):
                 structural_counts[str(structural)] = max(structural_counts[str(structural)], int(count or 0))
 
         return cls({
-            "schema_version": 1,
+            "schema_version": SEARCH_SNAPSHOT_VERSION,
             "created_by_version": CREATED_BY_VERSION,
             "arms": {key: dict(value) for key, value in arms.items()},
             "family_counts": dict(family_counts),

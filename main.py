@@ -76,6 +76,10 @@ def main():
         help="只读检查本地状态不变量，不访问 BRAIN",
     )
     parser.add_argument(
+        "--smoke-readonly", action="store_true",
+        help="人工执行的只读平台 smoke 检查；禁止 Simulation/Alpha 写入",
+    )
+    parser.add_argument(
         "--force-new-round",
         action="store_true",
         help="Explicitly start a new round while preserving an unresolved older checkpoint",
@@ -104,15 +108,16 @@ def main():
         args.suggest, args.run_proposals, args.skip_stale,
         args.skip_submit_unknown, args.finalize_recorded_round is not None,
         args.factory_stop, args.factory_status,
-        args.doctor, args.audit_state,
+        args.doctor, args.audit_state, args.smoke_readonly,
     )):
         parser.error("--factory-run 不能与其他研究动作同时使用")
     if args.factory_stop and args.factory_status:
         parser.error("--factory-stop 不能与 --factory-status 同时使用")
     if (args.factory_stop or args.factory_status) and args.factory_hours is not None:
         parser.error("工厂状态/停止动作不能携带 --factory-hours")
-    if args.doctor and args.audit_state:
-        parser.error("--doctor 不能与 --audit-state 同时使用")
+    readonly_actions = sum(bool(value) for value in (args.doctor, args.audit_state, args.smoke_readonly))
+    if readonly_actions > 1:
+        parser.error("--doctor、--audit-state、--smoke-readonly 只能选择一个")
 
     config = load_config(args.config)
     if config is None:
@@ -146,6 +151,15 @@ def main():
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
             sys.exit(2)
+        return
+    if args.smoke_readonly:
+        from wqb_agent import WQBClient
+        from wqb_agent.smoke import run_readonly_smoke
+        try:
+            client = WQBClient()
+            print(json.dumps(run_readonly_smoke(client, config), ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({"network_write": False, "status": "UNAVAILABLE", "reason": str(exc)}, ensure_ascii=False, indent=2))
         return
 
     if args.factory_stop or args.factory_status:

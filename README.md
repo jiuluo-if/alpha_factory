@@ -35,6 +35,15 @@ python main.py --audit-state --config config.json
 `--doctor` 不构造网络客户端、不提交 Simulation 或 Alpha；`--audit-state`
 只检查本地状态不变量。能力缺失保持 `UNKNOWN/UNAVAILABLE`，不会被当作通过。
 
+需要人工核对平台只读能力时可使用：
+
+```powershell
+python main.py --smoke-readonly --config config.json
+```
+
+它只读取 datasets/fields（可选读取配置指定的 smoke dataset），不会调用任何
+Simulation POST 或 Alpha submission；该命令不在 CI 中执行。
+
 工厂默认最多运行 86400 秒、最多预留 300 个 Simulation，单轮最多生成100个 proposal，恢复未完成 checkpoint 优先；它仍通过同一个
 `Agent.run_proposals()` 提交，不旁路生产状态机；结束时只输出一份紧凑会话摘要。`factory_session.json`、
 `suggestions.json` 和 `proposals.json` 都是固定 canonical 文件，逻辑内容不变
@@ -78,6 +87,11 @@ proposal 必须使用 discovery 已证实的字段，并记录：`fields`、`dat
 `research_classification` 不等于 `submission_eligibility`。增量价值默认采用
 `required_when_available`：缺少 LIVE_VERIFIED PnL 时保留 UNKNOWN/UNAVAILABLE，
 不阻断人工审核，但也不伪造行为相关性。
+
+预算口径固定为：`FactoryConfig.max_simulations` 是整个 session 硬上限，
+`SearchConfig.max_simulations` 是 discovery committed budget，
+`SearchConfig.validation_max_simulations` 是受保护的 validation budget；
+启动时检查 discovery 与 validation 预算不得超过 factory 上限。
 
 ## 已知限制
 

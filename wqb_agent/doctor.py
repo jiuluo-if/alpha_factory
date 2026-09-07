@@ -82,7 +82,18 @@ def run_doctor(raw_config, *, offline=True):
             message="仅允许记录 UNAVAILABLE，不生成行为相关性"
         ).as_dict())
     result["diagnostics"] = diagnostics
-    for name in ("trajectory.jsonl", "trial_ledger.jsonl", "submission_pool.json"):
+    artifact_names = [
+        "trajectory.jsonl", "trial_ledger.jsonl", "submission_pool.json",
+        "fields_cache.json", "evidence_cache.json", "factory_session.json",
+        "sims_results.json",
+    ]
+    if os.path.isdir(state_dir):
+        artifact_names.extend(
+            name for name in os.listdir(state_dir)
+            if re.fullmatch(r"round_\d+\.checkpoint\.json", name)
+            or re.fullmatch(r"active_alphas_\d{8}\.json", name)
+        )
+    for name in artifact_names:
         path = os.path.join(state_dir, name)
         if not os.path.exists(path):
             continue

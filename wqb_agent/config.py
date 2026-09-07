@@ -17,6 +17,27 @@ class IncrementalValueConfig:
 
 
 @dataclass(frozen=True)
+class ValidationConfig:
+    yearly_min_years: int = 2
+
+
+@dataclass(frozen=True)
+class StatisticalConfig:
+    mode: str = "required_when_available"
+
+
+@dataclass(frozen=True)
+class RobustnessConfig:
+    min_sharpe_retention: float = 0.7
+    min_fitness_retention: float = 0.6
+
+
+@dataclass(frozen=True)
+class SimulationConfig:
+    settings: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SearchConfig:
     enabled: bool = True
     max_simulations: int = 100
@@ -36,6 +57,10 @@ class AppConfig:
     search: SearchConfig = field(default_factory=SearchConfig)
     factory: FactoryConfig = field(default_factory=FactoryConfig)
     incremental_value: IncrementalValueConfig = field(default_factory=IncrementalValueConfig)
+    validation: ValidationConfig = field(default_factory=ValidationConfig)
+    statistical: StatisticalConfig = field(default_factory=StatisticalConfig)
+    robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
+    simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
 
     def as_dict(self):
         return copy.deepcopy({"simulation": self.simulation, "agent": self.agent})
@@ -79,4 +104,11 @@ def parse_config(raw):
         search=search,
         factory=factory,
         incremental_value=IncrementalValueConfig(policy.mode, policy.max_abs_correlation, policy.min_overlap),
+        validation=ValidationConfig(int((agent.get("yearly_policy") or {}).get("min_years", 2)),),
+        statistical=StatisticalConfig(str((agent.get("statistical_policy") or {}).get("mode", "required_when_available"))),
+        robustness=RobustnessConfig(
+            float((agent.get("robustness_policy") or {}).get("min_sharpe_retention", 0.7)),
+            float((agent.get("robustness_policy") or {}).get("min_fitness_retention", 0.6)),
+        ),
+        simulation_config=SimulationConfig(copy.deepcopy(raw.get("simulation", {}))),
     )

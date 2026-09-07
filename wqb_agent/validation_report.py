@@ -18,7 +18,8 @@ import time
 from .metrics import checks_passed, num, score_of
 from .evidence_status import annotate_evidence
 from .robustness import evaluate_robustness
-from .schema import CREATED_BY_VERSION
+from .schema import (CREATED_BY_VERSION, VALIDATION_VERSION,
+                      VALIDATION_PLAN_VERSION)
 
 
 REQUIRED_VARIABLES = (
@@ -300,7 +301,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         if item.get("requirement") == "REQUIRED" and item.get("variable") != "yearly_aggregates":
             item["acceptance"] = dict(policy)
     canonical = {
-        "schema_version": 3,
+        "schema_version": VALIDATION_PLAN_VERSION,
         "parent_fingerprint": fingerprint,
         "parent_expression": expression,
         "settings": settings or {},
@@ -314,7 +315,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
     }
     identity = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ValidationPlan({
-        "schema_version": 3,
+        "schema_version": VALIDATION_PLAN_VERSION,
         "plan_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16],
         "parent_expression": expression,
         "parent_fingerprint": fingerprint,
@@ -593,7 +594,7 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
     )
     status = "PASS" if plan_ok and parent_done and parent_checks and required_pass else "FAIL"
     return ValidationReport({
-        "schema_version": 1,
+        "schema_version": VALIDATION_VERSION,
         "created_by_version": CREATED_BY_VERSION,
         "status": status,
         "stable": status == "PASS",

@@ -56,7 +56,9 @@ from .validation_report import (
     default_validation_plan,
 )
 from .config import AppConfig
-from .schema import CREATED_BY_VERSION
+from .research_evidence import ResearchEvidenceBundle
+from .schema import (CREATED_BY_VERSION, CHECKPOINT_VERSION, VALIDATION_VERSION,
+                      SIMULATION_RESULTS_VERSION)
 
 SEED_HYPOTHESES = [
     {
@@ -1242,7 +1244,7 @@ class Agent:
         os.makedirs(self.state_dir, exist_ok=True)
         path = self._proposal_checkpoint_path(round_no)
         data = {
-            "schema_version": 1,
+            "schema_version": CHECKPOINT_VERSION,
             "created_by_version": CREATED_BY_VERSION,
             "round_no": round_no,
             "hypothesis": hypothesis,
@@ -2060,7 +2062,7 @@ class Agent:
             append_jsonl_if_unique(
                 os.path.join(self.state_dir, "validation_reports.jsonl"),
                 {
-                    "schema_version": 1,
+                    "schema_version": VALIDATION_VERSION,
                     "created_by_version": "alpha-factory",
                     "parent_id": parent.id,
                     "parent_expression": parent.expression,
@@ -2105,6 +2107,16 @@ class Agent:
             quality, robustness, statistical, incremental_decision,
             "PASS" if platform_pass else "FAIL",
         )
+        experiment.research_evidence_bundle = ResearchEvidenceBundle.from_parts(
+            {"label": quality, "effective_trial_count": self.trial_ledger.summarize_cached(
+                os.path.join(self.state_dir, "trial_ledger.summary.json")
+            ).get("effective_trial_count")},
+            report.get("dimensions", {}).get("robustness") or report,
+            report.get("statistical_evidence") or {},
+            incremental,
+            getattr(experiment, "yearly_evidence", None) or {},
+            platform,
+        ).as_dict()
         self.trial_ledger.record_outcome_settled(
             experiment, reward=final.get("reward"),
             reward_version=final.get("reward_version", "reward_v1"),
@@ -2114,6 +2126,7 @@ class Agent:
             incremental_decision=incremental_decision,
             research_classification=experiment.research_classification,
             incremental_evidence=incremental,
+            research_evidence_bundle=experiment.research_evidence_bundle,
             timestamp=final.get("settled_at") or time.time(),
         )
         try:
@@ -2219,7 +2232,9 @@ class Agent:
         checkpoint_rows = self._search_checkpoint_rows()
         snapshot = SearchSnapshot.from_sources(
             self.trajectory.experiments,
-            self.trial_ledger.summarize(),
+            self.trial_ledger.summarize_cached(
+                os.path.join(self.state_dir, "trial_ledger.summary.json")
+            ),
             checkpoint_rows,
         )
         self.search_policy.restore(snapshot.allocator_state(
@@ -2241,7 +2256,9 @@ class Agent:
                 stored = row.get("search_outcome")
                 if isinstance(stored, dict):
                     outcomes.append(stored)
-        summary = self.trial_ledger.summarize()
+        summary = self.trial_ledger.summarize_cached(
+            os.path.join(self.state_dir, "trial_ledger.summary.json")
+        )
         summary["committed_simulations"] = sum(
             1 for row in events if row.get("phase") == "simulation_committed"
         )
@@ -2321,7 +2338,7 @@ class Agent:
         atomic_write_json_if_changed(
             path,
             {
-                "schema_version": 1,
+                "schema_version": SIMULATION_RESULTS_VERSION,
                 "created_by_version": CREATED_BY_VERSION,
                 "round_no": round_no,
                 "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),

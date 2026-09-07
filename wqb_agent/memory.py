@@ -31,6 +31,7 @@ import zlib
 from functools import lru_cache
 
 from .artifacts import atomic_write_json_if_changed
+from .schema import MEMORY_VERSION
 from .expression import canonical_expression
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
@@ -238,7 +239,7 @@ class ExperienceMemory:
     def save(self):
         self.compress()
         data = {
-            "schema_version": 2,
+            "schema_version": MEMORY_VERSION,
             "current_best": self.current_best,
             "lessons": self.lessons,
             "avoid": self.avoid,

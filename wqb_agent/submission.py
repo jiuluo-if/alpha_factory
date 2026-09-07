@@ -12,7 +12,7 @@ import time
 from .artifacts import atomic_write_json_if_changed
 from .metrics import check_pass
 from .incremental_policy import incremental_gate
-from .schema import CREATED_BY_VERSION
+from .schema import CREATED_BY_VERSION, SUBMISSION_POOL_VERSION
 
 
 _SELF_CORRELATION = re.compile(r"self[-_ ]?correlation", re.I)
@@ -84,6 +84,8 @@ def latest_active_snapshot(state_dir):
             "path": os.path.abspath(path),
             "fetched_at": payload.get("fetched_at"),
             "total": payload.get("total"),
+            "schema_version": payload.get("schema_version", 1),
+            "created_by_version": payload.get("created_by_version", CREATED_BY_VERSION),
         }
     except (OSError, ValueError, json.JSONDecodeError):
         return None
@@ -100,7 +102,7 @@ class SubmissionPool:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
-                return {"schema_version": 1, "created_by_version": CREATED_BY_VERSION, "candidates": []}
+                return {"schema_version": SUBMISSION_POOL_VERSION, "created_by_version": CREATED_BY_VERSION, "candidates": []}
             candidates = data.get("candidates")
             if not isinstance(candidates, list):
                 data["candidates"] = []
@@ -108,7 +110,7 @@ class SubmissionPool:
                 data["candidates"] = [item for item in candidates if isinstance(item, dict)]
             return data
         except (OSError, ValueError, json.JSONDecodeError):
-            return {"schema_version": 1, "created_by_version": CREATED_BY_VERSION, "candidates": []}
+            return {"schema_version": SUBMISSION_POOL_VERSION, "created_by_version": CREATED_BY_VERSION, "candidates": []}
 
     def upsert(self, experiment, rating, correlation, active_snapshot):
         """Persist one manually reviewable candidate."""
@@ -126,7 +128,7 @@ class SubmissionPool:
         if not items:
             return []
         data = self._load()
-        data.setdefault("schema_version", 1)
+        data.setdefault("schema_version", SUBMISSION_POOL_VERSION)
         data.setdefault("created_by_version", CREATED_BY_VERSION)
         candidates = data.setdefault("candidates", [])
         records = []

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections import Counter, defaultdict
 
-from .artifacts import append_jsonl_if_unique, iter_jsonl_objects
+from .artifacts import append_jsonl_if_unique, iter_jsonl_objects, atomic_write_json_if_changed
 from .expression import canonical_expression
 from .identity import candidate_identity
 from .search_policy import structural_fingerprint
-from .schema import CREATED_BY_VERSION
+from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
 
 
 PHASES = {
@@ -35,7 +36,7 @@ def _text(value, default="unknown"):
 class TrialLedger:
     """Record proposal lifecycle facts without replacing trajectory/checkpoint."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = TRIAL_LEDGER_VERSION
 
     def __init__(self, path):
         self.path = path
@@ -114,6 +115,7 @@ class TrialLedger:
                                statistical_decision=None, incremental_decision=None,
                                research_classification=None, incremental_evidence=None,
                                reward_quality="FINAL_EVIDENCE",
+                               research_evidence_bundle=None,
                                timestamp=None):
         settled_at = timestamp if timestamp is not None else time.time()
         settlement = {
@@ -127,6 +129,7 @@ class TrialLedger:
             "incremental_decision": incremental_decision,
             "research_classification": research_classification,
             "incremental_evidence": incremental_evidence,
+            "research_evidence_bundle": research_evidence_bundle,
             "settled_at": settled_at,
         }
         semantic = dict(settlement)
@@ -276,6 +279,31 @@ class TrialLedger:
                 for key, values in groups.items()
             },
         }
+
+    def summarize_cached(self, cache_path):
+        """Use a bounded disposable summary projection keyed by ledger signature."""
+        try:
+            stat = os.stat(self.path)
+            signature = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        except OSError:
+            signature = {"size": 0, "mtime_ns": 0}
+        try:
+            with open(cache_path, encoding="utf-8") as handle:
+                cached = json.load(handle)
+            if isinstance(cached, dict) and cached.get("source_signature") == signature:
+                summary = cached.get("summary")
+                if isinstance(summary, dict):
+                    return summary
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        summary = self.summarize()
+        atomic_write_json_if_changed(cache_path, {
+            "schema_version": self.SCHEMA_VERSION,
+            "created_by_version": CREATED_BY_VERSION,
+            "source_signature": signature,
+            "summary": summary,
+        }, sort_keys=True)
+        return summary
 
     @staticmethod
     def _arm_counts(latest_by_trial):

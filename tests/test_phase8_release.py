@@ -49,7 +49,8 @@ class Phase8ReleaseTests(unittest.TestCase):
 
     def test_registry_covers_persistent_artifacts(self):
         for name in ("trajectory", "trial_ledger", "checkpoint", "validation",
-                     "submission_pool", "fields_cache", "evidence_cache", "active_snapshot"):
+                     "submission_pool", "fields_cache", "evidence_cache", "active_snapshot",
+                     "simulation_results", "memory", "search_snapshot", "validation_plan"):
             self.assertIn(name, ARTIFACT_SCHEMAS)
 
     def test_legacy_v2_and_current_migrations_are_idempotent(self):

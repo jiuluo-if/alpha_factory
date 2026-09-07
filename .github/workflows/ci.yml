@@ -13,8 +13,12 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Run unit tests
-        run: python -m unittest discover -s tests
-      - name: Compile production modules
+        run: python -m pip install .
+      - name: Syntax layer
         run: python -m compileall -q wqb_agent scripts tests
+      - name: Unit layer
+        run: python -m unittest discover -s tests
+      - name: Offline doctor
+        run: python main.py --doctor --config config.example.json --state-dir .ci_state
+      - name: Offline state audit
+        run: python main.py --audit-state --config config.example.json --state-dir tests/fixtures/state

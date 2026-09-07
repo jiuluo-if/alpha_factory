@@ -8,12 +8,15 @@ from wqb_agent.incremental_value import (
     select_trusted_pool,
     behavior_clusters,
 )
+from wqb_agent.alpha_pool import build_pool_snapshot
+from wqb_agent.incremental_policy import incremental_gate
+from wqb_agent.behavior import extract_behavior_series
 from wqb_agent.research_evidence import ResearchEvidenceBundle, classify_research
 from wqb_agent.robustness import evaluate_robustness, retention
-from wqb_agent.search_calibration import SearchPolicyReplay, reward_v2
+from wqb_agent.search_calibration import SearchPolicyReplay, reward_v2, build_search_calibration
 from wqb_agent.search_outcome import SearchOutcome, extract_statistical_decision, reward_v1
 from wqb_agent.search_policy import SearchPolicy
-from wqb_agent.submission import SubmissionPool
+from wqb_agent.submission import SubmissionPool, submission_eligibility
 from wqb_agent.state import Experiment
 from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.validation_report import build_validation_report, default_validation_plan
@@ -21,6 +24,84 @@ from wqb_agent.yearly import build_yearly_evidence
 
 
 class Phase7Tests(unittest.TestCase):
+    def test_calibration_does_not_report_zero_behavior_clusters(self):
+        report = build_search_calibration({"submitted_count": 1}, outcomes=[{"proposal_id": "p"}])
+        self.assertNotIn("behavior_cluster_count", report)
+        self.assertNotIn("mean_cluster_size", report)
+    def test_incremental_policy_gate_has_explicit_modes(self):
+        evidence = {"availability": "AVAILABLE", "decision": "FAIL"}
+        self.assertFalse(incremental_gate(evidence, "required_when_available")["eligible"])
+        self.assertTrue(incremental_gate(evidence, "advisory")["eligible"])
+        self.assertFalse(incremental_gate({"availability": "UNAVAILABLE", "decision": "UNAVAILABLE"}, "required")["eligible"])
+
+    def test_behavior_series_missing_pnl_is_unavailable(self):
+        result = extract_behavior_series({"metrics": {"returns": 0.2}, "yearly_evidence": {}})
+        self.assertEqual(result["availability"], "UNAVAILABLE")
+        self.assertIsNone(result["series"])
+
+    def test_behavior_series_accepts_live_verified_pnl_only(self):
+        result = extract_behavior_series({
+            "pnl": {"status": "LIVE_VERIFIED", "series": {"2024-01-01": 0.1}},
+        })
+        self.assertEqual(result["availability"], "AVAILABLE")
+        self.assertEqual(result["source"], "LIVE_VERIFIED_PNL")
+
+    def test_pool_snapshot_as_of_excludes_unknown_and_future_members(self):
+        snapshot = build_pool_snapshot([
+            {"alpha_id": "known", "status": "DONE", "checks_passed": True,
+             "identity": "id-1", "behavior_series": {"a": 1}, "pool_entered_at": 5},
+            {"alpha_id": "missing-time", "status": "DONE", "checks_passed": True,
+             "identity": "id-2", "behavior_series": {"a": 1}},
+            {"alpha_id": "future", "status": "DONE", "checks_passed": True,
+             "identity": "id-3", "behavior_series": {"a": 1}, "pool_entered_at": 20},
+        ], as_of=10, snapshot_id="snap-1")
+        self.assertEqual(snapshot.snapshot_id, "snap-1")
+        self.assertEqual([row["alpha_id"] for row in snapshot.members], ["known"])
+
+    def test_trusted_pool_as_of_excludes_unknown_timestamp(self):
+        rows = select_trusted_pool([
+            {"alpha_id": "unknown", "status": "DONE", "checks_passed": True,
+             "identity": "i", "series": {"a": 1}},
+        ], as_of=10)
+        self.assertEqual(rows, [])
+
+    def test_submission_eligibility_exposes_incremental_reason(self):
+        result = submission_eligibility(
+            platform_pass=True, health=True, validation=True, yearly=True,
+            incremental={"availability": "AVAILABLE", "decision": "FAIL"},
+            incremental_mode="required_when_available",
+        )
+        self.assertFalse(result["eligible"])
+        self.assertIn("incremental_value:FAIL", result["reasons"])
+
+    def test_advisory_incremental_fail_is_allowed_with_reason(self):
+        result = submission_eligibility(
+            platform_pass=True, health=True, validation=True, yearly=True,
+            incremental={"availability": "AVAILABLE", "decision": "FAIL"},
+            incremental_mode="advisory",
+        )
+        self.assertTrue(result["eligible"])
+        self.assertIn("incremental_value:FAIL", result["reasons"])
+
+    def test_semantic_identical_settlement_ignores_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = TrialLedger(os.path.join(tmp, "ledger.jsonl"))
+            trial = Experiment(1, "h", "rank(x)", {}, ["x"])
+            trial.proposal_id = "p1"
+            ledger.record_outcome_settled(trial, reward=0.8, timestamp=1,
+                                          incremental_decision="PASS")
+            ledger.record_outcome_settled(trial, reward=0.8, timestamp=2,
+                                          incremental_decision="PASS")
+            with open(ledger.path, encoding="utf-8") as handle:
+                self.assertEqual(len(handle.readlines()), 1)
+
+    def test_legacy_fitness_reward_is_marked_approximate(self):
+        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
+        exp.status = "DONE"
+        exp.metrics = {"fitness": 0.4, "sharpe": 0.4}
+        outcome = SearchOutcome.from_experiment(exp)
+        self.assertEqual(outcome.as_dict()["reward_quality"], "LEGACY_APPROXIMATE")
+
     def test_round_one_replay_cannot_select_round_two_candidate(self):
         replay = SearchPolicyReplay([
             {"proposal_id": "r2", "round": 2, "candidate_available_at": 2,

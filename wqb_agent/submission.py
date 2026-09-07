@@ -11,9 +11,36 @@ import time
 
 from .artifacts import atomic_write_json_if_changed
 from .metrics import check_pass
+from .incremental_policy import incremental_gate
+from .schema import CREATED_BY_VERSION
 
 
 _SELF_CORRELATION = re.compile(r"self[-_ ]?correlation", re.I)
+
+
+def submission_eligibility(*, platform_pass, health, validation, yearly,
+                           incremental=None, incremental_mode="required_when_available"):
+    """Return independent eligibility reasons; never auto-submits."""
+    reasons = []
+    for name, value in (("platform", platform_pass), ("health", health),
+                        ("validation", validation), ("yearly", yearly)):
+        if value is not True:
+            reasons.append("%s:FAIL" % name)
+    gate = incremental_gate(incremental, incremental_mode)
+    reasons.extend(gate["reasons"])
+    if not gate["eligible"]:
+        reasons.append("incremental_policy:%s" % incremental_mode)
+    normalized_mode = str(incremental_mode).lower()
+    blocking = [reason for reason in reasons
+                if not (
+                    reason.startswith("incremental_value:") and
+                    (normalized_mode == "advisory" or
+                     (normalized_mode == "required_when_available" and
+                      str(gate.get("status")) in {"UNAVAILABLE", "INCONCLUSIVE"} and
+                      str((incremental or {}).get("availability", "")).upper() != "AVAILABLE"))
+                )]
+    return {"eligible": not blocking, "reasons": reasons,
+            "incremental": gate, "submission": "MANUAL_REQUIRED"}
 
 
 def self_correlation_evidence(metrics):
@@ -73,7 +100,7 @@ class SubmissionPool:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
-                return {"schema_version": 1, "candidates": []}
+                return {"schema_version": 1, "created_by_version": CREATED_BY_VERSION, "candidates": []}
             candidates = data.get("candidates")
             if not isinstance(candidates, list):
                 data["candidates"] = []
@@ -81,7 +108,7 @@ class SubmissionPool:
                 data["candidates"] = [item for item in candidates if isinstance(item, dict)]
             return data
         except (OSError, ValueError, json.JSONDecodeError):
-            return {"schema_version": 1, "candidates": []}
+            return {"schema_version": 1, "created_by_version": CREATED_BY_VERSION, "candidates": []}
 
     def upsert(self, experiment, rating, correlation, active_snapshot):
         """Persist one manually reviewable candidate."""
@@ -100,6 +127,7 @@ class SubmissionPool:
             return []
         data = self._load()
         data.setdefault("schema_version", 1)
+        data.setdefault("created_by_version", CREATED_BY_VERSION)
         candidates = data.setdefault("candidates", [])
         records = []
         for experiment, rating, correlation, active_snapshot in items:
@@ -128,6 +156,17 @@ class SubmissionPool:
                     if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
                 "max_abs_corr": (getattr(experiment, "incremental_evidence", None) or {}).get("max_abs_corr")
                     if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "median_abs_corr": (getattr(experiment, "incremental_evidence", None) or {}).get("median_abs_corr")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "cluster_id": (getattr(experiment, "incremental_evidence", None) or {}).get("cluster_id")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "cluster_size": (getattr(experiment, "incremental_evidence", None) or {}).get("cluster_size")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "pool_snapshot_id": (getattr(experiment, "incremental_evidence", None) or {}).get("snapshot_id")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "pool_size": (getattr(experiment, "incremental_evidence", None) or {}).get("pool_size")
+                    if isinstance(getattr(experiment, "incremental_evidence", None), dict) else None,
+                "submission_eligibility": getattr(experiment, "submission_eligibility", None),
                 "rating": rating,
                 "self_correlation": correlation,
                 "active_snapshot": active_snapshot,

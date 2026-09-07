@@ -150,6 +150,7 @@ def settle_search_outcome(provisional, *, validation_report=None,
         "yearly_coverage": (yearly_evidence or {}).get("coverage_status") if isinstance(yearly_evidence, dict) else None,
         "platform_pass": platform_pass,
         "reward": reward,
+        "reward_quality": "FINAL_EVIDENCE",
         "outcome_kind": "FINAL",
     })
     return row
@@ -169,6 +170,7 @@ class SearchOutcome:
     parent_delta: float | None
     reward: float | None
     reward_version: str = REWARD_VERSION
+    reward_quality: str = "LEGACY_APPROXIMATE"
 
     @classmethod
     def from_experiment(cls, experiment, *, validation=None, parent=None,
@@ -212,6 +214,7 @@ class SearchOutcome:
             novelty=novelty,
             parent_delta=parent_delta,
             reward=reward,
+            reward_quality=("LEGACY_APPROXIMATE" if validation is None else "PROVISIONAL_EVIDENCE"),
         )
 
     def as_dict(self):
@@ -228,5 +231,6 @@ class SearchOutcome:
             "parent_delta": self.parent_delta,
             "reward": self.reward,
             "reward_version": self.reward_version,
+            "reward_quality": self.reward_quality,
             "outcome_kind": "PROVISIONAL",
         }

@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 import re
 
 from .search_policy import BudgetAllocator, structural_fingerprint
+from .schema import CREATED_BY_VERSION
 
 
 class SearchSnapshot(dict):
@@ -112,6 +113,7 @@ class SearchSnapshot(dict):
 
         return cls({
             "schema_version": 1,
+            "created_by_version": CREATED_BY_VERSION,
             "arms": {key: dict(value) for key, value in arms.items()},
             "family_counts": dict(family_counts),
             "structural_family_counts": dict(structural_counts),

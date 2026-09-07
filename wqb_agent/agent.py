@@ -45,11 +45,18 @@ from .reflection import Reflector
 from .simulator import Simulator
 from .state import Experiment, ResearchState, Trajectory
 from .submission import SubmissionPool, latest_active_snapshot, self_correlation_evidence
+from .submission import submission_eligibility
 from .trial_ledger import TrialLedger
+from .behavior import extract_behavior_series
+from .alpha_pool import build_pool_snapshot
+from .incremental_policy import IncrementalValuePolicy
+from .incremental_value import build_incremental_value
 from .validation_report import (
     build_validation_report,
     default_validation_plan,
 )
+from .config import AppConfig
+from .schema import CREATED_BY_VERSION
 
 SEED_HYPOTHESES = [
     {
@@ -111,6 +118,8 @@ EXPLORATION_HYPOTHESES = [
 class Agent:
     def __init__(self, client, config):
         self.client = client
+        if isinstance(config, AppConfig):
+            config = config.as_dict()
         self.simulation_settings = config["simulation"]
         agent_cfg = config["agent"]
         self.state_dir = agent_cfg.get("state_dir", ".wqb_state")
@@ -162,6 +171,12 @@ class Agent:
             "max_drawdown_multiple": 1.5,
             "require_checks_passed": True,
         })
+        incremental_cfg = dict(agent_cfg.get("incremental_value") or {})
+        self.incremental_policy = IncrementalValuePolicy(
+            mode=incremental_cfg.get("mode", "required_when_available"),
+            max_abs_correlation=incremental_cfg.get("max_abs_correlation", 0.7),
+            min_overlap=incremental_cfg.get("min_overlap", 60),
+        )
         field_selection = agent_cfg.get("field_selection") or {}
         self.max_field_alpha_count = field_selection.get("max_alpha_count")
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md"))
@@ -1228,6 +1243,7 @@ class Agent:
         path = self._proposal_checkpoint_path(round_no)
         data = {
             "schema_version": 1,
+            "created_by_version": CREATED_BY_VERSION,
             "round_no": round_no,
             "hypothesis": hypothesis,
             "experiments": [exp.to_dict() for exp in experiments],
@@ -1953,6 +1969,18 @@ class Agent:
                 and self._correlation_under(exp.self_correlation, corr_cap)
                 and exp.self_correlation["status"] == "PASS"
             )
+            eligibility = submission_eligibility(
+                platform_pass=(exp.self_correlation["status"] == "PASS"),
+                health=healthy,
+                validation=(exp.validation_status == "STABLE" and
+                            isinstance(exp.validation_report, dict) and
+                            exp.validation_report.get("status") == "PASS"),
+                yearly=yearly_ok,
+                incremental=getattr(exp, "incremental_evidence", None),
+                incremental_mode=self.incremental_policy.mode,
+            )
+            exp.submission_eligibility = eligibility
+            eligible = eligible and eligibility["eligible"]
             if eligible:
                 eligible_records.append((
                     exp, rating, exp.self_correlation, active_snapshot
@@ -2032,6 +2060,8 @@ class Agent:
             append_jsonl_if_unique(
                 os.path.join(self.state_dir, "validation_reports.jsonl"),
                 {
+                    "schema_version": 1,
+                    "created_by_version": "alpha-factory",
                     "parent_id": parent.id,
                     "parent_expression": parent.expression,
                     "plan_id": report.get("plan_id"),
@@ -2055,7 +2085,7 @@ class Agent:
         provisional = getattr(experiment, "provisional_outcome", None) or getattr(experiment, "search_outcome", None)
         if not isinstance(provisional, dict) or not isinstance(report, dict):
             return None
-        incremental = getattr(experiment, "incremental_evidence", None) or {}
+        incremental = self._settle_incremental_evidence(experiment)
         incremental_decision = incremental.get("decision", "UNAVAILABLE") if isinstance(incremental, dict) else "UNAVAILABLE"
         platform = (report.get("dimensions") or {}).get("platform_quality") or {}
         platform_pass = platform.get("status") == "PASS"
@@ -2078,10 +2108,12 @@ class Agent:
         self.trial_ledger.record_outcome_settled(
             experiment, reward=final.get("reward"),
             reward_version=final.get("reward_version", "reward_v1"),
+            reward_quality=final.get("reward_quality", "FINAL_EVIDENCE"),
             base_quality=quality, robustness=robustness,
             statistical_decision=statistical,
             incremental_decision=incremental_decision,
             research_classification=experiment.research_classification,
+            incremental_evidence=incremental,
             timestamp=final.get("settled_at") or time.time(),
         )
         try:
@@ -2089,6 +2121,46 @@ class Agent:
         except (TypeError, ValueError):
             pass
         return final
+
+    def _settle_incremental_evidence(self, experiment):
+        """Create production evidence from the only accepted behavior source.
+
+        The current client has no LIVE_VERIFIED PnL capability, so normal
+        candidates settle explicitly as UNAVAILABLE rather than receiving a
+        correlation fabricated from aggregate metrics.
+        """
+        behavior = extract_behavior_series(experiment)
+        members = []
+        for row in list(self.trajectory.experiments or []):
+            series = extract_behavior_series(row)
+            members.append({
+                "alpha_id": getattr(row, "alpha_id", None),
+                "candidate_id": getattr(row, "candidate_id", None),
+                "status": getattr(row, "status", None),
+                "checks_passed": checks_passed(getattr(row, "metrics", None)),
+                "identity": getattr(row, "submission_fingerprint", None),
+                "behavior_series": series.get("series"),
+                "pool_entered_at": getattr(row, "created_at", None),
+            })
+        snapshot = build_pool_snapshot(members, as_of=time.time())
+        evidence = build_incremental_value(
+            getattr(experiment, "candidate_id", None) or getattr(experiment, "alpha_id", None) or experiment.id,
+            behavior.get("series"), snapshot.members,
+            min_overlap=self.incremental_policy.min_overlap,
+            max_abs_correlation=self.incremental_policy.max_abs_correlation,
+            as_of=snapshot.as_of,
+        )
+        result = evidence.as_dict() if hasattr(evidence, "as_dict") else dict(evidence)
+        result.update({
+            "availability": behavior.get("availability"),
+            "capability": behavior.get("capability"),
+            "source": behavior.get("source"),
+            "snapshot_id": snapshot.snapshot_id,
+            "pool_size": len(snapshot.members),
+            "policy": self.incremental_policy.mode,
+        })
+        experiment.incremental_evidence = result
+        return result
 
     def _alpha_rating(self, metrics):
         """Internal Excellent/Spectacular discipline from AGENTS.md."""
@@ -2249,6 +2321,8 @@ class Agent:
         atomic_write_json_if_changed(
             path,
             {
+                "schema_version": 1,
+                "created_by_version": CREATED_BY_VERSION,
                 "round_no": round_no,
                 "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "total_elapsed_sec": total_elapsed_sec,

@@ -41,7 +41,7 @@ def select_trusted_pool(rows, *, as_of=None, policy="DONE_CHECKS_IDENTITY"):
         if row.get("checks_passed") is not True or not row.get("identity"):
             continue
         entered = _num(row.get("pool_entered_at"))
-        if as_of is not None and entered is not None and entered > _num(as_of):
+        if as_of is not None and (entered is None or entered > _num(as_of)):
             continue
         result.append(dict(row))
     return result
@@ -111,9 +111,16 @@ def build_incremental_value(candidate_id, candidate_series, pool, *, min_overlap
     max_abs = correlations[0][0]
     median = correlations[len(correlations) // 2][0]
     decision = "FAIL" if max_abs > max_abs_correlation else "PASS"
+    cluster_id = None
+    cluster_size = None
+    if max_abs >= max_abs_correlation and best is not None:
+        cluster_id = "cluster-" + hashlib.sha256(
+            "|".join(sorted((str(candidate_id), str(best[2])))).encode()
+        ).hexdigest()[:12]
+        cluster_size = 2
     return IncrementalValueEvidence(
         "AVAILABLE", "VERIFIED", decision, str(candidate_id), len(trusted),
-        max_abs, median, correlations[0][2], None, None,
+        max_abs, median, correlations[0][2], cluster_id, cluster_size,
         "redundant behavior detected" if decision == "FAIL" else "behavior below redundancy threshold",
         best[3], best[3] / max(1, len(candidate)), best[1],
         pool_policy, len(trusted), _snapshot_id(trusted),

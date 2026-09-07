@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from collections import Counter, defaultdict
 
@@ -10,6 +11,7 @@ from .artifacts import append_jsonl_if_unique, iter_jsonl_objects
 from .expression import canonical_expression
 from .identity import candidate_identity
 from .search_policy import structural_fingerprint
+from .schema import CREATED_BY_VERSION
 
 
 PHASES = {
@@ -63,13 +65,16 @@ class TrialLedger:
             "",
         )
         state = _text(self._value(trial, "status"), "UNKNOWN")
-        identity = f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{timestamp or ''}|{reward}"
+        stable_settlement = (settlement or {}).get("settlement_id") if phase == "research_outcome_settled" else None
+        identity = (f"settlement|{stable_settlement}" if stable_settlement else
+                    f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{timestamp or ''}|{reward}")
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
         if not isinstance(fields, (list, tuple)):
             fields = []
         row = {
             "schema_version": self.SCHEMA_VERSION,
+            "created_by_version": CREATED_BY_VERSION,
             "event_id": event_id,
             "trial_id": trial_id,
             "candidate_id": candidate_id,
@@ -107,20 +112,28 @@ class TrialLedger:
     def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
                                base_quality=None, robustness=None,
                                statistical_decision=None, incremental_decision=None,
-                               research_classification=None,
+                               research_classification=None, incremental_evidence=None,
+                               reward_quality="FINAL_EVIDENCE",
                                timestamp=None):
         settled_at = timestamp if timestamp is not None else time.time()
         settlement = {
             "proposal_id": self._value(trial, "proposal_id"),
             "reward": reward,
             "reward_version": reward_version,
+            "reward_quality": reward_quality,
             "base_quality": base_quality,
             "robustness": robustness,
             "statistical_decision": statistical_decision,
             "incremental_decision": incremental_decision,
             "research_classification": research_classification,
+            "incremental_evidence": incremental_evidence,
             "settled_at": settled_at,
         }
+        semantic = dict(settlement)
+        semantic.pop("settled_at", None)
+        settlement["settlement_id"] = hashlib.sha256(
+            json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
         return self.record(trial, "research_outcome_settled", outcome="SETTLED",
                            reason_code="FINAL", timestamp=settled_at, reward=reward,
                            settlement=settlement)

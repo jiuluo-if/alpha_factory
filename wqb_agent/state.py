@@ -4,6 +4,7 @@ import time
 import uuid
 
 from .expression import canonical_expression
+from .schema import SCHEMA_VERSION, CREATED_BY_VERSION
 
 def dataset_ref(value):
     """数据集条目归一化为字符串 id。
@@ -43,7 +44,9 @@ class Experiment:
         self.final_outcome = None
         self.robustness_evidence = None
         self.incremental_evidence = None
+        self.pnl_evidence = None
         self.research_classification = None
+        self.submission_eligibility = None
         self.novelty_score = None
         self.allocation_arm = None
         self.allocation_key = None
@@ -96,6 +99,8 @@ class Experiment:
 
     def to_dict(self):
         return {
+            "schema_version": SCHEMA_VERSION,
+            "created_by_version": CREATED_BY_VERSION,
             "id": self.id,
             "candidate_id": self.candidate_id,
             "proposal_id": self.proposal_id,
@@ -117,7 +122,9 @@ class Experiment:
             "final_outcome": self.final_outcome,
             "robustness_evidence": self.robustness_evidence,
             "incremental_evidence": self.incremental_evidence,
+            "pnl_evidence": self.pnl_evidence,
             "research_classification": self.research_classification,
+            "submission_eligibility": self.submission_eligibility,
             "novelty_score": self.novelty_score,
             "allocation_arm": self.allocation_arm,
             "allocation_key": self.allocation_key,
@@ -188,7 +195,9 @@ class Experiment:
         exp.final_outcome = data.get("final_outcome")
         exp.robustness_evidence = data.get("robustness_evidence")
         exp.incremental_evidence = data.get("incremental_evidence")
+        exp.pnl_evidence = data.get("pnl_evidence")
         exp.research_classification = data.get("research_classification")
+        exp.submission_eligibility = data.get("submission_eligibility")
         exp.novelty_score = data.get("novelty_score")
         exp.allocation_arm = data.get("allocation_arm")
         exp.allocation_key = data.get("allocation_key")

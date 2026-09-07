@@ -60,7 +60,7 @@ def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), tra
     def ratio(numerator, denominator):
         return numerator / denominator if denominator else None
 
-    return {
+    result = {
         "candidate_count": int(summary.get("candidate_count", summary.get("candidate_generated_count", 0)) or 0),
         "submitted_count": submitted,
         "evaluated_count": len(evaluated),
@@ -86,8 +86,6 @@ def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), tra
         "stable_to_incremental_rate": ratio(len(incremental_pass), len(stable)),
         "incremental_pass_per_simulation": ratio(len(incremental_pass), committed),
         "portfolio_candidate_per_simulation": ratio(len(portfolio), committed),
-        "behavior_cluster_count": len({row.get("cluster_id") for row in outcome_rows if row.get("cluster_id")}),
-        "mean_cluster_size": (sum(cluster_sizes) / len(cluster_sizes) if cluster_sizes else None),
         "redundancy_rate": ratio(sum(1 for row in outcome_rows
                                       if str(row.get("incremental_decision", "")).upper() == "FAIL"),
                                   len([row for row in outcome_rows if row.get("incremental_decision") is not None])),
@@ -110,6 +108,13 @@ def build_search_calibration(ledger_summary=None, *, outcomes=(), events=(), tra
         ),
         "role_budget": dict(role_budget),
     }
+    cluster_ids = {row.get("cluster_id") for row in outcome_rows if row.get("cluster_id")}
+    if cluster_ids:
+        result["behavior_cluster_count"] = len(cluster_ids)
+        result["mean_cluster_size"] = (
+            sum(cluster_sizes) / len(cluster_sizes) if cluster_sizes else None
+        )
+    return result
 
 
 def reward_v2(*, reward, incremental_decision=None):

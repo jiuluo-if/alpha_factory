@@ -16,6 +16,7 @@ from contextlib import redirect_stdout
 
 from .artifacts import atomic_write_json_if_changed
 from .expression import canonical_expression
+from .schema import CREATED_BY_VERSION
 
 
 class _DiscardWriter:
@@ -142,6 +143,7 @@ class AIFactoryRunner:
         if session is None and os.path.exists(self.session_path):
             return {
                 "schema_version": 1,
+                "created_by_version": CREATED_BY_VERSION,
                 "status": "RECONCILE_REQUIRED",
                 "last_action": "INVALID_SESSION",
                 "last_result": {"status": "INVALID_SESSION"},
@@ -161,6 +163,7 @@ class AIFactoryRunner:
         if duration <= 0 or not session or session.get("status") != "RUNNING" or session.get("deadline", 0) <= now:
             session = {
                 "schema_version": 1,
+                "created_by_version": CREATED_BY_VERSION,
                 "session_id": uuid.uuid4().hex[:16],
                 "started_at": now,
                 "deadline": now + duration,

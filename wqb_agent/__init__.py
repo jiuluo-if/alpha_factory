@@ -8,6 +8,10 @@ from .search_outcome import (
 from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
 from .robustness import RobustnessEvidence, evaluate_robustness, retention
 from .incremental_value import IncrementalValueEvidence, build_incremental_value, select_trusted_pool
+from .incremental_policy import IncrementalValuePolicy, incremental_gate
+from .alpha_pool import AlphaPoolSnapshot, build_pool_snapshot
+from .behavior import extract_behavior_series
+from .diagnostics import DiagnosticEvent
 from .research_evidence import ResearchEvidenceBundle, classify_research
 from .identity import candidate_identity
 from .failures import (
@@ -41,6 +45,12 @@ __all__ = [
     "IncrementalValueEvidence",
     "build_incremental_value",
     "select_trusted_pool",
+    "IncrementalValuePolicy",
+    "incremental_gate",
+    "AlphaPoolSnapshot",
+    "build_pool_snapshot",
+    "extract_behavior_series",
+    "DiagnosticEvent",
     "ResearchEvidenceBundle",
     "classify_research",
     "candidate_identity",

@@ -1,1 +1,4 @@
-requests>=2.28
+# Compatibility entry point. Dependency versions are authoritative in
+# pyproject.toml; install this file only when an editable local package is
+# desired.
+-e .

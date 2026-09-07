@@ -106,6 +106,25 @@ class TestArchitectureBoundaries(unittest.TestCase):
             )
             self.assertIn("wqb_agent.metrics", source)
 
+    def test_only_transport_modules_can_submit_simulations(self):
+        allowed = {"client.py", "simulator.py", "agent.py"}
+        for filename in os.listdir(PACKAGE_ROOT):
+            if not filename.endswith(".py") or filename in allowed:
+                continue
+            with open(os.path.join(PACKAGE_ROOT, filename), encoding="utf-8") as handle:
+                source = handle.read()
+            self.assertNotIn("submit_simulation(", source,
+                             f"{filename} 创建了第二条 Simulation POST 路径")
+
+    def test_no_production_alpha_submission_endpoint(self):
+        for filename in os.listdir(PACKAGE_ROOT):
+            if not filename.endswith(".py") or filename == "client.py":
+                continue
+            with open(os.path.join(PACKAGE_ROOT, filename), encoding="utf-8") as handle:
+                source = handle.read().lower()
+            self.assertNotIn('"/submit"', source,
+                             f"{filename} 不得包含自动 Alpha submission endpoint")
+
 
 if __name__ == "__main__":
     unittest.main()

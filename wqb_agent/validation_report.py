@@ -18,6 +18,7 @@ import time
 from .metrics import checks_passed, num, score_of
 from .evidence_status import annotate_evidence
 from .robustness import evaluate_robustness
+from .schema import CREATED_BY_VERSION
 
 
 REQUIRED_VARIABLES = (
@@ -593,6 +594,7 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
     status = "PASS" if plan_ok and parent_done and parent_checks and required_pass else "FAIL"
     return ValidationReport({
         "schema_version": 1,
+        "created_by_version": CREATED_BY_VERSION,
         "status": status,
         "stable": status == "PASS",
         "candidate": "parent",

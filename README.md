@@ -25,6 +25,16 @@ python main.py --factory-status
 python main.py --factory-stop
 ```
 
+本地只读诊断使用：
+
+```powershell
+python main.py --doctor --config config.json
+python main.py --audit-state --config config.json
+```
+
+`--doctor` 不构造网络客户端、不提交 Simulation 或 Alpha；`--audit-state`
+只检查本地状态不变量。能力缺失保持 `UNKNOWN/UNAVAILABLE`，不会被当作通过。
+
 工厂默认最多运行 86400 秒、最多预留 300 个 Simulation，单轮最多生成100个 proposal，恢复未完成 checkpoint 优先；它仍通过同一个
 `Agent.run_proposals()` 提交，不旁路生产状态机；结束时只输出一份紧凑会话摘要。`factory_session.json`、
 `suggestions.json` 和 `proposals.json` 都是固定 canonical 文件，逻辑内容不变
@@ -62,6 +72,20 @@ proposal 必须使用 discovery 已证实的字段，并记录：`fields`、`dat
 `BASELINE` 是最小机制；`CHILD` 和 `ROBUSTNESS` 必须指向已完成 parent，且只能有一个 `change_type`。VECTOR 字段须先经可核验的 `vec_avg` 或 `vec_sum` 聚合，才可进入后续算子。
 
 每个 DONE 结果必须结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margin、全部 checks、健康数据与 SELF_CORRELATION 判读。`PROMISING` 不等于可提交；只有稳定、健康且相关性通过的候选才可进入人工审核池。
+
+证据字段按维度区分：`availability` 表示数据是否存在，`quality` 表示来源可信度，
+`decision` 表示该维度的研究判断；稳健性、统计、增量价值、平台检查分别记录，
+`research_classification` 不等于 `submission_eligibility`。增量价值默认采用
+`required_when_available`：缺少 LIVE_VERIFIED PnL 时保留 UNKNOWN/UNAVAILABLE，
+不阻断人工审核，但也不伪造行为相关性。
+
+## 已知限制
+
+- BRAIN 完整 REST 规范尚未官方固化；社区观察、fixture 和 LIVE_VERIFIED 能力分别标记。
+- 行为增量证据依赖可靠的 LIVE_VERIFIED return/PnL 序列；平台未提供时只能是 unavailable。
+- PBO 与有效独立试验数在非完整论文实现时明确标记为 proxy/approximate。
+- 系统不声明隐藏 OOS 结果，也不会自动提交最终 Alpha。
+- 删除 derived cache 后应从 append-only trajectory/ledger 重建；缓存不是事实源。
 
 ## 状态与文档
 

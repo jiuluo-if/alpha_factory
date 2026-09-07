@@ -509,8 +509,13 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
         pbo_value = num(stats.get("pbo_cscv", {}).get("pbo"))
         if num(max_pbo) is not None and pbo_value is not None and pbo_value > num(max_pbo):
             passed = False
-        stats["statistical_decision"] = "PASS" if passed else "FAIL"
-        stats["statistical_status"] = stats["statistical_decision"]
+        has_policy_threshold = bool(checks) or num(max_pbo) is not None
+        if not has_policy_threshold:
+            stats["statistical_decision"] = "INCONCLUSIVE"
+            stats["statistical_status"] = "INCONCLUSIVE"
+        else:
+            stats["statistical_decision"] = "PASS" if passed else "FAIL"
+            stats["statistical_status"] = stats["statistical_decision"]
     stats["policy_mode"] = statistical_mode
     if stats["statistical_status"] == "UNAVAILABLE" and statistical_mode == "required":
         dimensions["statistical_evidence"] = {"status": "FAIL", "evidence_status": "FAIL", "requirement": "REQUIRED", "reason": "statistical evidence required"}

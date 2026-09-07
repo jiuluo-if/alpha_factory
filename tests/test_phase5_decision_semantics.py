@@ -112,6 +112,12 @@ class TestPhase5EvidenceAndPlan(unittest.TestCase):
         self.assertEqual(report["statistical_evidence"]["statistical_decision"], "FAIL")
         self.assertNotEqual(report["statistical_evidence"]["statistical_status"], "PASS")
 
+    def test_calculation_without_policy_threshold_is_inconclusive(self):
+        parent = {"expression": "rank(close)", "status": "DONE", "metrics": {"checks": [{"pass": True}]}}
+        plan = default_validation_plan(parent)
+        report = build_validation_report(parent, [], plan, return_series=[.01, .02, .01, .02, .01, .02], trial_summary={"candidate_count": 2, "trial_sharpes": [0.1, 0.2]})
+        self.assertEqual(report["statistical_evidence"]["statistical_status"], "INCONCLUSIVE")
+
     def test_legacy_plan_migrates_to_v3_without_fake_dimension(self):
         legacy = default_validation_plan({"expression": "rank(close)", "settings": {}}, timestamp=1)
         legacy["schema_version"] = 2

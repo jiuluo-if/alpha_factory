@@ -13,6 +13,8 @@ def audit_state(state_dir):
     committed = set()
     submitted = set()
     settled = set()
+    checkpoint_terminal = {}
+    ledger_terminal = set()
     trajectory_path = os.path.join(state_dir, "trajectory.jsonl")
     try:
         with open(trajectory_path, encoding="utf-8") as handle:
@@ -55,6 +57,9 @@ def audit_state(state_dir):
                 if not isinstance(row, dict):
                     continue
                 status = str(row.get("status") or "").upper()
+                proposal_id = row.get("proposal_id")
+                if proposal_id and status in {"DONE", "FAILED", "SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
+                    checkpoint_terminal[str(proposal_id)] = status
                 if status == "SUBMIT_UNKNOWN" and row.get("budget_held") is False:
                     errors.append("unknown_not_budget_held")
                 if status in {"DONE", "FAILED", "SKIPPED"} and row.get("reserved") is True:
@@ -77,6 +82,8 @@ def audit_state(state_dir):
                     committed.add(str(proposal_id))
                 elif proposal_id and phase in {"simulation_submitted", "simulation_settled"}:
                     submitted.add(str(proposal_id))
+                if proposal_id and phase == "simulation_settled":
+                    ledger_terminal.add(str(proposal_id))
                 if phase != "research_outcome_settled":
                     continue
                 if proposal_id:
@@ -90,6 +97,8 @@ def audit_state(state_dir):
         pass
     if not submitted.issubset(committed) or not settled.issubset(submitted):
         errors.append("lifecycle_order")
+    if any(proposal_id not in ledger_terminal for proposal_id in checkpoint_terminal):
+        errors.append("checkpoint_ledger_mismatch")
 
     report_path = os.path.join(state_dir, "validation_reports.jsonl")
     try:

@@ -27,6 +27,18 @@ class Phase8ReleaseTests(unittest.TestCase):
                 "search_policy": {"max_simulations": 4, "validation_max_simulations": 2},
             }})
 
+    def test_research_allocation_is_typed(self):
+        config = parse_config({"simulation": {}, "agent": {
+            "research_allocation": {
+                "max_simulations": 8,
+                "maximum": {"EXPLOIT": 2, "VALIDATION": 3},
+            },
+            "search_policy": {"max_simulations": 8},
+            "factory": {"max_simulations": 10},
+        }})
+        self.assertEqual(config.research_allocation.max_simulations, 8)
+        self.assertEqual(config.research_allocation.maximum["VALIDATION"], 3)
+
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}
         once = migrate_artifact("submission_pool", legacy)
@@ -95,6 +107,20 @@ class Phase8ReleaseTests(unittest.TestCase):
             result = audit_state(tmp)
             self.assertFalse(result["ok"])
             self.assertIn("lifecycle_order", result["errors"])
+
+    def test_audit_detects_checkpoint_ledger_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
+                json.dump({"complete": True, "experiments": [{
+                    "status": "DONE", "proposal_id": "p"
+                }]}, handle)
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "phase": "simulation_committed", "proposal_id": "p"
+                }) + "\n")
+            result = audit_state(tmp)
+            self.assertFalse(result["ok"])
+            self.assertIn("checkpoint_ledger_mismatch", result["errors"])
 
     def test_audit_detects_orphan_validation_parent(self):
         with tempfile.TemporaryDirectory() as tmp:

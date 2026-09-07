@@ -13,12 +13,15 @@
 | 持久化 schema | `wqb_agent.schema` 及各写入器 | 新写入带版本与来源；读取侧兼容旧格式，不回写真实状态 |
 | 状态诊断 | `python main.py --doctor --config config.example.json --state-dir .wqb_state` | 只读、无网络；会如实报告未完成 checkpoint、`SUBMIT_UNKNOWN` 和能力未知 |
 | 状态审计 | `python main.py --audit-state --config config.example.json --state-dir tests/fixtures` | 只读；检查生命周期、重复结算、孤儿验证、预算占用和提交池引用 |
+| checkpoint/ledger 对账 | `wqb_agent.audit.audit_state` | 终态 checkpoint 必须有对应 `simulation_settled` ledger 事实，否则报告 `checkpoint_ledger_mismatch` |
 | 只读烟测 | `python main.py --smoke-readonly --config config.example.json` | 仅读取 datasets/datafields；不执行 Simulation、提交或状态写入 |
 | 生产入口 | 根目录 `AGENTS.md` 约束与 `main.py` | 生产仍只能走 `--suggest` → canonical proposals → `--run-proposals` |
 | 提交安全 | `wqb_agent.submission`、架构静态测试 | 只生成 `MANUAL_REQUIRED` 候选；代码不自动提交 Alpha |
 | 网络依赖隔离 | `test_doctor_and_audit_are_network_free` | 诊断与审计在 HTTP Session 被禁止时仍可执行 |
+| 离线 CLI | `python main.py --doctor --offline`、`python main.py --audit-state --offline` | `--offline` 只允许用于只读诊断/审计，并在入口拒绝与生产或 smoke 混用 |
 | 安装与 CI | `pyproject.toml`、`.github/workflows/ci.yml` | 使用包安装、编译、单元测试、离线诊断/审计；CI 不执行烟测 |
 | 性能边界 | `TrialLedger.summarize_cached`、只读长跑探针 | 已提供可重建摘要缓存；未发现经证实的热点前不做猜测性优化 |
+| 配置类型 | `wqb_agent.config.ResearchAllocation` | 角色分配与搜索预算、工厂硬上限分层表达，解析仍只发生一次 |
 
 ## 当前真实状态说明
 

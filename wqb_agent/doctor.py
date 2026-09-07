@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-from .config import parse_config
+from .config import AppConfig, parse_config
 from .diagnostics import DiagnosticEvent
 
 
@@ -15,7 +15,7 @@ def _readable(path):
 
 
 def run_doctor(raw_config, *, offline=True):
-    parsed = parse_config(raw_config)
+    parsed = raw_config if isinstance(raw_config, AppConfig) else parse_config(raw_config)
     state_dir = parsed.agent.get("state_dir", ".wqb_state")
     result = {
         "config_valid": True,
@@ -85,7 +85,7 @@ def run_doctor(raw_config, *, offline=True):
     artifact_names = [
         "trajectory.jsonl", "trial_ledger.jsonl", "submission_pool.json",
         "fields_cache.json", "evidence_cache.json", "factory_session.json",
-        "sims_results.json",
+        "sims_results.json", "validation_reports.jsonl",
     ]
     if os.path.isdir(state_dir):
         artifact_names.extend(

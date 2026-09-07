@@ -72,6 +72,10 @@ def main():
         help="只读检查本地配置、状态和能力，不访问 BRAIN",
     )
     parser.add_argument(
+        "--offline", action="store_true",
+        help="明确声明只读诊断/审计不访问网络；不能与生产或 smoke 操作混用",
+    )
+    parser.add_argument(
         "--audit-state", action="store_true",
         help="只读检查本地状态不变量，不访问 BRAIN",
     )
@@ -118,6 +122,8 @@ def main():
     readonly_actions = sum(bool(value) for value in (args.doctor, args.audit_state, args.smoke_readonly))
     if readonly_actions > 1:
         parser.error("--doctor、--audit-state、--smoke-readonly 只能选择一个")
+    if args.offline and not (args.doctor or args.audit_state):
+        parser.error("--offline 只能与 --doctor 或 --audit-state 一起使用")
 
     config = load_config(args.config)
     if config is None:
@@ -143,7 +149,7 @@ def main():
 
     if args.doctor:
         from wqb_agent.doctor import run_doctor
-        print(json.dumps(run_doctor(config, offline=True), ensure_ascii=False, indent=2))
+        print(json.dumps(run_doctor(typed_config, offline=True), ensure_ascii=False, indent=2))
         return
     if args.audit_state:
         from wqb_agent.audit import audit_state

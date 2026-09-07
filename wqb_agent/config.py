@@ -45,6 +45,14 @@ class SearchConfig:
 
 
 @dataclass(frozen=True)
+class ResearchAllocation:
+    """Per-round role allocation, separate from the process hard cap."""
+
+    max_simulations: int = 100
+    maximum: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class FactoryConfig:
     max_simulations: int = 300
     max_runtime_sec: int = 86400
@@ -55,6 +63,7 @@ class AppConfig:
     simulation: dict = field(default_factory=dict)
     agent: dict = field(default_factory=dict)
     search: SearchConfig = field(default_factory=SearchConfig)
+    research_allocation: ResearchAllocation = field(default_factory=ResearchAllocation)
     factory: FactoryConfig = field(default_factory=FactoryConfig)
     incremental_value: IncrementalValueConfig = field(default_factory=IncrementalValueConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
@@ -94,6 +103,10 @@ def parse_config(raw):
         max_simulations=search_max,
         validation_max_simulations=int(search_raw.get("validation_max_simulations", 0) or 0),
     )
+    allocation = ResearchAllocation(
+        max_simulations=research_max,
+        maximum=copy.deepcopy(research_raw.get("maximum") or {}),
+    )
     factory = FactoryConfig(
         max_simulations=factory_max,
         max_runtime_sec=int(factory_raw.get("max_runtime_sec", 86400)),
@@ -104,6 +117,7 @@ def parse_config(raw):
         simulation=copy.deepcopy(raw.get("simulation", {})),
         agent=copy.deepcopy(agent),
         search=search,
+        research_allocation=allocation,
         factory=factory,
         incremental_value=IncrementalValueConfig(policy.mode, policy.max_abs_correlation, policy.min_overlap),
         validation=ValidationConfig(int((agent.get("yearly_policy") or {}).get("min_years", 2)),),

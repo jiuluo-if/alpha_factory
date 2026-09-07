@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from enum import Enum
+from .evidence_status import EvidenceStatus
 
 
 class CapabilityStatus(str, Enum):
@@ -157,6 +158,7 @@ def fixture_capability(key, payload):
     return {
         "key": key,
         "status": CapabilityStatus.FIXTURE_VERIFIED.value if ok else CapabilityStatus.UNKNOWN.value,
+        "evidence_status": EvidenceStatus.PASS.value if ok else EvidenceStatus.UNAVAILABLE.value,
         "source": "fixture",
         "valid": ok,
         "errors": errors,
@@ -174,6 +176,7 @@ def probe_capability_response(key, status_code, payload=None):
     truth = endpoint_truth(key)
     if truth is None:
         return {"key": key, "status": CapabilityStatus.UNKNOWN.value,
+                "evidence_status": EvidenceStatus.UNAVAILABLE.value,
                 "source": "probe", "valid": False, "errors": ["未知 capability"]}
     try:
         code = int(status_code)
@@ -184,6 +187,7 @@ def probe_capability_response(key, status_code, payload=None):
         return {
             "key": key,
             "status": CapabilityStatus.LIVE_VERIFIED.value if valid else CapabilityStatus.UNKNOWN.value,
+            "evidence_status": EvidenceStatus.PASS.value if valid else EvidenceStatus.UNAVAILABLE.value,
             "source": "live_probe",
             "valid": valid,
             "errors": errors,
@@ -193,6 +197,8 @@ def probe_capability_response(key, status_code, payload=None):
         "key": key,
         "status": (truth.status.value if truth.status == CapabilityStatus.COMMUNITY_OBSERVED
                    else CapabilityStatus.UNKNOWN.value),
+        "evidence_status": (EvidenceStatus.APPROXIMATE.value if truth.status == CapabilityStatus.COMMUNITY_OBSERVED
+                             else EvidenceStatus.UNAVAILABLE.value),
         "source": "live_probe",
         "valid": False,
         "errors": [f"HTTP {code}"],

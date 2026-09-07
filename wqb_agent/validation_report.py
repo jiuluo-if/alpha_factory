@@ -292,6 +292,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
         "falsification": "任一 required variable 未通过则 parent 不得 STABLE",
         "stopping_rule": "预算耗尽、预注册变量全部结算或任一硬失败后停止扩展",
         "statistical_policy": statistical_policy,
+        "pnl_capability": str(pnl_capability).upper(),
     }
     identity = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return ValidationPlan({

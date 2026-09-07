@@ -198,7 +198,7 @@ class Agent:
             )
         field_selection = agent_cfg.get("field_selection") or {}
         self.max_field_alpha_count = field_selection.get("max_alpha_count")
-        operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md"))
+        operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md"))
         self.operator_reference = _operator_reference(operator_path)
         self.submission_pool = SubmissionPool(
             self.state_dir,

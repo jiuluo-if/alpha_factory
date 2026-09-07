@@ -1,29 +1,18 @@
-# Documentation by question
+# 文档导航
 
-Start with the root [`AGENTS.md`](../AGENTS.md), then read
-[`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) and
-[`wqb_agent/research_api.py`](../wqb_agent/research_api.py). Do not recursively
-read every document.
+先读根目录 [`AGENTS.md`](../AGENTS.md)、[`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) 和 [`wqb_agent/research_api.py`](../wqb_agent/research_api.py)。不要默认递归阅读全部文档。
 
-| If you need to… | Read… |
+| 要回答的问题 | 阅读 |
 |---|---|
-| understand the agent-facing model | [`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) |
-| understand BRAIN endpoints, response truth, Retry-After, or capability status | [`BRAIN_PROTOCOL.md`](BRAIN_PROTOCOL.md) |
-| discover valid operators and field types | [`OPERATORS_CHEATSHEET.md`](OPERATORS_CHEATSHEET.md) |
-| understand allowed Simulation settings | [`SIMULATION_SETTINGS.md`](SIMULATION_SETTINGS.md) |
-| design a falsifiable experiment and interpret evidence | [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md) |
-| understand current research spaces and selection context | [`EXPLORATION_ROADMAP.md`](EXPLORATION_ROADMAP.md) |
-| recover or audit local research state | [`STATE_LAYOUT.md`](STATE_LAYOUT.md) |
-| understand search heuristics and trial accounting | [`SEARCH_POLICY.md`](SEARCH_POLICY.md) |
-| understand file naming and derived-output boundaries | [`FILE_ORGANIZATION_AND_NAMING.md`](FILE_ORGANIZATION_AND_NAMING.md) |
-| check environment/tool discipline | [`DSH_TOOL_DISCIPLINE.md`](DSH_TOOL_DISCIPLINE.md) |
+| Agent 如何理解项目和事实层级？ | [`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) |
+| BRAIN API、Retry-After、能力状态和未知结果如何处理？ | [`BRAIN_PROTOCOL.md`](BRAIN_PROTOCOL.md) |
+| 如何设计可反证实验、记录 trial 并解释证据？ | [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md) |
+| 测试边界和删减依据在哪里？ | [`TEST_SUITE_SIMPLIFICATION_REPORT.md`](TEST_SUITE_SIMPLIFICATION_REPORT.md) |
+| 算子、字段类型和设置有哪些平台参考？ | [`reference/OPERATORS_CHEATSHEET.md`](reference/OPERATORS_CHEATSHEET.md)、[`reference/SIMULATION_SETTINGS.md`](reference/SIMULATION_SETTINGS.md)（REFERENCE） |
+| 如何恢复或审计本地研究状态？ | [`STATE_LAYOUT.md`](STATE_LAYOUT.md)（按需） |
 
-## Historical reference
+## 参考文档
 
-`PHASE*.md` and `superpowers/**` document earlier design decisions or completed
-work. They are historical reference. Do not treat them as current runtime
-policy unless the current code explicitly depends on them.
+`reference/OPERATORS_CHEATSHEET.md` 可能被运行时读取和校验 hash，因此即使不属于默认阅读路径也要保留。`reference/SIMULATION_SETTINGS.md` 是平台设置参考。其他研究路线、文件命名和工具纪律文档只有在当前任务需要时阅读。
 
-Reports, round summaries, and current experiment status are derived or live
-state; consult `.wqb_state/` and current BRAIN responses according to the
-rules in `AGENTS.md`.
+历史 phase 文档、已完成的 `superpowers` plan/spec、报告和 round summary 不属于当前 policy；清理后不在这里保留历史导航。Git history 承担历史存档职责。

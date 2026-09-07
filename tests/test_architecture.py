@@ -95,8 +95,8 @@ class TestArchitectureBoundaries(unittest.TestCase):
         )
         self.assertIn(".mutations", imports)
 
-    def test_derived_scripts_use_pure_metric_boundary(self):
-        for name in ("enhance_simulations.py", "reconcile_pending.py", "refresh_evidence.py"):
+    def test_maintenance_scripts_use_pure_metric_boundary(self):
+        for name in ("check_health.py", "reconcile_pending.py", "validate_integrity.py"):
             path = os.path.join(ROOT, "scripts", name)
             with open(path, encoding="utf-8") as handle:
                 source = handle.read()
@@ -104,7 +104,8 @@ class TestArchitectureBoundaries(unittest.TestCase):
                 "wqb_agent.simulator", source,
                 f"{name} 不应通过 Simulator 获取纯指标/健康函数，避免审计脚本耦合生产调度器",
             )
-            self.assertIn("wqb_agent.metrics", source)
+            if name in {"check_health.py", "reconcile_pending.py"}:
+                self.assertIn("wqb_agent.metrics", source)
 
     def test_only_transport_modules_can_submit_simulations(self):
         allowed = {"client.py", "simulator.py", "agent.py"}

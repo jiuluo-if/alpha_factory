@@ -1,81 +1,52 @@
-# Alpha Research Policy
+# 研究政策
+
+本文只描述研究纪律，不代替 BRAIN live response，也不把具体 dataset、field 或 hypothesis 选择硬编码成长期规则。
 
 ## 事实与实验边界
 
-1. BRAIN 当前响应是字段、Simulation、Alpha 指标、checks、aggregates 和 correlation 的最高事实源。
-2. `trajectory.jsonl` 是已确认实验的 append-only 证据；checkpoint 是 exactly-once 恢复边界；两者不能手工改写。
-3. 唯一 Simulation POST 路径是 `Agent.run_proposals()`。任何 timeout、网络中断、5xx 或写入结果不明都不能自动重 POST。
-4. 429 必须遵守 Retry-After gate；`SUBMIT_UNKNOWN` 必须先只读对账；人工最终 Alpha 提交始终由用户完成。
-5. capability 只有在对应证据等级成立时才能被消费。社区观察 endpoint 不得被当作官方可用接口。
+1. BRAIN 当前响应是 datasets、fields、operators、Simulation、Alpha 指标、checks、aggregates 和 correlation 的最高事实源。
+2. `trajectory.jsonl` 是已确认实验的 append-only 证据，checkpoint 是 exactly-once 恢复边界；二者不得手工改写。
+3. Simulation 写入只能沿现有受保护路径执行；timeout、网络中断、5xx 或写入结果不明时不得自动重 POST。
+4. 429 必须遵守 Retry-After；`SUBMIT_UNKNOWN` 必须先只读对账；最终 Alpha 提交由用户完成。
+5. capability 只有在对应证据等级成立时才能使用。社区观察、fixture 或静态文档不能冒充当前平台能力。
 
-## TrialLedger
+## 假设与反证
 
-`TrialLedger` 是 append-only 审计侧车，不替代 trajectory、checkpoint 或 proposals。每个 trial 可以产生四类事件：
+每个实验只回答一个可证伪问题，并记录 hypothesis、expression、settings、预期失败模式和结果。先区分：平台事实、回测观察、经济解释和未验证假设；不得用语言推理替代 Simulation。
 
-```json
-{
-  "trial_id": "local-experiment-id",
-  "phase": "generated|preflight|submitted|completed",
-  "status": "PENDING|RUNNING|DONE|FAILED|SUBMIT_UNKNOWN",
-  "template_family": "economic-family",
-  "lineage_id": "hypothesis-or-lineage",
-  "template_id": "template-name",
-  "fields": ["verified_field"],
-  "expression_fingerprint": "sha256"
-}
-```
+- `BASELINE` 只检验最小机制；`CHILD` / `ROBUSTNESS` 每次只改变一个变量。
+- 多字段必须有语义互证、比率、差分或状态—信号配对；禁止无机制堆叠。
+- `VECTOR` 字段先通过已验证的 `vec_avg` 或 `vec_sum` 聚合，并记录类型证据。
+- 失败先对照预注册的 falsification 判据；命中时停止该假设，不用窗口/权重扫描掩盖证伪。
+- 高 Sharpe 不等于发现；优先跨年份、跨子样本、低相关且机制一致的证据。
 
-`TrialLedger.summarize()` 流式统计 phase/status，以及 family、lineage、template、field 的 trial count；缺少 ledger 文件不影响旧状态恢复。
+## Experiment family 与 trial accounting
 
-## 年度稳定性 evidence
+同一 hypothesis 下的参数、窗口、字段替换和结构变体属于同一 experiment family。记录每个 trial 的 identity、lineage、family、字段、expression fingerprint、状态和结果；不要把大量派生报告当作新证据。
 
-DONE Alpha 会通过已知 Alpha id 请求 `/alphas/{id}/aggregates`。成功后只保存紧凑的年度 evidence，不复制原始 payload：
+搜索次数越多，selection bias 越严重。Fitness 只能作为辅助特征，不能替代原始 metrics、checks、稳健性和相关性。预算排序可以参考 expected quality、information gain、novelty 与 simulation cost，但不得把 magic 综合分数当作结论。
 
-```json
-{
-  "status": "VERIFIED",
-  "year_count": 2,
-  "passing_years": 2,
-  "stable": true,
-  "summary": {"min_sharpe": 1.1, "min_fitness": 0.7, "max_turnover": 0.3},
-  "years": [
-    {"year": 2022, "sharpe": 1.1, "fitness": 0.7, "returns": 0.12,
-     "turnover": 0.2, "drawdown": 0.08, "margin": 0.04},
-    {"year": 2023, "sharpe": 1.3, "fitness": 0.8, "returns": 0.15,
-     "turnover": 0.3, "drawdown": 0.07, "margin": 0.05}
-  ]
-}
-```
+## 评估与稳健性
 
-aggregates endpoint 缺失、超时或返回畸形数据时，evidence 为 `UNKNOWN`，但不会把已经完成的 Simulation 改成失败，也不会触发重复 POST。未知年度证据不能被解释为稳定通过。
+DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margin、全部 checks、健康、yearly evidence 和 SELF_CORRELATION（能力可用时）解释。`PROMISING` 不等于可提交。
 
-## Canonical STABLE 与 ValidationReport
+稳健性是局部敏感性和机制反驳证据，不称为 hidden OOS。适用时预注册 window locality、semantic field swap、universe、decay/truncation 单变量变化和 yearly aggregates，并记录理由、预算、falsification 和 stopping rule。
 
-`SUCCESS` 是单次 headline 结果，`ROBUSTNESS` 是单个预注册变量的结果，二者都
-不能直接写成 `STABLE`。只有 parent 的 `ValidationPlan` 已在 robustness 运行前
-注册，并且所有 required dimensions 聚合为 `ValidationReport.status=PASS`，parent
-才可以获得 `validation_status=STABLE`。
+相关性、健康和统计证据不足时保持 `UNKNOWN` / `UNAVAILABLE`，不默认通过。可提交候选只进入人工审核池。
 
-本地 robustness 是局部敏感性与机制反驳证据，不称为 hidden OOS，也不替代真正的
-时间外样本验证。
+## 统计诊断
 
-ValidationPlan 至少覆盖：window locality、semantic field swap、universe robustness、
-decay/truncation 单变量变化和 yearly aggregates；每项必须记录变量、理由、预算、
-falsification 和 stopping rule。
+- PSR 需要有限 return series，并显式使用偏度和非 excess kurtosis。
+- DSR 使用 trial Sharpe 的数量及分布估计 selection threshold；缺少完整分布时只能返回明确标注的保守 fallback。
+- PBO / CSCV 只有在至少两个长度相同且时间对齐的 return series 存在时才可用，否则为 `UNAVAILABLE`。
+- PnL 只有 capability `LIVE_VERIFIED` 时才进入 rolling stability、correlation 和 bootstrap diagnostics。
+- 统计诊断不能替代原始证据，也不能把 proxy/approximate 说成完整论文实现。
 
-统计证据不压缩成 magic 综合分数：
+## 停止纪律
 
-- PSR 需要足够的有限 return series，并显式使用偏度和非 excess kurtosis；
-- DSR 使用 TrialLedger 的 generated trial count，以及已记录 trial Sharpe 的均值/波动
-  调高 selection threshold；搜索越多或搜索空间波动更大，raw max Sharpe 的可信度不会
-  自动上升。缺少完整 trial Sharpe 分布时才使用明确标注的零均值、单位波动保守 fallback；
-- PBO/CSCV 只有在至少两个长度相同、时间对齐的 return series 存在时才可用，否则为
-  `UNAVAILABLE`；
-- PnL 只有 capability `LIVE_VERIFIED` 时才可进入 rolling stability、correlation 和
-  bootstrap diagnostics。社区观察或缺失 PnL 不能伪造 DSR/PBO。
+- **PROMOTE**：指标、checks、健康、稳定性和平台相关性证据均足够且通过，只进入人工审核池。
+- **CONTINUE**：结果能改变下一步判断，下一次只改变一个变量。
+- **STOP / KILL**：机制被证伪、已达到防过拟合停止条件或继续实验不再增加信息。
+- **RECONCILE**：`UNKNOWN`、`TIMEOUT`、`RATE_LIMIT`、`AUTH`、`INFRA` 或缺少必要证据；不把它们写成长期失败结论。
 
-PSR/DSR 的公式依据 Bailey 与 López de Prado 的原论文《The Deflated Sharpe Ratio:
-Correcting for Selection Bias, Backtest Overfitting and Non-Normality》：
-[论文 PDF](https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf)。实现采用论文中
-基于偏度、kurtosis、样本长度，以及 trial Sharpe 分布和独立 trial 数估计 expected
-maximum Sharpe 的定义；当这些输入不足时返回 `UNAVAILABLE` 或明确的保守 fallback。
+研究策略属于 Agent 判断；Python 只保证事实、边界、证据和恢复，不替研究员选择方向。

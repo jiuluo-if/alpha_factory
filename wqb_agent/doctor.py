@@ -32,7 +32,7 @@ def run_doctor(raw_config, *, offline=True):
         ),
         "checkpoint_consistency": "PASS",
         "schema_versions": {},
-        "operator_reference": os.path.exists(os.path.join(os.path.dirname(__file__), "..", "docs", "OPERATORS_CHEATSHEET.md")),
+        "operator_reference": os.path.exists(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md")),
         "field_cache_status": "PRESENT" if os.path.exists(os.path.join(state_dir, "fields_cache.json")) else "MISSING",
         "unresolved_simulation_count": 0,
         "submit_unknown_count": 0,

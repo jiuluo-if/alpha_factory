@@ -8,10 +8,13 @@ from wqb_agent.research_api import (
     compare_experiments,
     discover_fields,
     get_operator_reference,
+    get_experiment,
     inspect_state,
     reconcile,
     run_experiment,
+    search_history,
 )
+from wqb_agent.state import Experiment, Trajectory
 
 
 class _Discovery:
@@ -65,6 +68,10 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(proposal["fields"], ["returns"])
         self.assertEqual(proposal["experiment_stage"], "BASELINE")
         self.assertEqual(proposal["research_role"], "EXPLORE")
+        self.assertNotIn("operator_mapping", proposal)
+        self.assertNotIn("experiment_question", proposal)
+        self.assertNotIn("expected_failure_modes", proposal)
+        self.assertNotIn("tuning_risk", proposal)
 
     def test_discovery_facade_uses_existing_discovery_component(self):
         result = discover_fields("price reversal", agent=_FakeAgent(tempfile.gettempdir()))
@@ -100,6 +107,22 @@ class TestResearchApi(unittest.TestCase):
             self.assertEqual(result["experiment_count"], 0)
             self.assertEqual(result["recent_experiments"], [])
             self.assertEqual(compare_experiments(["missing"], state_dir=directory)["missing"], ["missing"])
+
+    def test_history_queries_read_experiment_evidence_by_id_and_expression(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "trajectory.jsonl")
+            experiment = Experiment(1, "h1", "rank(close)", {}, ["close"], ["pv1"])
+            experiment.proposal_id = "proposal-1"
+            experiment.status = "DONE"
+            Trajectory(path=path).add(experiment)
+
+            by_id = get_experiment(experiment.id, state_dir=directory)
+            self.assertEqual(by_id["proposal_id"], "proposal-1")
+            self.assertEqual(get_experiment("proposal-1", state_dir=directory)["id"], experiment.id)
+            compared = compare_experiments([experiment.id, "missing"], state_dir=directory)
+            self.assertEqual(len(compared["experiments"]), 1)
+            self.assertEqual(compared["missing"], ["missing"])
+            self.assertEqual(search_history("rank(close)", state_dir=directory)[0]["id"], experiment.id)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ def load_config(path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="WQB Alpha self-evolving research agent"
+        description="面向 WorldQuant BRAIN 的 Alpha 研究 Agent"
     )
     parser.add_argument(
         "--config",
@@ -34,8 +34,7 @@ def main():
     parser.add_argument(
         "--suggest",
         action="store_true",
-        help="LLM-driven phase 1: form hypothesis, discover real fields, "
-             "export .wqb_state/suggestions.json (no simulation)",
+        help="形成假设并发现真实 fields，导出 .wqb_state/suggestions.json（不运行 Simulation）",
     )
     parser.add_argument(
         "--run-proposals",
@@ -43,29 +42,28 @@ def main():
         const=".wqb_state/proposals.json",
         default=None,
         metavar="PATH",
-        help="LLM-driven phase 2: execute proposals from JSON file "
-             "(default .wqb_state/proposals.json) through real simulation",
+        help="沿安全路径执行 JSON proposals（默认 .wqb_state/proposals.json）中的真实 Simulation",
     )
     parser.add_argument(
         "--factory-run",
         action="store_true",
-        help="启动有界 AI Alpha 工厂：恢复优先，持续执行 discovery/模板提案/模拟",
+        help="兼容的有界研究编排：恢复优先；不属于默认 Agent 入口",
     )
     parser.add_argument(
         "--factory-hours",
         type=float,
         default=None,
-        help="AI 工厂运行时长（小时，默认读取 config.agent.factory）",
+        help="兼容编排运行时长（小时，默认读取 config.agent.factory）",
     )
     parser.add_argument(
         "--factory-stop",
         action="store_true",
-        help="请求正在运行的 AI 工厂在安全边界停止（不需要 BRAIN 凭据）",
+        help="请求兼容编排在安全边界停止（不需要 BRAIN 凭据）",
     )
     parser.add_argument(
         "--factory-status",
         action="store_true",
-        help="读取唯一工厂会话状态（不需要 BRAIN 凭据）",
+        help="读取兼容编排会话状态（不需要 BRAIN 凭据）",
     )
     parser.add_argument(
         "--doctor", action="store_true",
@@ -73,7 +71,7 @@ def main():
     )
     parser.add_argument(
         "--offline", action="store_true",
-        help="明确声明只读诊断/审计不访问网络；不能与生产或 smoke 操作混用",
+        help="明确声明只读诊断/审计不访问网络；不能与 Simulation 或 smoke 操作混用",
     )
     parser.add_argument(
         "--audit-state", action="store_true",
@@ -86,7 +84,7 @@ def main():
     parser.add_argument(
         "--force-new-round",
         action="store_true",
-        help="Explicitly start a new round while preserving an unresolved older checkpoint",
+        help="明确保留未解决的旧 checkpoint 并开启新研究轮次",
     )
     parser.add_argument(
         "--skip-stale",

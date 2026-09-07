@@ -151,7 +151,6 @@ Desktop.ini
 .claude/
 .cursorindex/
 .planning/
-AGENTS.md
 *.prompt.local
 *.session.local
 *.task.local

@@ -36,9 +36,9 @@ from .state import Trajectory
 class ExperimentSpec:
     """The minimal input an external research agent should author.
 
-    The existing proposal contract remains authoritative.  ``to_proposal``
-    only fills the small adapter shape; the normal Agent preflight still
-    derives and validates the complete internal record before any POST.
+    The existing proposal contract remains authoritative. ``to_proposal`` is
+    only a compatibility adapter; it must not invent research evidence or
+    semantic claims before normal Agent preflight.
     """
 
     hypothesis: str
@@ -46,6 +46,8 @@ class ExperimentSpec:
     fields: tuple[str, ...] = field(default_factory=tuple)
     settings: Mapping[str, Any] = field(default_factory=dict)
     rationale: str = ""
+    operator_mapping: str = ""
+    experiment_question: str = ""
     parent_id: str | None = None
     change: Any = None
 
@@ -71,6 +73,8 @@ class ExperimentSpec:
             fields=tuple(value.get("fields") or ()),
             settings=value.get("settings") or {},
             rationale=value.get("rationale", "") or "",
+            operator_mapping=value.get("operator_mapping", "") or "",
+            experiment_question=value.get("experiment_question", "") or "",
             parent_id=value.get("parent_id"),
             change=value.get("change"),
         )
@@ -97,8 +101,6 @@ class ExperimentSpec:
             "fields": list(self.fields),
             "settings": dict(self.settings),
             "rationale": self.rationale.strip() or self.hypothesis.strip(),
-            "operator_mapping": self.rationale.strip() or self.hypothesis.strip(),
-            "experiment_question": self.hypothesis.strip(),
             "parent_id": self.parent_id,
             "parent_expression": context.get("parent_expression"),
             "change": self.change,
@@ -107,9 +109,17 @@ class ExperimentSpec:
             "round": int(round_no),
             "experiment_stage": context.get("experiment_stage") or ("CHILD" if self.parent_id else "BASELINE"),
             "research_role": context.get("research_role") or ("EXPLOIT" if self.parent_id else "EXPLORE"),
-            "expected_failure_modes": list(context.get("expected_failure_modes") or ["platform checks or weak out-of-sample stability"]),
-            "tuning_risk": bool(context.get("tuning_risk", bool(self.parent_id))),
         }
+        operator_mapping = context.get("operator_mapping") or self.operator_mapping.strip()
+        experiment_question = context.get("experiment_question") or self.experiment_question.strip()
+        if operator_mapping:
+            proposal["operator_mapping"] = operator_mapping
+        if experiment_question:
+            proposal["experiment_question"] = experiment_question
+        if "expected_failure_modes" in context:
+            proposal["expected_failure_modes"] = list(context.get("expected_failure_modes") or [])
+        if "tuning_risk" in context:
+            proposal["tuning_risk"] = bool(context["tuning_risk"])
         for key in (
             "datasets", "field_source", "field_understanding", "field_analysis",
             "field_hypothesis_basis", "operator_evidence", "validation_plan",
@@ -189,7 +199,7 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
 def get_operator_reference(path=None) -> dict[str, Any]:
     """Return the checked-in operator snapshot used by proposal validation."""
     if path is None:
-        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "OPERATORS_CHEATSHEET.md")
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "reference", "OPERATORS_CHEATSHEET.md")
     return _operator_reference(path)
 
 

@@ -1,93 +1,67 @@
-# Agent-facing architecture
+# Agent-facing 架构
 
-This is the repository's cognitive compression layer. It describes the
-stable concepts an external coding/research agent needs before reading runtime
-implementation details.
+本文是仓库的认知压缩层：说明 AI Agent 在阅读运行时代码前必须理解的稳定概念。仓库是研究仪器，不是研究员。
 
-## One research loop
+## 一条研究闭环
 
 ```text
 Agent
-  -> research_api.py
-  -> discovery / simulation
-  -> WorldQuant BRAIN
-  -> experiment evidence
-  -> evaluation
-  -> workspace / memory
+  → research_api.py
+  → discovery / simulation
+  → WorldQuant BRAIN
+  → experiment evidence
+  → evaluation
+  → state / history
 ```
 
-The agent chooses the hypothesis, experiment, interpretation, and next step.
-The Python runtime enforces truth, execution, persistence, validation, safety,
-and recovery.
+Agent 选择 hypothesis、experiment、解释和下一步；Python 保证平台事实、执行、持久化、校验、安全与恢复。
 
-## Facts and state
+## 事实与状态层级
 
-| Layer | Meaning | Examples |
+| 层级 | 含义 | 例子 |
 |---|---|---|
-| live truth | Current platform response | BRAIN datasets, fields, operator capability, Simulation progress, metrics, checks |
-| immutable evidence | What happened in a research attempt | `trajectory.jsonl`, completed experiment record, append-only ledger |
-| derived state | Rebuildable views for the next decision | `context.md`, `experience.json`, reports, summaries, submission review material |
-| cache | Bounded performance/advisory data | field cache, evidence cache |
+| live truth | 当前平台响应 | BRAIN datasets、fields、operator capability、Simulation progress、metrics、checks |
+| immutable evidence | 已发生的研究事实 | `trajectory.jsonl`、完成的 experiment record、append-only ledger |
+| derived state | 可由证据重建的工作视图 | `context.md`、`experience.json`、报告和摘要 |
+| cache | 有界的性能或提示数据 | field cache、evidence cache |
 
-When layers disagree, prefer live BRAIN truth, then immutable evidence, then
-derived state, then cache. Missing or ambiguous evidence remains
-`UNKNOWN`/`UNAVAILABLE`.
+冲突时依次信任 BRAIN live truth、immutable evidence、derived state、cache。缺失或含糊证据保持 `UNKNOWN` / `UNAVAILABLE`。
 
-## Core concepts
+## 稳定概念与运行时映射
 
-`BrainGateway` is the conceptual platform boundary implemented by the client,
-discovery, and simulator layers. It retrieves current BRAIN facts and submits
-or polls Simulations under retry and unknown-write rules.
+- **BRAIN 接口**：由 `client.py`、`discovery.py` 和 `simulator.py` 实现；负责实时事实、Simulation 安全 POST 和已知 URL 轮询。
+- **Experiment**：一次可审计尝试，包含 hypothesis、expression、settings 和 evidence/result。`ExperimentSpec` 是轻量 agent 输入；旧 proposal contract 只作为兼容适配和校验边界。
+- **Research State**：由现有 trajectory、checkpoint、`TrialLedger` 和压缩 workspace 视图承担；facade 不创建第二个 store。
+- **Evaluation**：由 metrics、checks、yearly、correlation、robustness 和 statistical diagnostics 组成，描述证据，不替 Agent 选方向。
 
-An `Experiment` is one auditable attempt: hypothesis, expression, settings,
-and result/evidence. `ExperimentSpec` in `research_api.py` is the lightweight
-agent-authored input; the existing proposal contract expands and validates it.
+## 机制与研究策略
 
-`ExperimentStore` is the conceptual evidence boundary implemented by
-`Trajectory`, checkpoints, `TrialLedger`, and compact memory/workspace views.
-There is no second store introduced by the facade.
+必须 fail-closed 的机制包括 schema、expression dedup、hard budget、checkpoint recovery、锁、Retry-After、known-URL polling 和 unknown-write reconciliation。
 
-`Evaluation` combines metrics, checks, yearly behavior, correlation,
-statistical diagnostics, and robustness. Evaluation describes evidence; it
-does not invent platform truth or choose the research direction.
+研究策略可由 Agent 调整：hypothesis/dataset 选择、mutation 方向、窗口、优先级以及继续或停止。search allocation、stalled-space rotation 等启发式不是 BRAIN 事实，也不是不可变机制。
 
-## Mechanism versus research policy
+## Agent-facing 入口
 
-Mechanism invariants must remain fail-closed: schema validation, expression
-deduplication, hard budgets, checkpoint recovery, OS locks, Retry-After,
-known-URL polling, and unknown Simulation write reconciliation.
+`wqb_agent/research_api.py` 提供：
 
-Research policy is adjustable: hypothesis/dataset selection, mutation direction,
-window choice, experiment priority, and whether to continue or stop a line.
-Heuristics such as search allocation or stalled-space rotation are policy, not
-BRAIN requirements.
+- `inspect_state`：查看有限的当前状态视图；
+- `discover_fields` / `get_operator_reference`：获取并标记平台能力证据；
+- `run_experiment`：通过既有安全 proposal/Simulation 路径执行；
+- `get_experiment` / `compare_experiments` / `search_history`：读取证据与历史；
+- `reconcile`：只读对账已知远端作业。
 
-## Where to look
+## 按问题定位
 
-| Question | Start here |
+| 问题 | 起点 |
 |---|---|
-| What can an agent call? | `wqb_agent/research_api.py` |
-| How are fields and platform facts obtained? | `wqb_agent/discovery.py`, `wqb_agent/client.py` |
-| How is one Simulation executed safely? | `wqb_agent/simulator.py`, `wqb_agent/client.py` |
-| How are experiments and recovery persisted? | `wqb_agent/state.py`, `wqb_agent/trial_ledger.py` |
-| How are results evaluated? | `wqb_agent/metrics.py`, `validation_report.py`, `robustness.py` |
-| How are unknown writes reconciled? | `wqb_agent/client.py`, `scripts/reconcile_pending.py` |
-| What are current operator/settings rules? | `docs/OPERATORS_CHEATSHEET.md`, `docs/SIMULATION_SETTINGS.md` |
-| What is historical context only? | `docs/PHASE*.md`, `docs/superpowers/**` |
+| Agent 能调用什么？ | `wqb_agent/research_api.py` |
+| 如何获得 fields 和平台事实？ | `wqb_agent/discovery.py`、`wqb_agent/client.py` |
+| 如何安全执行 Simulation？ | `wqb_agent/simulator.py`、`wqb_agent/client.py` |
+| 如何保存实验和恢复？ | `wqb_agent/state.py`、`wqb_agent/trial_ledger.py` |
+| 如何解释结果？ | `wqb_agent/metrics.py`、`wqb_agent/validation_report.py`、`wqb_agent/robustness.py` |
+| 如何对账未知写结果？ | `wqb_agent/client.py`、`scripts/reconcile_pending.py` |
+| 算子和设置参考在哪里？ | `docs/reference/OPERATORS_CHEATSHEET.md`、`docs/reference/SIMULATION_SETTINGS.md`（REFERENCE） |
 
-Do not read the whole package by default. Read the facade, then the target
-module, one direct dependency, one relevant test, and one policy document.
+不要默认阅读整个 package：先读 facade，再读目标模块、一个直接依赖、一个相关测试和一份必要的 policy。
 
-## Future simplification candidates
-
-These are deliberately recorded, not removed in this task:
-
-- `factory_runner.py` and its session lifecycle: compatibility control plane
-  outside the default agent-facing loop.
-- `docs/PHASE*.md` and `docs/superpowers/**`: historical design archaeology.
-- Completed round summaries and completed checkpoints in `.wqb_state/`: safe
-  archive candidates only after dry-run, lock/checkpoint audit, and explicit
-  confirmation.
-- Large derived/cache files such as `trajectory.jsonl` and field caches:
-  investigate bounded views or rebuildability before any compaction; the
-  append-only evidence source must remain recoverable.
+`factory_runner.py`、历史 phase 文档和 `docs/superpowers/**` 不属于默认认知模型。`.wqb_state/` 是 live research state，不能作为普通清理对象。

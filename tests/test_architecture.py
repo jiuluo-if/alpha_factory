@@ -206,6 +206,20 @@ class TestArchitectureBoundaries(unittest.TestCase):
         self.assertNotIn("lifecycle_order", source)
         self.assertNotIn("checkpoint_ledger_mismatch", source)
 
+    def test_lifecycle_order_is_owned_by_trial_ledger(self):
+        path = os.path.join(PACKAGE_ROOT, "workspace_snapshot.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn("_LIFECYCLE_ORDER", source)
+        self.assertIn("LIFECYCLE_PHASE_INDEX", source)
+
+    def test_audit_uses_exact_phase_projection_for_cross_check(self):
+        path = os.path.join(PACKAGE_ROOT, "audit.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("authoritative - observed_for_phase", source)
+        self.assertNotIn("authoritative - trajectory_ids", source)
+
     def test_diagnostic_config_reader_uses_typed_config_boundary(self):
         path = os.path.join(ROOT, "scripts", "check_correlation.py")
         with open(path, encoding="utf-8") as handle:

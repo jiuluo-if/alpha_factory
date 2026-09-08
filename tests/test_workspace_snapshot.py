@@ -94,6 +94,17 @@ class TestWorkspaceSnapshotBoundaries(unittest.TestCase):
             (("p1", "simulation_submitted", "simulation_committed"),),
         )
 
+    def test_snapshot_counts_forward_ledger_schema_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "schema_version": 99,
+                    "proposal_id": "p",
+                    "phase": "future_phase",
+                }) + "\n")
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.ledger.unsupported_schema_rows, 1)
+
     def test_submission_pool_does_not_fabricate_none_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "submission_pool.json"), "w", encoding="utf-8") as handle:

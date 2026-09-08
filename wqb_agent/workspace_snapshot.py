@@ -9,8 +9,9 @@ import re
 
 from .artifacts import iter_jsonl_objects
 from .checkpoints import CheckpointStore
+from .schema import TRAJECTORY_VERSION, TRIAL_LEDGER_VERSION, VALIDATION_VERSION
 from .state import Trajectory
-from .trial_ledger import PHASES
+from .trial_ledger import LIFECYCLE_PHASE_INDEX, PHASES
 
 
 _CHECKPOINT_NAME = re.compile(r"round_\d+\.checkpoint\.json")
@@ -68,6 +69,8 @@ class LedgerSummary:
     duplicate_lifecycle_phases: int = 0
     phase_order_violations: tuple = ()
     missing_alpha_id_rows: int = 0
+    simulation_submitted: frozenset = frozenset()
+    unsupported_schema_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ class ValidationSummary:
     parent_ids: frozenset = frozenset()
     plan_pairs: tuple = ()
     invalid_rows: int = 0
+    unsupported_schema_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,8 @@ class TrajectorySummary:
     missing_alpha_id_rows: int = 0
     trajectory_alpha_ids: frozenset = frozenset()
     trajectory_proposal_ids: frozenset = frozenset()
+    observed_simulation_submitted: frozenset = frozenset()
+    unsupported_schema_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,14 +143,6 @@ class WorkspaceSnapshot:
         )
 
 
-_LIFECYCLE_ORDER = {
-    "simulation_committed": 0,
-    "simulation_submitted": 1,
-    "simulation_settled": 2,
-    "research_outcome_settled": 3,
-}
-
-
 def _new_lifecycle_stats():
     return {
         "unknown_phase_rows": 0,
@@ -152,18 +150,30 @@ def _new_lifecycle_stats():
         "duplicate_lifecycle_phases": 0,
         "phase_order_violations": [],
         "missing_alpha_id_rows": 0,
+        "unsupported_schema_rows": 0,
         "seen_phases": set(),
         "last_phase": {},
     }
 
 
-def _observe_lifecycle(row, stats, *, require_phase):
+def _observe_schema(row, stats, expected_schema_version):
+    version = row.get("schema_version")
+    if (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version > expected_schema_version
+    ):
+        stats["unsupported_schema_rows"] += 1
+
+
+def _observe_lifecycle(row, stats, *, require_phase, expected_schema_version):
+    _observe_schema(row, stats, expected_schema_version)
     phase = row.get("phase")
     if not isinstance(phase, str) or phase not in PHASES:
         if require_phase or phase is not None:
             stats["unknown_phase_rows"] += 1
         return
-    if phase not in _LIFECYCLE_ORDER:
+    if phase not in LIFECYCLE_PHASE_INDEX:
         return
     proposal_id = row.get("proposal_id")
     if proposal_id in (None, ""):
@@ -175,7 +185,7 @@ def _observe_lifecycle(row, stats, *, require_phase):
         stats["duplicate_lifecycle_phases"] += 1
     stats["seen_phases"].add(phase_key)
     previous = stats["last_phase"].get(proposal_id)
-    if previous is not None and _LIFECYCLE_ORDER[phase] < _LIFECYCLE_ORDER[previous]:
+    if previous is not None and LIFECYCLE_PHASE_INDEX[phase] < LIFECYCLE_PHASE_INDEX[previous]:
         stats["phase_order_violations"].append((proposal_id, previous, phase))
     stats["last_phase"][proposal_id] = phase
     if phase == "research_outcome_settled":
@@ -200,6 +210,7 @@ def _trajectory_summary(state_dir):
     observed_settlement_ids = set()
     observed_committed = set()
     observed_submitted = set()
+    observed_simulation_submitted = set()
     observed_simulation_settled = set()
     observed_research_settled = set()
     summary = {
@@ -228,11 +239,17 @@ def _trajectory_summary(state_dir):
             trajectory_proposal_ids.add(str(row["proposal_id"]))
         proposal_id = row.get("proposal_id")
         phase = row.get("phase")
-        _observe_lifecycle(row, lifecycle_stats, require_phase=False)
+        _observe_lifecycle(
+            row, lifecycle_stats, require_phase=False,
+            expected_schema_version=TRAJECTORY_VERSION,
+        )
         if proposal_id:
             if phase == "simulation_committed":
                 observed_committed.add(str(proposal_id))
-            elif phase in {"simulation_submitted", "simulation_settled"}:
+            elif phase == "simulation_submitted":
+                observed_simulation_submitted.add(str(proposal_id))
+                observed_submitted.add(str(proposal_id))
+            elif phase == "simulation_settled":
                 observed_submitted.add(str(proposal_id))
             if phase == "simulation_settled":
                 observed_simulation_settled.add(str(proposal_id))
@@ -264,6 +281,8 @@ def _trajectory_summary(state_dir):
         duplicate_lifecycle_phases=lifecycle_stats["duplicate_lifecycle_phases"],
         phase_order_violations=tuple(lifecycle_stats["phase_order_violations"]),
         missing_alpha_id_rows=lifecycle_stats["missing_alpha_id_rows"],
+        observed_simulation_submitted=frozenset(observed_simulation_submitted),
+        unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
     )
 
 
@@ -345,6 +364,7 @@ def _inventory(state_dir, names, checkpoint_records):
 def _ledger_summary(path):
     committed = set()
     submitted = set()
+    simulation_submitted = set()
     simulation_settled = set()
     research_settled = set()
     settlement_ids = set()
@@ -352,12 +372,18 @@ def _ledger_summary(path):
     lifecycle_stats = _new_lifecycle_stats()
     read_stats = {}
     for row in iter_jsonl_objects(path, stats=read_stats):
-        _observe_lifecycle(row, lifecycle_stats, require_phase=True)
+        _observe_lifecycle(
+            row, lifecycle_stats, require_phase=True,
+            expected_schema_version=TRIAL_LEDGER_VERSION,
+        )
         proposal_id = row.get("proposal_id")
         phase = row.get("phase")
         if proposal_id and phase == "simulation_committed":
             committed.add(str(proposal_id))
-        elif proposal_id and phase in {"simulation_submitted", "simulation_settled"}:
+        elif proposal_id and phase == "simulation_submitted":
+            simulation_submitted.add(str(proposal_id))
+            submitted.add(str(proposal_id))
+        elif proposal_id and phase == "simulation_settled":
             submitted.add(str(proposal_id))
         if proposal_id and phase == "simulation_settled":
             simulation_settled.add(str(proposal_id))
@@ -386,6 +412,8 @@ def _ledger_summary(path):
         duplicate_lifecycle_phases=lifecycle_stats["duplicate_lifecycle_phases"],
         phase_order_violations=tuple(lifecycle_stats["phase_order_violations"]),
         missing_alpha_id_rows=lifecycle_stats["missing_alpha_id_rows"],
+        simulation_submitted=frozenset(simulation_submitted),
+        unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
     )
 
 
@@ -394,13 +422,15 @@ def _validation_summary(path):
     plan_pairs = []
     read_stats = {}
     for row in iter_jsonl_objects(path, stats=read_stats):
+        _observe_schema(row, read_stats, VALIDATION_VERSION)
         if row.get("parent_id"):
             parent_ids.add(str(row["parent_id"]))
         nested = row.get("report")
         if isinstance(nested, dict):
             plan_pairs.append((row.get("plan_id"), nested.get("plan_id")))
     return ValidationSummary(
-        frozenset(parent_ids), tuple(plan_pairs), read_stats.get("invalid_rows", 0)
+        frozenset(parent_ids), tuple(plan_pairs), read_stats.get("invalid_rows", 0),
+        read_stats.get("unsupported_schema_rows", 0),
     )
 
 

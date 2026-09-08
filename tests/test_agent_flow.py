@@ -219,6 +219,100 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
             agent.run_one_round(1)
         self.assertFalse(os.path.exists(os.path.join(self._tmp, "context.md")))
 
+    def test_checkpoint_is_durable_before_submit_on_agent_path(self):
+        from wqb_agent.client import WQBSubmitUnknownError
+
+        class DurableAmbiguousClient(FakeClient):
+            def __init__(self, state_dir):
+                super().__init__(latency=0)
+                self.state_dir = state_dir
+                self.checkpoint_status = None
+                self.checkpoint_proposal_id = None
+
+            def submit_simulation(self, expression, settings, alpha_type="REGULAR",
+                                  idempotency_key=None):
+                with open(os.path.join(self.state_dir, "round_1.checkpoint.json"),
+                          encoding="utf-8") as handle:
+                    checkpoint = json.load(handle)
+                row = checkpoint["experiments"][0]
+                self.checkpoint_status = row["status"]
+                self.checkpoint_proposal_id = row["proposal_id"]
+                self.sim_calls.append(expression)
+                raise WQBSubmitUnknownError("response lost after POST")
+
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["agent"]["state_dir"] = self._tmp
+        client = DurableAmbiguousClient(self._tmp)
+        agent = Agent(client, config)
+        hypothesis = {"id": "h", "statement": "test"}
+        exp = Experiment(1, "h", "rank(field)", {}, [], ["pv1"])
+        exp.proposal_id = "p1"
+        exp.allocation_key = "p1"
+        agent._write_proposal_checkpoint(1, hypothesis, [exp], complete=False)
+        agent.simulator.run(
+            [exp],
+            on_update=lambda item: agent._on_simulation_update(
+                item, 1, hypothesis, [exp]
+            ),
+        )
+        self.assertEqual(client.checkpoint_status, "SUBMITTING")
+        self.assertEqual(client.checkpoint_proposal_id, "p1")
+        self.assertEqual(exp.status, "SUBMIT_UNKNOWN")
+
+    def test_reloaded_submit_unknown_checkpoint_never_posts(self):
+        class CountingClient(FakeClient):
+            def submit_simulation(self, expression, settings, alpha_type="REGULAR",
+                                  idempotency_key=None):
+                self.sim_calls.append(expression)
+                raise AssertionError("SUBMIT_UNKNOWN recovery must not POST")
+
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["agent"]["state_dir"] = self._tmp
+        first = Agent(CountingClient(), config)
+        exp = Experiment(1, "h", "rank(field)", {}, [], ["pv1"])
+        exp.proposal_id = "p1"
+        exp.status = "SUBMIT_UNKNOWN"
+        exp.error = "WQBSubmitUnknownError: response lost after POST"
+        first._write_proposal_checkpoint(
+            1, {"id": "h", "statement": "test"}, [exp], complete=False
+        )
+
+        restarted_client = CountingClient()
+        restarted = Agent(restarted_client, config)
+        checkpoint = restarted._load_proposal_checkpoint(1)
+        self.assertIsNotNone(checkpoint)
+        self.assertIsNone(restarted._resume_proposal_checkpoint(checkpoint))
+        self.assertEqual(restarted_client.sim_calls, [])
+        self.assertFalse(restarted._load_proposal_checkpoint(1)["complete"])
+
+    def test_agent_submit_unknown_update_keeps_budget_and_arm_occupied(self):
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["agent"]["state_dir"] = self._tmp
+        config["agent"]["search_policy"] = {
+            "enabled": True,
+            "max_simulations": 2,
+            "max_pending_per_arm": 2,
+        }
+        agent = Agent(FakeClient(), config)
+        proposal = {
+            "proposal_id": "p1",
+            "expression": "rank(field)",
+            "datasets": ["pv1"],
+            "template_family": "trend",
+        }
+        self.assertTrue(agent.search_policy.accept(proposal))
+        self.assertTrue(agent.search_policy.commit(proposal))
+        exp = Experiment(1, "h", "rank(field)", {}, [], ["pv1"])
+        exp.proposal_id = "p1"
+        exp.allocation_key = "p1"
+        exp.status = "SUBMIT_UNKNOWN"
+        agent._on_simulation_update(exp, 1, {"id": "h"}, [exp])
+        state = agent.search_policy.allocator.proposals["p1"]
+        arm = agent.search_policy.allocator.arms[state["arm"]]
+        self.assertEqual(agent.search_policy.allocator.consumed_budget, 1)
+        self.assertEqual(state["status"], "UNKNOWN")
+        self.assertEqual(arm["unknown"], 1)
+
     def test_suggestion_exports_real_fields_bundle(self):
         agent, client = make_agent(self._tmp, rounds=1)
         agent.run_suggestion_round(round_no=1)

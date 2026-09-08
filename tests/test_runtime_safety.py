@@ -203,6 +203,51 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertEqual(finding["phase"], "simulation_submitted")
         self.assertEqual(finding["proposal_ids"], ["p"])
 
+    def test_audit_compares_ledger_phase_to_same_trajectory_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"id": "trial-1", "proposal_id": "p"}) + "\n")
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                for phase in ("simulation_committed", "simulation_submitted"):
+                    handle.write(json.dumps({"proposal_id": "p", "phase": phase}) + "\n")
+            result = audit_state(tmp)
+        findings = [item for item in result["findings"]
+                    if item["code"] == "ledger_lifecycle_missing_trajectory"]
+        self.assertEqual(
+            [(item["phase"], item["proposal_ids"]) for item in findings],
+            [("simulation_committed", ["p"]), ("simulation_submitted", ["p"])],
+        )
+
+    def test_audit_requires_exact_phase_continuity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_settled",
+                }) + "\n")
+            result = audit_state(tmp)
+        self.assertIn("lifecycle_order", result["errors"])
+
+    def test_audit_findings_have_one_canonical_order_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_submitted",
+                }) + "\n")
+            result = audit_state(tmp)
+        codes = [item["code"] for item in result["findings"]]
+        self.assertEqual(codes.count("ledger_lifecycle_order"), 1)
+        self.assertNotIn("lifecycle_order", codes)
+
+    def test_audit_findings_sort_proposal_ids_deterministically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "validation_reports.jsonl"), "w", encoding="utf-8") as handle:
+                for proposal_id in ("p2", "p1"):
+                    handle.write(json.dumps({"parent_id": proposal_id}) + "\n")
+            result = audit_state(tmp)
+        findings = [item for item in result["findings"]
+                    if item["code"] == "orphan_validation_parent"]
+        self.assertEqual([item["proposal_ids"] for item in findings], [["p1"], ["p2"]])
+
     def test_audit_and_doctor_surface_malformed_jsonl_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
@@ -214,6 +259,34 @@ class TestRuntimeSafety(unittest.TestCase):
             item["code"] == "LEDGER_EVIDENCE_DEGRADED"
             for item in doctor["diagnostics"]
         ))
+
+    def test_malformed_validation_is_degraded_warning_not_lifecycle_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "validation_reports.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write("not json\n")
+            result = audit_state(tmp)
+        self.assertTrue(result["ok"])
+        self.assertNotIn("malformed_validation_evidence", result["errors"])
+        finding = next(item for item in result["findings"]
+                       if item["code"] == "malformed_validation_evidence")
+        self.assertEqual(finding["severity"], "WARN")
+        self.assertIn("malformed_validation_evidence", result["warnings"])
+
+    def test_unknown_ledger_schema_is_distinguished_from_unknown_phase(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "schema_version": 99,
+                    "proposal_id": "p",
+                    "phase": "future_phase",
+                }) + "\n")
+            result = audit_state(tmp)
+        self.assertIn("unsupported_schema", result["errors"])
+        self.assertIn("unknown_ledger_phase", result["errors"])
+        finding = next(item for item in result["findings"]
+                       if item["code"] == "unsupported_schema")
+        self.assertEqual(finding["source"], "trial_ledger")
+        self.assertEqual(finding["rows"], 1)
 
     def test_known_result_records_ledger_before_trajectory(self):
         """已知结果必须先写生命周期证据，再落 append-only trajectory。"""
@@ -353,6 +426,27 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("orphan_submission", result["errors"])
 
+    def test_trial_ledger_summary_separates_exact_and_cumulative_submission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                for phase in ("simulation_submitted", "simulation_settled"):
+                    handle.write(json.dumps({"proposal_id": "p", "phase": phase}) + "\n")
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.ledger.simulation_submitted, frozenset({"p"}))
+        self.assertEqual(snapshot.ledger.submitted, frozenset({"p"}))
+
+    def test_valid_non_simulation_ledger_phases_are_not_lifecycle_degraded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                for phase in (
+                    "candidate_generated", "candidate_rejected",
+                    "preflight_accepted", "candidate_admitted",
+                ):
+                    handle.write(json.dumps({"candidate_id": "c", "phase": phase}) + "\n")
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.ledger.unknown_phase_rows, 0)
+        self.assertEqual(snapshot.ledger.incomplete_rows, 0)
+
     def test_audit_detects_duplicate_settlement_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
@@ -372,6 +466,9 @@ class TestRuntimeSafety(unittest.TestCase):
                 }) + "\n")
                 handle.write(json.dumps({
                     "proposal_id": "p", "phase": "simulation_submitted",
+                }) + "\n")
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_settled",
                 }) + "\n")
                 handle.write(json.dumps({
                     "proposal_id": "p", "phase": "research_outcome_settled",

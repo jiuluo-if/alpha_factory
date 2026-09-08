@@ -3,36 +3,46 @@
 from __future__ import annotations
 
 from .state import TERMINAL_STATUSES
+from .schema import ARTIFACT_SCHEMAS
 from .workspace_snapshot import read_workspace_snapshot
 
 
 def audit_state(state_dir, *, snapshot=None):
     snapshot = snapshot or read_workspace_snapshot(state_dir)
     errors = []
+    warnings = []
     findings = []
 
-    def record(code, source, **details):
-        if code not in errors:
-            errors.append(code)
-        finding = {"code": code, "source": source, "severity": "ERROR"}
+    def record(code, source, *, legacy_codes=(), severity="ERROR", **details):
+        target = errors if severity == "ERROR" else warnings
+        for error_code in (*legacy_codes, code):
+            if error_code not in target:
+                target.append(error_code)
+        finding = {"code": code, "source": source, "severity": severity}
         finding.update(details)
-        findings.append(finding)
+        if finding not in findings:
+            findings.append(finding)
 
     trajectory_summary = snapshot.trajectory
     trajectory_ids = set(trajectory_summary.trajectory_ids)
     observed_committed = set(trajectory_summary.observed_committed)
     observed_submitted = set(trajectory_summary.observed_submitted)
+    observed_simulation_submitted = set(trajectory_summary.observed_simulation_submitted)
     observed_simulation_settled = set(trajectory_summary.observed_simulation_settled)
     observed_research_settled = set(trajectory_summary.observed_research_settled)
     checkpoint_terminal = {}
     ledger_summary = snapshot.ledger
     ledger_committed = set(ledger_summary.committed)
     ledger_submitted = set(ledger_summary.submitted)
+    ledger_simulation_submitted = set(ledger_summary.simulation_submitted)
     ledger_simulation_settled = set(ledger_summary.simulation_settled)
     ledger_research_settled = set(ledger_summary.research_settled)
     if trajectory_summary.invalid_rows:
         record("malformed_trajectory_evidence", "trajectory",
                invalid_rows=trajectory_summary.invalid_rows)
+    if trajectory_summary.unsupported_schema_rows:
+        record("unsupported_schema", "trajectory",
+               rows=trajectory_summary.unsupported_schema_rows)
     if trajectory_summary.unknown_phase_rows:
         record("unknown_trajectory_phase", "trajectory",
                rows=trajectory_summary.unknown_phase_rows)
@@ -48,6 +58,9 @@ def audit_state(state_dir, *, snapshot=None):
     if ledger_summary.invalid_rows:
         record("malformed_ledger_evidence", "trial_ledger",
                invalid_rows=ledger_summary.invalid_rows)
+    if ledger_summary.unsupported_schema_rows:
+        record("unsupported_schema", "trial_ledger",
+               rows=ledger_summary.unsupported_schema_rows)
     if ledger_summary.unknown_phase_rows:
         record("unknown_ledger_phase", "trial_ledger",
                rows=ledger_summary.unknown_phase_rows)
@@ -62,7 +75,19 @@ def audit_state(state_dir, *, snapshot=None):
                violations=[list(item) for item in ledger_summary.phase_order_violations])
     if snapshot.validation.invalid_rows:
         record("malformed_validation_evidence", "validation_reports",
-               invalid_rows=snapshot.validation.invalid_rows)
+               severity="WARN", invalid_rows=snapshot.validation.invalid_rows)
+    if snapshot.validation.unsupported_schema_rows:
+        record("unsupported_schema", "validation_reports", severity="WARN",
+               rows=snapshot.validation.unsupported_schema_rows)
+    for info in snapshot.inventory.entries:
+        expected = ARTIFACT_SCHEMAS.get(info.name)
+        if (
+            expected is not None
+            and isinstance(info.schema_version, int)
+            and info.schema_version > expected
+        ):
+            record("unsupported_schema", info.name,
+                   actual_schema=info.schema_version, expected_schema=expected)
     if (
         trajectory_summary.duplicate_observed_settlements
         or ledger_summary.duplicate_settlements
@@ -95,23 +120,30 @@ def audit_state(state_dir, *, snapshot=None):
             if status in {"DONE", "FAILED", "SKIPPED"} and row.get("reserved") is True:
                 record("terminal_occupies_arm", "checkpoint",
                        proposal_ids=[str(proposal_id)] if proposal_id else [])
-    if (
-        not ledger_submitted.issubset(ledger_committed)
-        or not ledger_simulation_settled.issubset(ledger_submitted)
-        or not ledger_research_settled.issubset(ledger_submitted)
-    ):
-        record("lifecycle_order", "trial_ledger")
-        record("ledger_lifecycle_order", "trial_ledger")
-    if (
-        not observed_submitted.issubset(observed_committed)
-        or not observed_simulation_settled.issubset(observed_submitted)
-        or not observed_research_settled.issubset(observed_submitted)
-    ):
-        record("trajectory_lifecycle_order", "trajectory")
-        record("trajectory_projection_order", "trajectory")
+    ledger_order_broken = (
+        not ledger_simulation_submitted.issubset(ledger_committed)
+        or not ledger_simulation_settled.issubset(ledger_simulation_submitted)
+        or not ledger_research_settled.issubset(ledger_simulation_submitted)
+    )
+    if ledger_order_broken and not ledger_summary.phase_order_violations:
+        record("ledger_lifecycle_order", "trial_ledger", legacy_codes=("lifecycle_order",))
+    elif ledger_order_broken:
+        if "lifecycle_order" not in errors:
+            errors.append("lifecycle_order")
+    trajectory_order_broken = (
+        not observed_simulation_submitted.issubset(observed_committed)
+        or not observed_simulation_settled.issubset(observed_simulation_submitted)
+        or not observed_research_settled.issubset(observed_simulation_submitted)
+    )
+    if trajectory_order_broken and not trajectory_summary.phase_order_violations:
+        record("trajectory_projection_order", "trajectory",
+               legacy_codes=("trajectory_lifecycle_order",))
+    elif trajectory_order_broken:
+        if "trajectory_lifecycle_order" not in errors:
+            errors.append("trajectory_lifecycle_order")
     phase_sets = (
         ("simulation_committed", observed_committed, ledger_committed),
-        ("simulation_submitted", observed_submitted, ledger_submitted),
+        ("simulation_submitted", observed_simulation_submitted, ledger_simulation_submitted),
         ("simulation_settled", observed_simulation_settled, ledger_simulation_settled),
         ("research_outcome_settled", observed_research_settled, ledger_research_settled),
     )
@@ -120,7 +152,13 @@ def audit_state(state_dir, *, snapshot=None):
         if missing:
             record("trajectory_lifecycle_missing_ledger", "trajectory→trial_ledger",
                    phase=phase, proposal_ids=missing)
-        missing_projection = sorted(authoritative - trajectory_ids)
+        observed_for_phase = {
+            "simulation_committed": observed_committed,
+            "simulation_submitted": observed_simulation_submitted,
+            "simulation_settled": observed_simulation_settled,
+            "research_outcome_settled": observed_research_settled,
+        }[phase]
+        missing_projection = sorted(authoritative - observed_for_phase)
         if missing_projection:
             record("ledger_lifecycle_missing_trajectory", "trial_ledger→trajectory",
                    phase=phase, proposal_ids=missing_projection)
@@ -134,7 +172,7 @@ def audit_state(state_dir, *, snapshot=None):
         record("checkpoint_ledger_mismatch", "checkpoint+trial_ledger",
                proposal_ids=mismatch)
 
-    for parent_id in snapshot.validation.parent_ids:
+    for parent_id in sorted(snapshot.validation.parent_ids):
         if parent_id not in trajectory_ids:
             record("orphan_validation_parent", "validation_reports",
                    proposal_ids=[parent_id])
@@ -168,10 +206,13 @@ def audit_state(state_dir, *, snapshot=None):
             break
     unique_errors = list(dict.fromkeys(errors))
     return {"ok": not unique_errors, "errors": unique_errors,
+            "warnings": list(dict.fromkeys(warnings)),
             "blocking": bool(unique_errors), "findings": findings,
             "committed": len(ledger_committed), "submitted": len(ledger_submitted),
+            "simulation_submitted": len(ledger_simulation_submitted),
             "settled": len(ledger_research_settled),
             "trajectory_observed_committed": len(observed_committed),
             "trajectory_observed_submitted": len(observed_submitted),
+            "trajectory_observed_simulation_submitted": len(observed_simulation_submitted),
             "trajectory_observed_simulation_settled": len(observed_simulation_settled),
             "trajectory_observed_research_settled": len(observed_research_settled)}

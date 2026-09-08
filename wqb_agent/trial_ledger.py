@@ -29,6 +29,16 @@ PHASES = {
     "research_outcome_settled",
 }
 
+SIMULATION_LIFECYCLE_PHASES = (
+    "simulation_committed",
+    "simulation_submitted",
+    "simulation_settled",
+    "research_outcome_settled",
+)
+LIFECYCLE_PHASE_INDEX = {
+    phase: index for index, phase in enumerate(SIMULATION_LIFECYCLE_PHASES)
+}
+
 SIMULATION_PHASES = {
     "simulation_committed", "simulation_submitted", "simulation_settled",
     "submitted", "completed",

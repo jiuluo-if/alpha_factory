@@ -27,6 +27,15 @@ Agent 选择 hypothesis、experiment、解释和下一步；Python 保证平台�
 
 冲突时依次信任 BRAIN live truth、immutable evidence、derived state、cache。缺失或含糊证据保持 `UNKNOWN` / `UNAVAILABLE`。
 
+`TrialLedger` 的 simulation lifecycle 顺序只有一份定义：
+`simulation_committed → simulation_submitted → simulation_settled → research_outcome_settled`。
+`LedgerSummary.submitted` 是“至少已提交”的 cumulative 集合；需要精确事件时使用
+`simulation_submitted`。审计要求 ledger 的每个 canonical phase 与 trajectory 的同名
+`observed_*` projection 对齐；同 proposal 的普通 trajectory 记录不能替代缺失 phase。
+trajectory 侧同样以 `observed_submitted` 表示 cumulative 状态，以
+`observed_simulation_submitted` 表示 exact phase。
+候选生成、拒绝、预检和 admitted 是合法的非 simulation ledger phase，不参与上述顺序。
+
 ## 稳定概念与运行时映射
 
 - **BRAIN 接口**：由 `client.py`、`discovery.py` 和 `simulator.py` 实现；负责实时事实、Simulation 安全 POST 和已知 URL 轮询。

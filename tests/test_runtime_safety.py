@@ -28,6 +28,15 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertIsInstance(typed, AppConfig)
         self.assertIs(normalize_config(typed), typed)
 
+    def test_default_typed_config_is_runtime_ready(self):
+        typed = normalize_config(AppConfig())
+        self.assertEqual(typed.simulation_config.settings["neutralization"], "SUBINDUSTRY")
+        self.assertEqual(typed.runtime.memory["max_lineages"], 256)
+        self.assertEqual(typed.runtime.field_selection["mode"], "semantic_random")
+        self.assertEqual(typed.runtime.search_policy["max_pending_per_arm"], 1)
+        self.assertEqual(typed.runtime.quality["promising_sharpe"], 0.9)
+        self.assertEqual(typed.runtime.yearly_policy["min_years"], 2)
+
     def test_parse_config_keeps_typed_factory_and_nested_runtime_models(self):
         config = parse_config({"simulation": {}, "agent": {
             "factory": {"max_simulations": 12, "max_runtime_sec": 99},
@@ -92,6 +101,38 @@ class TestRuntimeSafety(unittest.TestCase):
             self.assertEqual(agent.candidates_per_round, 11)
             self.assertEqual(agent.simulator.poll_timeout_sec, 123)
             self.assertEqual(agent.trajectory.max_len, 17)
+
+    def test_runtime_component_defaults_are_resolved_at_config_boundary(self):
+        config = normalize_config({"simulation": {}, "agent": {}})
+        runtime = config.runtime
+        self.assertEqual(config.simulation_config.settings["neutralization"], "SUBINDUSTRY")
+        self.assertEqual(
+            {key: runtime.memory[key] for key in (
+                "max_lessons", "max_avoid", "max_next", "max_hypotheses",
+                "max_short_term", "short_term_window", "promote_hits",
+                "max_garbage", "garbage_max_age_rounds", "next_max_age_rounds",
+                "max_lineages", "max_seen_expressions", "max_used_hypotheses",
+            )},
+            {
+                "max_lessons": 20, "max_avoid": 30, "max_next": 15,
+                "max_hypotheses": 12, "max_short_term": 30,
+                "short_term_window": 5, "promote_hits": 2,
+                "max_garbage": 200, "garbage_max_age_rounds": 60,
+                "next_max_age_rounds": 20, "max_lineages": 256,
+                "max_seen_expressions": 4096, "max_used_hypotheses": 256,
+            },
+        )
+        self.assertEqual(
+            {key: runtime.field_selection[key] for key in (
+                "mode", "random_fraction", "random_seed",
+            )},
+            {"mode": "semantic_random", "random_fraction": 0.35, "random_seed": "newwqb"},
+        )
+        self.assertEqual(runtime.search_policy["max_pending_per_arm"], 1)
+        self.assertEqual(runtime.search_policy["ucb_exploration"], 1.0)
+        self.assertEqual(runtime.quality["promising_sharpe"], 0.9)
+        self.assertEqual(runtime.quality["promising_fitness"], 0.6)
+        self.assertEqual(runtime.yearly_policy["min_years"], 2)
 
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}

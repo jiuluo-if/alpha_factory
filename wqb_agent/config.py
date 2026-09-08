@@ -9,6 +9,42 @@ from .incremental_policy import IncrementalValuePolicy
 from .search_policy import validate_budget_hierarchy
 
 
+_MEMORY_DEFAULTS = {
+    "max_lessons": 20,
+    "max_avoid": 30,
+    "max_next": 15,
+    "max_hypotheses": 12,
+    "max_short_term": 30,
+    "short_term_window": 5,
+    "promote_hits": 2,
+    "max_garbage": 200,
+    "garbage_max_age_rounds": 60,
+    "next_max_age_rounds": 20,
+    "max_lineages": 256,
+    "max_seen_expressions": 4096,
+    "max_used_hypotheses": 256,
+}
+_FIELD_SELECTION_DEFAULTS = {
+    "mode": "semantic_random",
+    "random_fraction": 0.35,
+    "random_seed": "newwqb",
+}
+_SEARCH_POLICY_DEFAULTS = {
+    "max_pending_per_arm": 1,
+    "ucb_exploration": 1.0,
+}
+_QUALITY_DEFAULTS = {
+    "max_self_correlation": 0.5,
+    "success_sharpe": 1.25,
+    "success_fitness": 1.0,
+    "promising_sharpe": 0.9,
+    "promising_fitness": 0.6,
+    "min_turnover": 0.01,
+    "max_turnover": 0.7,
+    "max_drawdown": 0.5,
+}
+
+
 @dataclass(frozen=True)
 class IncrementalValueConfig:
     mode: str = "required_when_available"
@@ -34,7 +70,7 @@ class RobustnessConfig:
 
 @dataclass(frozen=True)
 class SimulationConfig:
-    settings: dict = field(default_factory=dict)
+    settings: dict = field(default_factory=lambda: {"neutralization": "SUBINDUSTRY"})
 
 
 @dataclass(frozen=True)
@@ -65,14 +101,14 @@ class AgentRuntimeConfig:
     max_field_alpha_count: int | None = None
     factory: dict = field(default_factory=dict)
     research_allocation: dict = field(default_factory=dict)
-    search_policy: dict = field(default_factory=dict)
-    field_selection: dict = field(default_factory=dict)
+    search_policy: dict = field(default_factory=lambda: dict(_SEARCH_POLICY_DEFAULTS))
+    field_selection: dict = field(default_factory=lambda: dict(_FIELD_SELECTION_DEFAULTS))
     submission_pool_filename: str = "submission_pool.json"
-    memory: dict = field(default_factory=dict)
-    quality: dict = field(default_factory=dict)
+    memory: dict = field(default_factory=lambda: dict(_MEMORY_DEFAULTS))
+    quality: dict = field(default_factory=lambda: dict(_QUALITY_DEFAULTS))
     statistical_policy: dict = field(default_factory=dict)
     robustness_policy: dict = field(default_factory=dict)
-    yearly_policy: dict = field(default_factory=dict)
+    yearly_policy: dict = field(default_factory=lambda: {"min_years": 2})
 
 @dataclass(frozen=True)
 class SearchConfig:
@@ -97,6 +133,8 @@ class FactoryConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    # Compatibility-only raw mappings. New runtime code consumes the typed
+    # ``simulation_config`` and ``runtime`` fields below.
     simulation: dict = field(default_factory=dict)
     agent: dict = field(default_factory=dict)
     search: SearchConfig = field(default_factory=SearchConfig)
@@ -108,6 +146,54 @@ class AppConfig:
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
+
+
+def _resolved_ints(values, defaults, *, minimum=0):
+    resolved = dict(values)
+    for key, default in defaults.items():
+        try:
+            value = int(values.get(key, default))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"config.agent.{key} 必须是整数") from exc
+        if value < minimum:
+            raise ValueError(f"config.agent.{key} 不得小于 {minimum}")
+        resolved[key] = value
+    return resolved
+
+
+def _resolve_runtime_policies(agent):
+    memory_raw = dict(agent.get("memory") or {})
+    memory = _resolved_ints(memory_raw, _MEMORY_DEFAULTS)
+    for key in ("max_lineages", "max_seen_expressions", "max_used_hypotheses"):
+        if memory[key] < 1:
+            raise ValueError(f"config.agent.memory.{key} 必须大于 0")
+
+    field_selection = {**_FIELD_SELECTION_DEFAULTS, **dict(agent.get("field_selection") or {})}
+    try:
+        field_selection["random_fraction"] = float(field_selection["random_fraction"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("config.agent.field_selection.random_fraction 必须是数字") from exc
+    if not 0.0 <= field_selection["random_fraction"] <= 1.0:
+        raise ValueError("config.agent.field_selection.random_fraction 必须在 0 到 1 之间")
+    field_selection["mode"] = str(field_selection["mode"] or "semantic_random")
+    field_selection["random_seed"] = str(field_selection["random_seed"] or "newwqb")
+
+    search_policy = {**_SEARCH_POLICY_DEFAULTS, **dict(agent.get("search_policy") or {})}
+    try:
+        search_policy["max_pending_per_arm"] = int(search_policy["max_pending_per_arm"])
+        search_policy["ucb_exploration"] = float(search_policy["ucb_exploration"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("config.agent.search_policy 的预算参数类型无效") from exc
+    if search_policy["max_pending_per_arm"] < 1 or search_policy["ucb_exploration"] < 0:
+        raise ValueError("config.agent.search_policy 的预算参数无效")
+
+    quality = {**_QUALITY_DEFAULTS, **dict(agent.get("quality") or {})}
+    for key in _QUALITY_DEFAULTS:
+        try:
+            quality[key] = float(quality[key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"config.agent.quality.{key} 必须是数字") from exc
+    return memory, field_selection, search_policy, quality
 
 def parse_config(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("simulation", {}), dict):
@@ -147,17 +233,20 @@ def parse_config(raw):
     )
     if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
         raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
-    field_selection = dict(agent.get("field_selection") or {})
+    memory, field_selection, search_policy, quality = _resolve_runtime_policies(agent)
     # Keep the validated typed factory model; the raw mapping remains
     # available only through ``runtime.factory`` for extensible legacy keys.
     factory_settings = dict(agent.get("factory") or {})
     research_allocation_raw = dict(agent.get("research_allocation") or {})
-    search_policy = dict(agent.get("search_policy") or {})
-    memory = dict(agent.get("memory") or {})
-    quality = dict(agent.get("quality") or {})
     statistical_policy = dict(agent.get("statistical_policy") or {})
     robustness_policy = dict(agent.get("robustness_policy") or {})
     yearly_policy = dict(agent.get("yearly_policy") or {})
+    try:
+        yearly_policy["min_years"] = int(yearly_policy.get("min_years", 2))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("config.agent.yearly_policy.min_years 必须是整数") from exc
+    if yearly_policy["min_years"] < 1:
+        raise ValueError("config.agent.yearly_policy.min_years 必须大于 0")
     statistical_policy.setdefault("mode", "required_when_available")
     robustness_policy = {
         "min_sharpe_retention": 0.7,
@@ -184,7 +273,10 @@ def parse_config(raw):
         trajectory_window=int(agent.get("trajectory_window", 100)),
         context_experiments=int(agent.get("context_experiments", 10)),
         fields_cache_ttl_sec=float(agent.get("fields_cache_ttl_sec", 7 * 24 * 3600)),
-        max_field_alpha_count=field_selection.get("max_alpha_count"),
+        max_field_alpha_count=(
+            int(field_selection["max_alpha_count"])
+            if field_selection.get("max_alpha_count") is not None else None
+        ),
         factory=copy.deepcopy(factory_settings),
         research_allocation=copy.deepcopy(research_allocation_raw),
         search_policy=copy.deepcopy(search_policy),
@@ -205,13 +297,16 @@ def parse_config(raw):
         research_allocation=allocation,
         factory=factory,
         incremental_value=IncrementalValueConfig(policy.mode, policy.max_abs_correlation, policy.min_overlap),
-        validation=ValidationConfig(int((agent.get("yearly_policy") or {}).get("min_years", 2)),),
+        validation=ValidationConfig(yearly_policy["min_years"]),
         statistical=StatisticalConfig(str((agent.get("statistical_policy") or {}).get("mode", "required_when_available"))),
         robustness=RobustnessConfig(
             float((agent.get("robustness_policy") or {}).get("min_sharpe_retention", 0.7)),
             float((agent.get("robustness_policy") or {}).get("min_fitness_retention", 0.6)),
         ),
-        simulation_config=SimulationConfig(copy.deepcopy(raw.get("simulation", {}))),
+        simulation_config=SimulationConfig({
+            "neutralization": "SUBINDUSTRY",
+            **copy.deepcopy(raw.get("simulation", {})),
+        }),
         runtime=runtime,
     )
 

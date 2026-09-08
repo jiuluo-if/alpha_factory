@@ -5,49 +5,24 @@ from __future__ import annotations
 import json
 import os
 
-from .checkpoints import CheckpointStore
 from .state import TERMINAL_STATUSES
+from .workspace_snapshot import read_workspace_snapshot
 
 
-def audit_state(state_dir):
+def audit_state(state_dir, *, snapshot=None):
+    snapshot = snapshot or read_workspace_snapshot(state_dir)
     errors = []
-    settlement_ids = set()
-    trajectory_ids = set()
-    committed = set()
-    submitted = set()
-    settled = set()
+    trajectory_summary = snapshot.trajectory
+    settlement_ids = set(trajectory_summary.settlement_ids)
+    trajectory_ids = set(trajectory_summary.trajectory_ids)
+    committed = set(trajectory_summary.committed)
+    submitted = set(trajectory_summary.submitted)
+    settled = set(trajectory_summary.settled)
     checkpoint_terminal = {}
     ledger_terminal = set()
-    trajectory_path = os.path.join(state_dir, "trajectory.jsonl")
-    try:
-        with open(trajectory_path, encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except (ValueError, TypeError):
-                    continue
-                if isinstance(row, dict):
-                    proposal_id = row.get("proposal_id")
-                    if proposal_id:
-                        phase = row.get("phase")
-                        if phase == "simulation_committed":
-                            committed.add(str(proposal_id))
-                        elif phase in {"simulation_submitted", "simulation_settled"}:
-                            submitted.add(str(proposal_id))
-                        elif phase == "research_outcome_settled":
-                            settled.add(str(proposal_id))
-                    if row.get("phase") == "research_outcome_settled":
-                        settlement_id = (row.get("settlement") or {}).get("settlement_id")
-                        if settlement_id and settlement_id in settlement_ids:
-                            errors.append("duplicate_settlement")
-                        elif settlement_id:
-                            settlement_ids.add(str(settlement_id))
-                    for key in (row.get("id"), row.get("alpha_id"), row.get("proposal_id")):
-                        if key:
-                            trajectory_ids.add(str(key))
-    except OSError:
-        pass
-    for record in CheckpointStore(state_dir).scan():
+    if trajectory_summary.duplicate_settlements:
+        errors.append("duplicate_settlement")
+    for record in snapshot.checkpoint_records:
         if record["malformed"]:
             errors.append("checkpoint_unreadable")
         for row in record["checkpoint"].get("experiments") or []:

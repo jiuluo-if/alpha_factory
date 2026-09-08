@@ -4,7 +4,10 @@ from __future__ import annotations
 
 
 def run_readonly_smoke(client, config):
-    agent_cfg = (config or {}).get("agent") if isinstance(config, dict) else {}
+    if hasattr(config, "agent"):
+        agent_cfg = config.agent
+    else:
+        agent_cfg = (config or {}).get("agent") if isinstance(config, dict) else {}
     agent_cfg = agent_cfg if isinstance(agent_cfg, dict) else {}
     result = {
         "network_write": False,

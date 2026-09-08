@@ -6,17 +6,17 @@ import json
 import os
 import re
 
-from .config import AppConfig, parse_config
-from .checkpoints import CheckpointStore
+from .config import normalize_config
 from .diagnostics import DiagnosticEvent
+from .workspace_snapshot import read_workspace_snapshot
 
 
 def _readable(path):
     return os.path.isfile(path) and os.access(path, os.R_OK)
 
 
-def run_doctor(raw_config, *, offline=True):
-    parsed = raw_config if isinstance(raw_config, AppConfig) else parse_config(raw_config)
+def run_doctor(raw_config, *, offline=True, snapshot=None):
+    parsed = normalize_config(raw_config)
     state_dir = parsed.runtime.state_dir
     ledger_path = os.path.join(state_dir, "trial_ledger.jsonl")
     ledger_exists = os.path.isfile(ledger_path)
@@ -41,10 +41,10 @@ def run_doctor(raw_config, *, offline=True):
         "pnl_capability": "UNAVAILABLE",
         "incremental_capability": "UNAVAILABLE",
     }
+    snapshot = snapshot or read_workspace_snapshot(state_dir)
     unresolved = 0
     submit_unknown = 0
-    pending_validation = 0
-    for record in CheckpointStore(state_dir).scan():
+    for record in snapshot.checkpoint_records:
         checkpoint = record["checkpoint"]
         if record["malformed"] or not checkpoint.get("complete", False):
             result["checkpoint_consistency"] = "FAIL"
@@ -52,22 +52,8 @@ def run_doctor(raw_config, *, offline=True):
         for row in checkpoint.get("experiments") or []:
             if isinstance(row, dict) and row.get("status") == "SUBMIT_UNKNOWN":
                 submit_unknown += 1
-    trajectory_path = os.path.join(state_dir, "trajectory.jsonl")
-    try:
-        with open(trajectory_path, encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except (ValueError, TypeError):
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                if row.get("status") == "SUBMIT_UNKNOWN":
-                    submit_unknown += 1
-                if row.get("validation_status") in {"PENDING", "UNVALIDATED"}:
-                    pending_validation += 1
-    except OSError:
-        pass
+    submit_unknown += snapshot.trajectory.submit_unknown_count
+    pending_validation = snapshot.trajectory.pending_validation_count
     result["unresolved_simulation_count"] = unresolved
     result["submit_unknown_count"] = submit_unknown
     result["pending_validation_count"] = pending_validation

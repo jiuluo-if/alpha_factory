@@ -44,7 +44,13 @@ from .proposal_contract import (
     validate_proposal,
     validate_vector_inputs,
 )
-from .state import Experiment, ResearchState, UNRESOLVED_STATUSES
+from .state import (
+    Experiment,
+    RECOVERABLE_STATUSES,
+    ResearchState,
+    UNKNOWN_STATUSES,
+    UNRESOLVED_STATUSES,
+)
 from .submission import latest_active_snapshot, self_correlation_evidence
 from .submission import submission_eligibility
 from .runtime_components import build_runtime_components
@@ -123,7 +129,7 @@ class Agent:
         self.client = client
         config = normalize_config(config)
         runtime = config.runtime
-        self.simulation_settings = config.simulation
+        self.simulation_settings = config.simulation_config.settings
         self.factory_config = {
             **runtime.factory,
             "max_simulations": config.factory.max_simulations,
@@ -151,16 +157,10 @@ class Agent:
             config.incremental_value.max_abs_correlation,
             config.incremental_value.min_overlap,
         )
-        field_selection = runtime.field_selection
         self.max_field_alpha_count = runtime.max_field_alpha_count
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md"))
         self.operator_reference = _operator_reference(operator_path)
-        components = build_runtime_components(
-            self.client, config,
-            operator_reference=self.operator_reference,
-            quality_policy=self.quality_policy,
-            field_selection=field_selection,
-        )
+        components = build_runtime_components(self.client, config)
         self.search_policy = components.search_policy
         self.memory = components.memory
         self.trajectory = components.trajectory
@@ -909,14 +909,14 @@ class Agent:
         _round_elapsed = time.time() - _round_t0
         unresolved = [
             exp for exp in experiments
-            if exp.status in ("PENDING", "RUNNING", "SUBMITTING", "SUBMIT_UNKNOWN", "UNKNOWN")
+            if exp.status in UNRESOLVED_STATUSES
         ]
         if unresolved:
             for exp in experiments:
                 self.search_policy.release(
                     {"proposal_id": exp.allocation_key, "expression": exp.expression,
                      "dataset_family": exp.datasets, "template_family": exp.template_family},
-                    status="UNKNOWN" if exp.status in {"UNKNOWN", "SUBMIT_UNKNOWN"} else "PENDING",
+                    status="UNKNOWN" if exp.status in UNKNOWN_STATUSES else "PENDING",
                 )
             self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
             self._write_sims_results(round_no, experiments, total_elapsed_sec=_round_elapsed)
@@ -994,7 +994,7 @@ class Agent:
         if len(matches) != 1:
             raise ValueError(f"expected one checkpoint experiment for {simulation_id}, found {len(matches)}")
         exp = matches[0]
-        if exp.status not in {"UNKNOWN", "RUNNING", "PENDING", "SUBMITTING"}:
+        if exp.status not in RECOVERABLE_STATUSES:
             raise ValueError(f"simulation {simulation_id} is already {exp.status}")
         last = attempts[-1]
         exp.status = "SKIPPED_STALE"
@@ -1096,7 +1096,7 @@ class Agent:
             if old is None or rank.get(exp.status, 0) > rank.get(old.status, 0):
                 selected[exp.expression] = exp
         experiments = list(selected.values())
-        active = [e for e in experiments if e.status in {"PENDING", "RUNNING", "SUBMITTING", "SUBMIT_UNKNOWN", "UNKNOWN"}]
+        active = [e for e in experiments if e.status in UNRESOLVED_STATUSES]
         if active:
             raise ValueError(f"round {round_no} still has unresolved experiments")
         checkpoint = self._load_proposal_checkpoint(int(round_no)) or {}
@@ -1150,7 +1150,7 @@ class Agent:
         experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
         runnable = [
             exp for exp in experiments
-            if exp.status not in ("DONE", "FAILED", "SUBMIT_UNKNOWN", "SKIPPED_STALE", "SKIPPED_UNKNOWN")
+            if exp.status in RECOVERABLE_STATUSES
         ]
         unresolved = [exp for exp in experiments if exp.status == "SUBMIT_UNKNOWN"]
         print(f"\n=== Round {round_no} checkpoint resume ===")
@@ -1499,7 +1499,7 @@ class Agent:
                 if isinstance(fingerprint, str) and fingerprint
                 else None
             )
-            if status in ("UNKNOWN", "PENDING", "RUNNING", "SUBMITTING", "SUBMIT_UNKNOWN"):
+            if status in UNRESOLVED_STATUSES:
                 terminal.discard(canonical)
                 if fingerprint_key:
                     fingerprints.discard(fingerprint_key)

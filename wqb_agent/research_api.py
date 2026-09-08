@@ -27,7 +27,7 @@ import tempfile
 from typing import Any, Mapping, Sequence
 
 from .artifacts import atomic_write_json_if_changed
-from .config import parse_config
+from .config import normalize_config
 from .expression import analyze_expression
 from .proposal_contract import _operator_reference
 from .state import Trajectory
@@ -155,7 +155,7 @@ def _agent(*, agent=None, client=None, config=None, state_dir=None):
         raw.setdefault("agent", {})["state_dir"] = state_dir
     from .agent import Agent
 
-    return Agent(client, parse_config(raw))
+    return Agent(client, normalize_config(raw))
 
 
 def _state_dir(agent=None, state_dir=None) -> str:

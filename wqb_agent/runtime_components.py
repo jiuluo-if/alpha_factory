@@ -13,6 +13,7 @@ from .memory import ExperienceMemory
 from .evidence import load_evidence_cache
 from .reflection import Reflector
 from .simulator import Simulator
+from .search_policy import SearchPolicy
 from .state import Trajectory
 from .submission import SubmissionPool
 from .trial_ledger import TrialLedger
@@ -22,7 +23,7 @@ from .trial_ledger import TrialLedger
 class RuntimeComponents:
     """Already-resolved runtime objects; contains no orchestration logic."""
 
-    search_policy: object
+    search_policy: SearchPolicy
     memory: ExperienceMemory
     trajectory: Trajectory
     trial_ledger: TrialLedger
@@ -32,11 +33,9 @@ class RuntimeComponents:
     reflector: Reflector
     checkpoints: CheckpointStore
     submission_pool: SubmissionPool
-    operator_reference: dict
 
 
-def build_runtime_components(client, config, *, operator_reference, quality_policy,
-                             field_selection):
+def build_runtime_components(client, config):
     """Construct the existing runtime components from resolved AppConfig."""
     runtime = config.runtime
     search_cfg = {
@@ -45,26 +44,24 @@ def build_runtime_components(client, config, *, operator_reference, quality_poli
         "max_simulations": config.search.max_simulations,
         "validation_max_simulations": config.search.validation_max_simulations,
     }
-    from .search_policy import SearchPolicy
-
     search_policy = SearchPolicy(search_cfg)
     state_dir = runtime.state_dir
     submission_pool = SubmissionPool(state_dir, filename=runtime.submission_pool_filename)
     memory = ExperienceMemory(
         state_dir,
-        max_lessons=runtime.memory.get("max_lessons", 20),
-        max_avoid=runtime.memory.get("max_avoid", 30),
-        max_next=runtime.memory.get("max_next", 15),
-        max_hypotheses=runtime.memory.get("max_hypotheses", 12),
-        max_short_term=runtime.memory.get("max_short_term", 30),
-        short_term_window=runtime.memory.get("short_term_window", 5),
-        promote_hits=runtime.memory.get("promote_hits", 2),
-        max_garbage=runtime.memory.get("max_garbage", 200),
-        garbage_max_age_rounds=runtime.memory.get("garbage_max_age_rounds", 60),
-        next_max_age_rounds=runtime.memory.get("next_max_age_rounds", 20),
-        max_lineages=runtime.memory.get("max_lineages", 256),
-        max_seen_expressions=runtime.memory.get("max_seen_expressions", 4096),
-        max_used_hypotheses=runtime.memory.get("max_used_hypotheses", 256),
+        max_lessons=runtime.memory["max_lessons"],
+        max_avoid=runtime.memory["max_avoid"],
+        max_next=runtime.memory["max_next"],
+        max_hypotheses=runtime.memory["max_hypotheses"],
+        max_short_term=runtime.memory["max_short_term"],
+        short_term_window=runtime.memory["short_term_window"],
+        promote_hits=runtime.memory["promote_hits"],
+        max_garbage=runtime.memory["max_garbage"],
+        garbage_max_age_rounds=runtime.memory["garbage_max_age_rounds"],
+        next_max_age_rounds=runtime.memory["next_max_age_rounds"],
+        max_lineages=runtime.memory["max_lineages"],
+        max_seen_expressions=runtime.memory["max_seen_expressions"],
+        max_used_hypotheses=runtime.memory["max_used_hypotheses"],
     )
     trajectory = Trajectory(
         max_len=runtime.trajectory_window,
@@ -72,7 +69,7 @@ def build_runtime_components(client, config, *, operator_reference, quality_poli
     )
     trial_ledger = TrialLedger(os.path.join(state_dir, "trial_ledger.jsonl"))
     builder = CandidateBuilder(
-        neutralization=config.simulation.get("neutralization", "SUBINDUSTRY")
+        neutralization=config.simulation_config.settings["neutralization"]
     )
     discovery = FieldDiscovery(
         client,
@@ -81,9 +78,9 @@ def build_runtime_components(client, config, *, operator_reference, quality_poli
         cache_path=os.path.join(state_dir, "fields_cache.json"),
         cache_ttl_sec=runtime.fields_cache_ttl_sec,
         max_alpha_count=runtime.max_field_alpha_count,
-        selection_mode=field_selection.get("mode", "semantic_random"),
-        random_fraction=field_selection.get("random_fraction", 0.35),
-        random_seed=field_selection.get("random_seed", "newwqb"),
+        selection_mode=runtime.field_selection["mode"],
+        random_fraction=runtime.field_selection["random_fraction"],
+        random_seed=runtime.field_selection["random_seed"],
     )
     simulator = Simulator(
         client,
@@ -92,10 +89,10 @@ def build_runtime_components(client, config, *, operator_reference, quality_poli
         replace_attempts=runtime.replace_attempts,
         replace_backoff_sec=runtime.replace_backoff_sec,
         yearly_policy={
-            "min_sharpe": quality_policy.get("promising_sharpe", 0.0),
-            "min_fitness": quality_policy.get("promising_fitness", 0.0),
-            "max_turnover": quality_policy.get("max_turnover"),
-            "min_years": runtime.yearly_policy.get("min_years", config.validation.yearly_min_years),
+            "min_sharpe": runtime.quality["promising_sharpe"],
+            "min_fitness": runtime.quality["promising_fitness"],
+            "max_turnover": runtime.quality["max_turnover"],
+            "min_years": runtime.yearly_policy["min_years"],
         },
     )
     reflector_keys = {
@@ -110,8 +107,8 @@ def build_runtime_components(client, config, *, operator_reference, quality_poli
     }
     reflector = Reflector(
         memory,
-        **{target: quality_policy[key] for key, target in reflector_keys.items()
-           if key in quality_policy},
+        **{target: runtime.quality[key] for key, target in reflector_keys.items()
+           if key in runtime.quality},
     )
     reflector.evidence_cache = load_evidence_cache(state_dir)
     lock = threading.Lock()
@@ -126,5 +123,4 @@ def build_runtime_components(client, config, *, operator_reference, quality_poli
         reflector=reflector,
         checkpoints=CheckpointStore(state_dir, lock=lock),
         submission_pool=submission_pool,
-        operator_reference=operator_reference,
     )

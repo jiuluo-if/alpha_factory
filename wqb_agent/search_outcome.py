@@ -14,6 +14,8 @@ ValidationReport schema.
 from dataclasses import dataclass
 import math
 
+from .state import UNKNOWN_STATUSES, UNRESOLVED_STATUSES
+
 
 REWARD_VERSION = "reward_v1"
 
@@ -80,7 +82,7 @@ def _finite(value):
 
 def _label(record, validation):
     status = str(_value(record, "status", "UNKNOWN") or "UNKNOWN").upper()
-    if status in {"UNKNOWN", "PENDING", "RUNNING", "SUBMIT_UNKNOWN"}:
+    if status in UNRESOLVED_STATUSES:
         return "UNRESOLVED"
     if status == "FAILED":
         return "FAILED"
@@ -126,9 +128,7 @@ def parent_relative_delta(child, parent):
 def reward_v1(*, status, infrastructure_failure, base_quality, robustness,
               statistical_decision=None, parent_delta=None):
     """Map explicit evidence stages to a finite research-value reward."""
-    if infrastructure_failure or str(status or "").upper() in {
-        "UNKNOWN", "SUBMIT_UNKNOWN", "PENDING", "RUNNING"
-    }:
+    if infrastructure_failure or str(status or "").upper() in UNRESOLVED_STATUSES:
         return None
     if str(base_quality or "").upper() in {"FAILED", "FAIL", "UNRESOLVED"}:
         return 0.0
@@ -197,7 +197,7 @@ class SearchOutcome:
                         quality_label=None):
         status = str(_value(experiment, "status", "UNKNOWN") or "UNKNOWN").upper()
         error = str(_value(experiment, "error", "") or "").upper()
-        infrastructure_failure = status in {"UNKNOWN", "SUBMIT_UNKNOWN"} or any(
+        infrastructure_failure = status in UNKNOWN_STATUSES or any(
             token in error for token in ("AUTH", "RATE_LIMIT", "TIMEOUT", "INFRA", "NETWORK", "HTTP")
         )
         quality = quality_label or _label(experiment, validation)

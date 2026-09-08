@@ -5,7 +5,8 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import main as main_entry
-from wqb_agent.preflight import build_agent_context, render_agent_context
+from wqb_agent.checkpoints import CheckpointStore
+from wqb_agent.preflight import build_agent_context, render_agent_context, run_takeover_preflight
 
 
 def _preflight(*, status="READY", blocking=None, latest_round=12,
@@ -29,6 +30,19 @@ def _preflight(*, status="READY", blocking=None, latest_round=12,
 
 
 class TestAgentContext(unittest.TestCase):
+    def test_takeover_preflight_scans_checkpoints_once_per_command(self):
+        with __import__("tempfile").TemporaryDirectory() as state_dir:
+            original_scan = CheckpointStore.scan
+            with patch.object(
+                CheckpointStore, "scan", autospec=True,
+                side_effect=original_scan,
+            ) as scan:
+                result = run_takeover_preflight({
+                    "simulation": {}, "agent": {"state_dir": state_dir},
+                })
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(scan.call_count, 1)
+
     def test_context_reuses_authoritative_preflight_and_blocks_next_action(self):
         with patch(
             "wqb_agent.preflight.run_takeover_preflight",

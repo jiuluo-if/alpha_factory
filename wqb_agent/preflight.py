@@ -6,9 +6,9 @@ import json
 import os
 
 from .audit import audit_state
-from .checkpoints import CheckpointStore
-from .config import AppConfig, parse_config
+from .config import normalize_config
 from .doctor import run_doctor
+from .workspace_snapshot import read_workspace_snapshot
 
 PROJECT_NAME = "wqb_alpha_factory"
 SAFETY_INVARIANTS = (
@@ -59,14 +59,6 @@ TASK_ROUTES = {
         "docs": ["docs/RESEARCH_POLICY.md"],
     },
 }
-
-
-def _count_unfinished_checkpoints(state_dir):
-    return sorted(
-        os.path.basename(record["path"])
-        for record in CheckpointStore(state_dir).scan()
-        if record["malformed"] or not record["checkpoint"].get("complete", False)
-    )
 
 
 def _read_json(path, default):
@@ -173,30 +165,15 @@ def run_takeover_preflight(raw_config):
     It tells a newly attached Agent what to read first without creating a
     second state machine or treating cache/report files as platform truth.
     """
-    config = raw_config if isinstance(raw_config, AppConfig) else parse_config(raw_config)
-    state_dir = config.runtime.state_dir if isinstance(config, AppConfig) else config.agent.get("state_dir", ".wqb_state")
-    doctor = run_doctor(config, offline=True)
-    state = audit_state(state_dir)
-    unfinished = _count_unfinished_checkpoints(state_dir)
+    config = normalize_config(raw_config)
+    state_dir = config.runtime.state_dir
+    snapshot = read_workspace_snapshot(state_dir)
+    doctor = run_doctor(config, offline=True, snapshot=snapshot)
+    state = audit_state(state_dir, snapshot=snapshot)
+    unfinished = list(snapshot.unfinished_checkpoint_paths)
     proposals = _read_json(os.path.join(state_dir, "proposals.json"), {})
     evidence_cache = _read_json(os.path.join(state_dir, "evidence_cache.json"), {})
     experience = _read_json(os.path.join(state_dir, "experience.json"), {})
-    trajectory_path = os.path.join(state_dir, "trajectory.jsonl")
-    trajectory_count = 0
-    latest_round = None
-    try:
-        with open(trajectory_path, encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except (ValueError, TypeError, json.JSONDecodeError):
-                    continue
-                if isinstance(row, dict):
-                    trajectory_count += 1
-                    if isinstance(row.get("round"), int):
-                        latest_round = max(latest_round or row["round"], row["round"])
-    except OSError:
-        pass
     blocking = list(unfinished)
     if not state.get("ok"):
         blocking.extend(state.get("errors") or [])
@@ -209,7 +186,10 @@ def run_takeover_preflight(raw_config):
         "doctor": doctor,
         "state": state,
         "unfinished_checkpoints": unfinished,
-        "trajectory": {"records": trajectory_count, "latest_round": latest_round},
+        "trajectory": {
+            "records": snapshot.trajectory.records,
+            "latest_round": snapshot.trajectory.latest_round,
+        },
         "current_best": experience.get("current_best") if isinstance(experience, dict) else None,
         "evidence_cache_entries": len(evidence_cache) if isinstance(evidence_cache, dict) else 0,
         "proposal_round": proposals.get("round_no") if isinstance(proposals, dict) else None,

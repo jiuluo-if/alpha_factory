@@ -126,6 +126,59 @@ class TestArchitectureBoundaries(unittest.TestCase):
             self.assertNotIn('"/submit"', source,
                              f"{filename} 不得包含自动 Alpha submission endpoint")
 
+    def test_raw_config_enters_production_through_normalize_config(self):
+        for filename in ("main.py", "preflight.py", "doctor.py", "research_api.py"):
+            path = os.path.join(ROOT if filename == "main.py" else PACKAGE_ROOT, filename)
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            self.assertNotIn(
+                "parse_config(", source,
+                f"{filename} 绕过 normalize_config 直接解释 raw config",
+            )
+
+    def test_runtime_components_does_not_reinterpret_formal_defaults(self):
+        path = os.path.join(PACKAGE_ROOT, "runtime_components.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        for expression in (
+            "runtime.memory.get(", "field_selection.get(",
+            "quality_policy.get(", "runtime.yearly_policy.get(",
+            "config.simulation.get(",
+        ):
+            self.assertNotIn(expression, source, f"runtime_components 仍解释配置默认值: {expression}")
+
+    def test_runtime_components_does_not_duplicate_operator_reference_owner(self):
+        path = os.path.join(PACKAGE_ROOT, "runtime_components.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn("operator_reference", source)
+
+    def test_execution_readers_reuse_canonical_status_sets(self):
+        expected = {
+            "agent.py": ("RECOVERABLE_STATUSES", "UNRESOLVED_STATUSES"),
+            "simulator.py": ("UNKNOWN_STATUSES",),
+            "search_outcome.py": ("UNRESOLVED_STATUSES", "UNKNOWN_STATUSES"),
+        }
+        for filename, symbols in expected.items():
+            with open(os.path.join(PACKAGE_ROOT, filename), encoding="utf-8") as handle:
+                source = handle.read()
+            for symbol in symbols:
+                self.assertIn(symbol, source, f"{filename} 未复用 state.py 的 {symbol}")
+
+    def test_expression_facts_reuse_analyze_expression(self):
+        path = os.path.join(PACKAGE_ROOT, "alpha_factory.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("analyze_expression", source)
+        self.assertNotIn("re.findall(", source)
+
+    def test_reconciliation_script_reuses_recoverable_statuses(self):
+        path = os.path.join(ROOT, "scripts", "reconcile_pending.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("RECOVERABLE_STATUSES", source)
+        self.assertNotIn("ACTIVE_LOCAL =", source)
+
 
 if __name__ == "__main__":
     unittest.main()

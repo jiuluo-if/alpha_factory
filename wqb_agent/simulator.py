@@ -42,6 +42,7 @@ from .client import (
 )
 from .metrics import check_health as _check_health
 from .metrics import extract_metrics as _extract_metrics
+from .state import UNKNOWN_STATUSES
 from .yearly import build_yearly_evidence
 
 
@@ -119,7 +120,7 @@ class Simulator:
 
     @staticmethod
     def _pauses_dispatch(exp):
-        if exp.status in ("UNKNOWN", "SUBMIT_UNKNOWN"):
+        if exp.status in UNKNOWN_STATUSES:
             return True
         if exp.status == "FAILED" and exp.error and (
             "401" in exp.error or "403" in exp.error

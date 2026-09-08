@@ -191,9 +191,9 @@ def main():
     # Validate once before any client construction.  The legacy mapping is
     # retained for Agent compatibility; typed policy objects are exposed by
     # wqb_agent.config and are not reparsed by read-only commands.
-    from wqb_agent.config import parse_config
+    from wqb_agent.config import normalize_config
     try:
-        typed_config = parse_config(config)
+        typed_config = normalize_config(config)
     except (TypeError, ValueError) as exc:
         print(f"配置无效: {exc}")
         sys.exit(1)
@@ -204,21 +204,21 @@ def main():
         return
     if args.audit_state:
         from wqb_agent.audit import audit_state
-        result = audit_state(config["agent"].get("state_dir", ".wqb_state"))
+        result = audit_state(typed_config.runtime.state_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
             sys.exit(2)
         return
     if args.takeover_preflight:
         from wqb_agent.preflight import run_takeover_preflight
-        result = run_takeover_preflight(config)
+        result = run_takeover_preflight(typed_config)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("status") != "READY":
             sys.exit(2)
         return
     if args.agent_context:
         from wqb_agent.preflight import build_agent_context, render_agent_context
-        context = build_agent_context(config, task=args.task)
+        context = build_agent_context(typed_config, task=args.task)
         print(render_agent_context(context, compact=args.compact, json_mode=args.json))
         return
     if args.smoke_readonly:
@@ -226,7 +226,7 @@ def main():
         from wqb_agent.smoke import run_readonly_smoke
         try:
             client = WQBClient()
-            print(json.dumps(run_readonly_smoke(client, config), ensure_ascii=False, indent=2))
+            print(json.dumps(run_readonly_smoke(client, typed_config), ensure_ascii=False, indent=2))
         except Exception as exc:
             print(json.dumps({"network_write": False, "status": "UNAVAILABLE", "reason": str(exc)}, ensure_ascii=False, indent=2))
         return
@@ -235,7 +235,7 @@ def main():
         from wqb_agent import WQBClient
         from wqb_agent.alpha_colors import load_color_candidates, sync_alpha_colors
 
-        state_dir = config["agent"].get("state_dir", ".wqb_state")
+        state_dir = typed_config.runtime.state_dir
         lock_path = acquire_single_instance_lock(
             state_dir, operation="sync-alpha-colors"
         )
@@ -269,7 +269,7 @@ def main():
     if args.factory_stop or args.factory_status:
         from wqb_agent.factory_runner import AIFactoryRunner
 
-        state_dir = config["agent"].get("state_dir", ".wqb_state")
+        state_dir = typed_config.runtime.state_dir
         if args.factory_stop:
             session = AIFactoryRunner.request_stop(state_dir)
             if session is None:
@@ -302,7 +302,7 @@ def main():
             agent.run_suggestion_round()
             return
         lock_path = acquire_single_instance_lock(
-            config["agent"].get("state_dir", ".wqb_state"),
+            typed_config.runtime.state_dir,
             operation="factory-run" if args.factory_run else "run-proposals" if args.run_proposals else "skip-stale" if args.skip_stale else "skip-submit-unknown" if args.skip_submit_unknown else "finalize-round" if args.finalize_recorded_round else "idle",
         )
         if lock_path is None:
@@ -310,7 +310,7 @@ def main():
         if args.factory_run:
             from wqb_agent.factory_runner import AIFactoryRunner
 
-            factory_cfg = config["agent"].get("factory") or {}
+            factory_cfg = typed_config.runtime.factory
             hours = (
                 args.factory_hours
                 if args.factory_hours is not None

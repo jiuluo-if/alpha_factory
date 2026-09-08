@@ -110,13 +110,6 @@ class AIFactoryRunner:
         self.state_dir = agent.state_dir
         self.session_path = os.path.join(self.state_dir, self.SESSION_FILE)
         self.proposals_path = os.path.join(self.state_dir, "proposals.json")
-        # Completed checkpoint names are monotonic within a process. Cache
-        # only this tiny control-plane fact; unfinished/malformed files are
-        # always re-read so recovery and reconciliation remain fail-closed.
-        # Cache completed checkpoint reads only while the file signature is
-        # unchanged. A changed file must be re-read: a stale name-only cache
-        # could miss a newly unfinished checkpoint after repair/replacement.
-        self._complete_checkpoint_signatures = {}
 
     def run(self, duration_sec=86400, max_rounds=0, idle_sleep_sec=30,
             max_simulations=240):
@@ -569,13 +562,7 @@ class AIFactoryRunner:
         return proposals if isinstance(proposals, list) and proposals else []
 
     def _load_checkpoint_payload(self, round_no):
-        path = os.path.join(self.state_dir, f"round_{int(round_no)}.checkpoint.json")
-        try:
-            with open(path, encoding="utf-8") as handle:
-                payload = json.load(handle)
-            return payload if isinstance(payload, dict) else None
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return None
+        return self.agent.checkpoints.load(round_no)
 
     def _accepted_count(self, proposal_count):
         stats = getattr(self.agent, "last_run_stats", {})
@@ -585,16 +572,14 @@ class AIFactoryRunner:
         except (TypeError, ValueError):
             return proposal_count
 
-    @staticmethod
-    def _checkpoint_experiment_count(path):
+    def _checkpoint_experiment_count(self, path):
         """Count checkpoint slots without materializing experiment objects."""
-        try:
-            with open(path, encoding="utf-8") as handle:
-                payload = json.load(handle)
-            experiments = payload.get("experiments") if isinstance(payload, dict) else None
-            return len(experiments) if isinstance(experiments, list) else 0
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        checkpoint_round = self._checkpoint_round(path)
+        if checkpoint_round is None:
             return 0
+        payload = self.agent.checkpoints.load(checkpoint_round)
+        experiments = payload.get("experiments") if isinstance(payload, dict) else None
+        return len(experiments) if isinstance(experiments, list) else 0
 
     @staticmethod
     def _recovery_already_reserved(session, checkpoint_round):
@@ -739,45 +724,7 @@ class AIFactoryRunner:
         return True
 
     def _unfinished_checkpoint(self):
-        result = None
-        result_round = None
-        try:
-            entries = os.scandir(self.state_dir)
-        except OSError:
-            return None
-        with entries:
-            for entry in entries:
-                match = re.fullmatch(r"round_(\d+)\.checkpoint\.json", entry.name)
-                if not match:
-                    continue
-                checkpoint_round = int(match.group(1))
-                if result_round is not None and checkpoint_round >= result_round:
-                    continue
-                path = entry.path
-                try:
-                    stat = entry.stat()
-                    signature = (stat.st_mtime_ns, stat.st_size)
-                    if self._complete_checkpoint_signatures.get(entry.name) == signature:
-                        continue
-                    with open(path, encoding="utf-8") as handle:
-                        payload = json.load(handle)
-                    if not isinstance(payload, dict) or not payload.get("complete", False):
-                        result = path
-                        result_round = checkpoint_round
-                    else:
-                        self._complete_checkpoint_signatures[entry.name] = signature
-                except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    result = path
-                    result_round = checkpoint_round
-        if len(self._complete_checkpoint_signatures) > self.CHECKPOINT_CACHE_MAX:
-            ordered = sorted(
-                self._complete_checkpoint_signatures.items(),
-                key=lambda item: self._checkpoint_round(item[0]) or -1,
-            )
-            self._complete_checkpoint_signatures = dict(
-                ordered[-self.CHECKPOINT_CACHE_MAX:]
-            )
-        return result
+        return self.agent.checkpoints.unfinished_except(-1)
 
     @staticmethod
     def _compact_result(round_no, result, proposal_count):

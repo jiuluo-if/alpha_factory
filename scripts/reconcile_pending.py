@@ -28,10 +28,7 @@ from wqb_agent.metrics import (
     checks_passed,
     extract_metrics as _extract_metrics,
 )
-from wqb_agent.state import Experiment, Trajectory
-
-TERMINAL_LOCAL = {"DONE", "FAILED", "SUBMIT_UNKNOWN"}
-ACTIVE_LOCAL = {"PENDING", "RUNNING", "SUBMITTING", "UNKNOWN"}
+from wqb_agent.state import Experiment, RECOVERABLE_STATUSES, Trajectory
 
 
 def _scalar_key(value):
@@ -124,7 +121,7 @@ def collect(state_dir):
     if not os.path.exists(path):
         return []
     for e in iter_jsonl_objects(path):
-        if e.get("status") not in ACTIVE_LOCAL:
+        if e.get("status") not in RECOVERABLE_STATUSES:
             continue
         progress_url = e.get("progress_url")
         if not isinstance(progress_url, str) or not progress_url.strip():

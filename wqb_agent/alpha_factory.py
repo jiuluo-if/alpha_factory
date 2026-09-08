@@ -9,10 +9,9 @@ keeps the skeleton visible to the later proposal and diversity gates.
 from dataclasses import dataclass
 import hashlib
 import json
-import re
 
 from .diversity import extract_fields
-from .expression import canonical_expression
+from .expression import analyze_expression, canonical_expression
 
 
 @dataclass(frozen=True)
@@ -30,7 +29,7 @@ class AlphaTemplate:
     @property
     def operator_count(self):
         """Count function-style operators in the skeleton."""
-        return len(set(re.findall(r"\b([a-z][a-z0-9_]*)\s*\(", self.expression)))
+        return len(analyze_expression(self.expression).operators)
 
     @property
     def fingerprint(self):
@@ -629,9 +628,7 @@ class AlphaFactory:
                 normalized = canonical_expression(expression)
                 if normalized in excluded:
                     continue
-                actual_ops = sorted(set(re.findall(
-                    r"\b([a-z][a-z0-9_]*)\s*\(", expression)
-                ))
+                actual_ops = list(analyze_expression(expression).operators)
                 if not set(actual_ops).issubset(allowed):
                     continue
                 proposal = dict(common)
@@ -755,9 +752,7 @@ class AlphaFactory:
                 generated_expression = generated_candidate["expression"]
                 if canonical_expression(generated_expression) in excluded:
                     continue
-                actual_ops = sorted(set(re.findall(
-                    r"\b([a-z][a-z0-9_]*)\s*\(", generated_expression
-                )))
+                actual_ops = list(analyze_expression(generated_expression).operators)
                 if not set(actual_ops).issubset(operators):
                     continue
                 selected = (template, generated_candidate, actual_ops)

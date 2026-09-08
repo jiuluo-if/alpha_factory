@@ -9,23 +9,18 @@ DO NOT USE FOR: choosing economic hypotheses or bypassing `research_api`.
 
 import json
 import os
-import threading
 import time
 
-from .candidate import CandidateBuilder
 from .artifacts import (
     atomic_write_json_if_changed,
     append_jsonl_if_unique,
     iter_jsonl_objects,
 )
-from .checkpoints import CheckpointStore
 from .research_guard import ResearchLoopGuard, structural_family_key
-from .search_policy import SearchPolicy
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
 from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
 from .context import key_experiments, write_context
-from .discovery import FieldDiscovery
 from .diversity import extract_fields, is_redundant
 from .evidence import (
     load_evidence_cache,
@@ -34,7 +29,6 @@ from .evidence import (
 )
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
-from .memory import ExperienceMemory
 from .metrics import (
     check_pass,
     checks_passed,
@@ -50,12 +44,10 @@ from .proposal_contract import (
     validate_proposal,
     validate_vector_inputs,
 )
-from .reflection import Reflector
-from .simulator import Simulator
-from .state import Experiment, ResearchState, Trajectory, UNRESOLVED_STATUSES
-from .submission import SubmissionPool, latest_active_snapshot, self_correlation_evidence
+from .state import Experiment, ResearchState, UNRESOLVED_STATUSES
+from .submission import latest_active_snapshot, self_correlation_evidence
 from .submission import submission_eligibility
-from .trial_ledger import TrialLedger
+from .runtime_components import build_runtime_components
 from .behavior import extract_behavior_series
 from .alpha_pool import build_pool_snapshot
 from .incremental_policy import IncrementalValuePolicy
@@ -145,13 +137,6 @@ class Agent:
         self.max_proposals_per_round = runtime.max_proposals_per_round
         self.research_allocation = dict(runtime.research_allocation)
         self.research_integrity = runtime.research_integrity
-        search_cfg = {
-            **runtime.search_policy,
-            "enabled": config.search.enabled,
-            "max_simulations": config.search.max_simulations,
-            "validation_max_simulations": config.search.validation_max_simulations,
-        }
-        self.search_policy = SearchPolicy(search_cfg)
         self.fields_per_discovery = runtime.fields_per_discovery
         self.pagination_limit = runtime.pagination_limit
         self.max_pagination_pages = runtime.max_pagination_pages
@@ -170,88 +155,29 @@ class Agent:
         self.max_field_alpha_count = runtime.max_field_alpha_count
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md"))
         self.operator_reference = _operator_reference(operator_path)
-        self.submission_pool = SubmissionPool(
-            self.state_dir,
-            filename=runtime.submission_pool_filename,
+        components = build_runtime_components(
+            self.client, config,
+            operator_reference=self.operator_reference,
+            quality_policy=self.quality_policy,
+            field_selection=field_selection,
         )
-
-        mem_cfg = runtime.memory
-        self.memory = ExperienceMemory(
-            self.state_dir,
-            max_lessons=mem_cfg.get("max_lessons", 20),
-            max_avoid=mem_cfg.get("max_avoid", 30),
-            max_next=mem_cfg.get("max_next", 15),
-            max_hypotheses=mem_cfg.get("max_hypotheses", 12),
-            max_short_term=mem_cfg.get("max_short_term", 30),
-            short_term_window=mem_cfg.get("short_term_window", 5),
-            promote_hits=mem_cfg.get("promote_hits", 2),
-            max_garbage=mem_cfg.get("max_garbage", 200),
-            garbage_max_age_rounds=mem_cfg.get("garbage_max_age_rounds", 60),
-            next_max_age_rounds=mem_cfg.get("next_max_age_rounds", 20),
-            max_lineages=mem_cfg.get("max_lineages", 256),
-            max_seen_expressions=mem_cfg.get("max_seen_expressions", 4096),
-            max_used_hypotheses=mem_cfg.get("max_used_hypotheses", 256),
-        )
-        self.trajectory = Trajectory(
-            max_len=runtime.trajectory_window,
-            path=os.path.join(self.state_dir, "trajectory.jsonl"),
-        )
-        self.trial_ledger = TrialLedger(
-            os.path.join(self.state_dir, "trial_ledger.jsonl")
-        )
-        self.builder = CandidateBuilder(
-            neutralization=self.simulation_settings.get("neutralization", "SUBINDUSTRY")
-        )
+        self.search_policy = components.search_policy
+        self.memory = components.memory
+        self.trajectory = components.trajectory
+        self.trial_ledger = components.trial_ledger
+        self.builder = components.builder
         self.alpha_factory = self.builder.factory
-        self.discovery = FieldDiscovery(
-            self.client,
-            pagination_limit=self.pagination_limit,
-            max_pages=self.max_pagination_pages,
-            cache_path=os.path.join(self.state_dir, "fields_cache.json"),
-            cache_ttl_sec=runtime.fields_cache_ttl_sec,
-            max_alpha_count=self.max_field_alpha_count,
-            selection_mode=field_selection.get("mode", "semantic_random"),
-            random_fraction=field_selection.get("random_fraction", 0.35),
-            random_seed=field_selection.get("random_seed", "newwqb"),
-        )
-        self.simulator = Simulator(
-            self.client,
-            max_concurrent=runtime.max_concurrent_sims,
-            poll_timeout_sec=self.poll_timeout_sec,
-            replace_attempts=runtime.replace_attempts,
-            replace_backoff_sec=runtime.replace_backoff_sec,
-            yearly_policy={
-                "min_sharpe": (self.quality_policy or {}).get("promising_sharpe", 0.0),
-                "min_fitness": (self.quality_policy or {}).get("promising_fitness", 0.0),
-                "max_turnover": (self.quality_policy or {}).get("max_turnover"),
-                "min_years": runtime.yearly_policy.get("min_years", config.validation.yearly_min_years),
-            },
-        )
-        _REFLECTOR_KWARGS = {
-            "success_sharpe": "success_sharpe",
-            "promising_sharpe": "promising_sharpe",
-            "promising_fitness": "promising_fitness",
-            "success_fitness": "success_fitness",
-            "min_turnover": "min_turnover",
-            "max_turnover": "max_turnover",
-            "max_drawdown": "max_drawdown",
-            "max_self_correlation": "self_correlation_limit",
-        }
-        reflector_quality = {
-            _REFLECTOR_KWARGS[key]: value
-            for key, value in self.quality_policy.items()
-            if key in _REFLECTOR_KWARGS
-        }
-        self.reflector = Reflector(self.memory, **reflector_quality)
-        self.reflector.evidence_cache = load_evidence_cache(self.state_dir)
+        self.discovery = components.discovery
+        self.simulator = components.simulator
+        self.reflector = components.reflector
+        self.checkpoints = components.checkpoints
+        self.submission_pool = components.submission_pool
         self._loaded = False
         self._last_round_skipped = False
         # In-process accounting hook for the long-running factory.  It lets
         # the session release candidates rejected by preflight without a
         # second validation path or a second ledger.
         self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}
-        self._checkpoint_lock = threading.Lock()
-        self.checkpoints = CheckpointStore(self.state_dir, lock=self._checkpoint_lock)
 
     # ------------------------------------------------------------ running
 

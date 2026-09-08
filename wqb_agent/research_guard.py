@@ -12,6 +12,52 @@ from .expression import canonical_expression
 from .metrics import score_of
 
 
+def overfit_expression_reason(expression):
+    """Explain why a fixed multi-leg parameter blend is not a new hypothesis.
+
+    This is intentionally a narrow structural guard for the observed
+    overfit family: several weighted rank legs, each with nested z-score and
+    decay windows.  It is not a performance claim and never replaces live
+    BRAIN evidence.
+    """
+    normalized = canonical_expression(expression)
+    if not normalized:
+        return None
+    weighted_legs = len(re.findall(r"\b\d+(?:\.\d+)?\s*\*\s*rank\(", normalized))
+    decay_legs = normalized.count("ts_decay_linear(")
+    zscore_legs = normalized.count("ts_zscore(")
+    if (weighted_legs >= 3 and decay_legs >= 3 and zscore_legs >= 3
+            and normalized.count("+") >= 2):
+        return (
+            "固定多腿权重+多窗口 zscore/decay 组合属于参数堆叠；"
+            "必须改为新的经济机制或预注册 ROBUSTNESS，不得继续生成。"
+        )
+    return None
+
+
+def _direction_neutral_expression(expression):
+    normalized = canonical_expression(expression)
+    changed = True
+    while changed and normalized:
+        changed = False
+        if normalized.startswith("-"):
+            normalized = normalized[1:]
+            changed = True
+        if normalized.startswith("reverse(") and normalized.endswith(")"):
+            normalized = normalized[len("reverse("):-1]
+            changed = True
+    return normalized
+
+
+def is_direction_only_change(parent_expression, candidate_expression):
+    """Return true when a candidate only negates/reverses its parent signal."""
+    parent = _direction_neutral_expression(parent_expression)
+    candidate = _direction_neutral_expression(candidate_expression)
+    return bool(parent and candidate and parent == candidate
+                and canonical_expression(parent_expression)
+                != canonical_expression(candidate_expression))
+
+
 def _lineage(candidate, default_lineage=None):
     return (
         candidate.get("lineage_id")

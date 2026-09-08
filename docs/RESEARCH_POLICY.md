@@ -20,6 +20,14 @@
 - 失败先对照预注册的 falsification 判据；命中时停止该假设，不用窗口/权重扫描掩盖证伪。
 - 高 Sharpe 不等于发现；优先跨年份、跨子样本、低相关且机制一致的证据。
 
+## 经济含义与防过拟合硬约束
+
+生产完整性模式拒绝把参数堆叠当作研究发现：固定多腿 `权重 * rank(ts_decay_linear(ts_zscore(...)))` 组合、窗口/权重/符号扫描，以及只做 `-signal` 或 `reverse(signal)` 的方向变体，都不能作为新的 Alpha。方向改变只有在新增经济机制、方向理由和独立可证伪问题时才成立。
+
+每个模板和候选必须携带 `economic_mechanism`、`direction`、`direction_transform`、`expected_horizon` 与 `falsification`。此外必须写入 `self_correlation_impact`，包括 `expected_effect`、`basis`、`rationale`、`admission`：预测为 `HIGHER` 或 `BLOCK` 直接拒绝，`SIMILAR/UNKNOWN` 只能进入 `REVIEW`，只有有依据的 `LOWER` 才能先验 `ALLOW`。这是先验准入判断，不是对平台结果的替代。
+
+Simulation 完成时，BRAIN 的 `SELF_CORRELATION` 可能仍是异步 `PENDING`。系统因此允许只读 GET 刷新，但仍要求所有其他 checks 已通过；真实平台结果会覆盖缓存中的待定检查。只有真实结算状态为 `PASS` 且数值严格低于配置阈值的候选，才可进入人工提交池。没有真实值时必须保持 `UNKNOWN`，不得由结构相似度、旧缓存或本地估算冒充。
+
 ## Experiment family 与 trial accounting
 
 同一 hypothesis 下的参数、窗口、字段替换和结构变体属于同一 experiment family。记录每个 trial 的 identity、lineage、family、字段、expression fingerprint、状态和结果；不要把大量派生报告当作新证据。
@@ -50,3 +58,7 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 - **RECONCILE**：`UNKNOWN`、`TIMEOUT`、`RATE_LIMIT`、`AUTH`、`INFRA` 或缺少必要证据；不把它们写成长期失败结论。
 
 研究策略属于 Agent 判断；Python 只保证事实、边界、证据和恢复，不替研究员选择方向。
+
+## Agent 接管与效率
+
+接管已有 workspace 的第一步是 `python main.py --takeover-preflight --offline`。该命令只读汇总未完成 checkpoint、状态审计、proposal/cache 概况和 trajectory 计数；`BLOCKED` 时先恢复或对账，不直接启动新实验。自相关回填使用 `scripts/refresh_self_correlation.py` 的时间窗和数量上限，避免重复扫描全部历史。它只调用现有 evidence cache GET 路径，不创建第二套 Simulation 或 submission API。

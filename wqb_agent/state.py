@@ -90,6 +90,9 @@ class Experiment:
         self.tuning_risk = None
         self.rationale = None
         self.direction = None
+        self.economic_mechanism = None
+        self.direction_transform = None
+        self.self_correlation_impact = None
         self.expected_horizon = None
         self.falsification = None
         self.health = None
@@ -162,6 +165,9 @@ class Experiment:
             "tuning_risk": self.tuning_risk,
             "rationale": self.rationale,
             "direction": self.direction,
+            "economic_mechanism": self.economic_mechanism,
+            "direction_transform": self.direction_transform,
+            "self_correlation_impact": self.self_correlation_impact,
             "expected_horizon": self.expected_horizon,
             "falsification": self.falsification,
             "health": self.health,
@@ -230,6 +236,9 @@ class Experiment:
         exp.tuning_risk = data.get("tuning_risk")
         exp.rationale = data.get("rationale")
         exp.direction = data.get("direction")
+        exp.economic_mechanism = data.get("economic_mechanism")
+        exp.direction_transform = data.get("direction_transform")
+        exp.self_correlation_impact = data.get("self_correlation_impact")
         exp.expected_horizon = data.get("expected_horizon")
         exp.falsification = data.get("falsification")
         exp.health = data.get("health")

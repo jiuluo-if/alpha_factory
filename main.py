@@ -78,6 +78,10 @@ def main():
         help="只读检查本地状态不变量，不访问 BRAIN",
     )
     parser.add_argument(
+        "--takeover-preflight", action="store_true",
+        help="Agent 接管前只读汇总 Git 外部需核对的本地状态、checkpoint、缓存和候选上下文",
+    )
+    parser.add_argument(
         "--smoke-readonly", action="store_true",
         help="人工执行的只读平台 smoke 检查；禁止 Simulation/Alpha 写入",
     )
@@ -110,24 +114,24 @@ def main():
         args.suggest, args.run_proposals, args.skip_stale,
         args.skip_submit_unknown, args.finalize_recorded_round is not None,
         args.factory_stop, args.factory_status,
-        args.doctor, args.audit_state, args.smoke_readonly,
+        args.doctor, args.audit_state, args.takeover_preflight, args.smoke_readonly,
     )):
         parser.error("--factory-run 不能与其他研究动作同时使用")
     if args.factory_stop and args.factory_status:
         parser.error("--factory-stop 不能与 --factory-status 同时使用")
     if (args.factory_stop or args.factory_status) and args.factory_hours is not None:
         parser.error("工厂状态/停止动作不能携带 --factory-hours")
-    readonly_actions = sum(bool(value) for value in (args.doctor, args.audit_state, args.smoke_readonly))
+    readonly_actions = sum(bool(value) for value in (args.doctor, args.audit_state, args.takeover_preflight, args.smoke_readonly))
     if readonly_actions > 1:
-        parser.error("--doctor、--audit-state、--smoke-readonly 只能选择一个")
-    if args.offline and not (args.doctor or args.audit_state):
-        parser.error("--offline 只能与 --doctor 或 --audit-state 一起使用")
+        parser.error("--doctor、--audit-state、--takeover-preflight、--smoke-readonly 只能选择一个")
+    if args.offline and not (args.doctor or args.audit_state or args.takeover_preflight):
+        parser.error("--offline 只能与 --doctor、--audit-state 或 --takeover-preflight 一起使用")
 
     config = None
     # Read-only diagnostics are intentionally runnable on a fresh checkout:
     # they use the checked-in example as a schema-safe fallback, while all
     # production actions still require the user-created config.json.
-    if (args.doctor or args.audit_state) and not os.path.exists(args.config):
+    if (args.doctor or args.audit_state or args.takeover_preflight) and not os.path.exists(args.config):
         example = os.path.join(os.path.dirname(__file__), "config.example.json")
         config = load_config(example)
     else:
@@ -162,6 +166,13 @@ def main():
         result = audit_state(config["agent"].get("state_dir", ".wqb_state"))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
+            sys.exit(2)
+        return
+    if args.takeover_preflight:
+        from wqb_agent.preflight import run_takeover_preflight
+        result = run_takeover_preflight(config)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("status") != "READY":
             sys.exit(2)
         return
     if args.smoke_readonly:

@@ -35,7 +35,12 @@ from .evidence import (
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
 from .memory import ExperienceMemory
-from .metrics import check_pass, checks_passed, num
+from .metrics import (
+    check_pass,
+    checks_passed,
+    checks_ready_for_self_correlation_refresh,
+    num,
+)
 from .proposal_contract import (
     CHILD_CHANGE_TYPES,
     EXPERIMENT_STAGES,
@@ -148,6 +153,7 @@ class Agent:
         except (TypeError, ValueError):
             self.max_proposals_per_round = 18
         self.research_allocation = agent_cfg.get("research_allocation") or {}
+        self.research_integrity = bool(agent_cfg.get("research_integrity", False))
         search_cfg = dict(agent_cfg.get("search_policy") or {})
         search_cfg.setdefault("enabled", bool(self.research_allocation))
         if "max_simulations" not in search_cfg:
@@ -173,6 +179,12 @@ class Agent:
         self.max_pagination_pages = agent_cfg.get("max_pagination_pages", 20)
         self.poll_timeout_sec = agent_cfg.get("poll_timeout_sec", 1500)
         self.context_experiments = agent_cfg.get("context_experiments", 10)
+        try:
+            self.correlation_refresh_window = max(
+                1, int(agent_cfg.get("correlation_refresh_window", 256))
+            )
+        except (TypeError, ValueError):
+            self.correlation_refresh_window = 256
         self.quality_policy = agent_cfg.get("quality", {})
         self.statistical_policy = dict(agent_cfg.get("statistical_policy") or {})
         self.statistical_policy.setdefault("mode", "required_when_available")
@@ -669,6 +681,7 @@ class Agent:
                 strict_experiment=True,
                 operator_reference=self.operator_reference,
                 require_research_evidence=bool(self.research_allocation),
+                require_economic_integrity=self.research_integrity,
                 max_alpha_count=self.max_field_alpha_count,
             )
             type_ok, type_problems = validate_vector_inputs(p, field_types)
@@ -974,6 +987,9 @@ class Agent:
             exp.direction = p.get("direction")
             exp.expected_horizon = p.get("expected_horizon")
             exp.falsification = p.get("falsification")
+            exp.economic_mechanism = p.get("economic_mechanism")
+            exp.direction_transform = p.get("direction_transform")
+            exp.self_correlation_impact = p.get("self_correlation_impact")
             exp.validation_plan = p.get("validation_plan")
             if exp.experiment_stage == "ROBUSTNESS" and exp.validation_plan is None:
                 # The proposal contract normally rejects this earlier.  Keep
@@ -1904,9 +1920,17 @@ class Agent:
         only adds latency and cannot change a decision.
         """
         alpha_ids = []
-        for exp in experiments:
+        candidates = list(experiments or [])
+        candidates.extend(self.trajectory.recent(self.correlation_refresh_window))
+        for parent, _report in getattr(self, "_validation_candidates", []) or []:
+            candidates.append(parent)
+        seen = set()
+        for exp in candidates:
             if exp.status != "DONE" or not exp.alpha_id:
                 continue
+            if exp.alpha_id in seen:
+                continue
+            seen.add(exp.alpha_id)
             metrics = exp.metrics or {}
             rating = self._alpha_rating(metrics)
             turnover = metrics.get("turnover")
@@ -1920,7 +1944,7 @@ class Agent:
                 and minimum_turnover <= turnover_value <= maximum_turnover
             )
             if (rating in {"EXCELLENT", "SPECTACULAR"}
-                    and checks_passed(metrics) is True
+                    and checks_ready_for_self_correlation_refresh(metrics)
                     and bool((exp.health or {}).get("ok"))
                     and turnover_ok):
                 alpha_ids.append(exp.alpha_id)
@@ -1973,7 +1997,13 @@ class Agent:
             if exp.status != "DONE" or not exp.alpha_id:
                 continue
             exp.self_correlation = self._settled_self_correlation(exp)
-            rating = self._alpha_rating(exp.metrics or {})
+            effective_metrics = exp.metrics or {}
+            cached = (self.reflector.evidence_cache or {}).get(exp.alpha_id)
+            if cached:
+                effective_metrics = overlay_cached_checks(
+                    effective_metrics, cached, corr_cap
+                )
+            rating = self._alpha_rating(effective_metrics)
             healthy = bool((exp.health or {}).get("ok"))
             yearly = exp.yearly_evidence or {}
             # If the platform supplied annual aggregates, an unstable annual
@@ -1985,7 +2015,7 @@ class Agent:
             )
             eligible = (
                 rating in {"EXCELLENT", "SPECTACULAR"}
-                and checks_passed(exp.metrics) is True
+                and checks_passed(effective_metrics) is True
                 and healthy
                 and exp.validation_status == "STABLE"
                 and isinstance(exp.validation_report, dict)

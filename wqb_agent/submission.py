@@ -155,6 +155,9 @@ class SubmissionPool:
                 "yearly_evidence": experiment.yearly_evidence,
                 "validation_report": experiment.validation_report,
                 "research_classification": getattr(experiment, "research_classification", None),
+                "economic_mechanism": getattr(experiment, "economic_mechanism", None),
+                "direction_transform": getattr(experiment, "direction_transform", None),
+                "self_correlation_impact": getattr(experiment, "self_correlation_impact", None),
                 "robustness_status": (getattr(experiment, "robustness_evidence", None) or {}).get("decision")
                     if isinstance(getattr(experiment, "robustness_evidence", None), dict) else getattr(experiment, "validation_status", None),
                 "statistical_status": (getattr(experiment, "validation_report", None) or {}).get("statistical_evidence", {}).get("statistical_decision")

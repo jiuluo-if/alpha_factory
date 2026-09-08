@@ -26,6 +26,15 @@
 inspect → discover → hypothesize → run → evaluate → record → iterate
 ```
 
+## Alpha 经济含义与自相关硬约束
+
+- 不生成固定多腿 `权重 * rank(ts_decay_linear(ts_zscore(...)))` 参数堆叠，不把窗口/权重/符号扫描包装成新发现。
+- 不把同一表达式的 `-signal`、`reverse(signal)` 或等价方向变化当成新 Alpha；必须有新的经济机制、方向理由和可证伪问题。
+- production integrity 模式下，每个模板和候选必须具备 `economic_mechanism`、`direction`、`direction_transform`、`expected_horizon`、`falsification` 与 `self_correlation_impact`。
+- 自相关影响预测为 `HIGHER` 或 `BLOCK` 时拒绝；`SIMILAR/UNKNOWN` 只能 `REVIEW`，只有有依据的 `LOWER` 才能先验 `ALLOW`。Simulation 后必须真实获取平台 `SELF_CORRELATION`，待定或缺失不得冒充通过。
+
+Agent 接管现有项目先运行 `python main.py --takeover-preflight --offline`；若为 `BLOCKED`，先处理 checkpoint 和状态对账。异步自相关只用 `scripts/refresh_self_correlation.py` 做限窗只读回填，不新增第二套执行路径。
+
 Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实验优先级、结果解释和继续/停止判断。Python 负责 BRAIN 事实、schema、字段/算子校验、去重、硬预算、Retry-After、checkpoint、reconciliation、持久化和确定性统计。
 
 ## 不可破坏的机制边界

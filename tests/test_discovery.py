@@ -354,12 +354,13 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
 
 
 class TestCandidateBuilder(unittest.TestCase):
-    def test_from_scratch_returns_nine(self):
+    def test_from_scratch_excludes_direction_only_candidate(self):
         builder = CandidateBuilder(neutralization="subindustry")
         fields = [{"id": "returns"}, {"id": "volume"}]
         hypothesis = {"direction": "reversal", "tags": ["return"]}
         candidates = builder.build(hypothesis, fields, None, count=9)
-        self.assertEqual(len(candidates), 9)
+        # 纯 sign-flip 不是新的经济假设，候选生成器必须将其排除。
+        self.assertEqual(len(candidates), 8)
         self.assertTrue(all("returns" in c["expression"] for c in candidates))
         self.assertTrue(candidates[0]["expression"].startswith("-rank"))
 

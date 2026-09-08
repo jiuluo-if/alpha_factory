@@ -48,6 +48,31 @@ def checks_passed(metrics):
     return all(value is True for value in values)
 
 
+def checks_ready_for_self_correlation_refresh(metrics):
+    """Return whether a DONE Alpha is safe to query for settled correlation.
+
+    BRAIN exposes ``SELF_CORRELATION`` asynchronously.  A pending value is
+    therefore a reason to perform the read-only correlation lookup, not a
+    reason to skip it.  Every other check must already be resolved and PASS;
+    this helper must not weaken the normal promotion aggregate above.
+    """
+    if not isinstance(metrics, dict) or not isinstance(metrics.get("checks"), list):
+        return False
+    checks = metrics["checks"]
+    if not checks:
+        return False
+    found_self = False
+    for check in checks:
+        if not isinstance(check, dict) or not check.get("name"):
+            return False
+        if str(check.get("name")).upper() == "SELF_CORRELATION":
+            found_self = True
+            continue
+        if check_pass(check) is not True:
+            return False
+    return found_self
+
+
 def extract_metrics(payload):
     """Extract the six metrics and tri-state checks from a platform payload."""
     if not isinstance(payload, dict):

@@ -4,6 +4,7 @@ from .diversity import extract_fields
 from .alpha_factory import AlphaFactory
 from .expression import canonical_expression
 from .mutations import WINDOW_STEPS, _swap_field, _window_change
+from .research_guard import is_direction_only_change, overfit_expression_reason
 
 # Bounded, knowledge-backed single-step changes only. No random operator
 # stacking, no arbitrary "special window" hunting.
@@ -44,12 +45,6 @@ class CandidateBuilder:
                 "mutation": "baseline",
                 "parent": None,
                 "fields_used": extract_fields(f"{s}{base}", [primary] + [f["id"] for f in fields]),
-            },
-            {
-                "expression": base if reversal else f"-{base}",
-                "rationale": "Opposite sign of baseline rank.",
-                "mutation": "sign-flip",
-                "parent": None,
             },
             {
                 "expression": f"{s}rank(ts_rank({primary}, 20))",
@@ -123,6 +118,10 @@ class CandidateBuilder:
             identity = canonical_expression(expression)
             if identity in seen_expressions:
                 return
+            if overfit_expression_reason(expression):
+                return
+            if is_direction_only_change(best_expr, expression):
+                return
             seen_expressions.add(identity)
             candidates.append(
                 {
@@ -192,11 +191,6 @@ class CandidateBuilder:
                 "Two-step window change on the time-series operator.",
                 "window-step-2",
             )
-
-        if best_expr.startswith("-"):
-            add(best_expr[1:], "Flip sign from negative to positive.", "sign-flip")
-        else:
-            add(f"-{best_expr}", "Flip sign from positive to negative.", "sign-flip")
 
         if "ts_rank" not in best_expr:
             add(

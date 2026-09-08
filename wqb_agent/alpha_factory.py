@@ -47,6 +47,7 @@ class AlphaTemplate:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
     def catalog_entry(self):
+        reversal = "reversal" in self.family or "reversal" in self.rationale.lower()
         return {
             "template_id": self.template_id,
             "family": self.family,
@@ -57,6 +58,17 @@ class AlphaTemplate:
             "source": "newwqb_builtin",
             "operator_count": self.operator_count,
             "economic": self.economic,
+            "economic_mechanism": self.rationale,
+            "direction": "reversal" if reversal else "long",
+            "direction_transform": {
+                "applied": reversal,
+                "reason": (
+                    "将高位/异常信号映射为反转方向。" if reversal
+                    else "保持字段经济含义的正向预测，不做符号翻转。"
+                ),
+            },
+            "expected_horizon": "由 hypothesis 与字段频率共同确定",
+            "falsification": "独立样本、健康或平台 checks 不能支持机制时停止该模板。",
         }
 
 
@@ -508,6 +520,20 @@ class AlphaFactory:
                     "template_ref": ref,
                     "template_slots": slot_values,
                     "factory_version": "alpha-factory-v1",
+                    "economic_mechanism": template.rationale,
+                    "direction": (
+                        "reversal" if "reversal" in template.family
+                        or "reversal" in template.rationale.lower() else "long"
+                    ),
+                    "direction_transform": {
+                        "applied": (
+                            "reversal" in template.family
+                            or "reversal" in template.rationale.lower()
+                        ),
+                        "reason": template.rationale,
+                    },
+                    "expected_horizon": "由 hypothesis 与字段频率共同确定",
+                    "falsification": "独立样本、健康或平台 checks 不能支持机制时停止该模板。",
                 }
             )
             if len(candidates) >= limit:
@@ -551,6 +577,13 @@ class AlphaFactory:
             if len(out) >= limit or not isinstance(parent, dict):
                 break
             if parent.get("status") != "DONE":
+                continue
+            # Automatic children previously performed generic smoothing and
+            # window variants.  They are exactly the low-information tuning
+            # loop this factory must stop producing.  A future child must be
+            # supplied by the agent with a distinct economic mechanism and a
+            # complete proposal contract instead of being invented here.
+            if not isinstance(parent.get("child_economic_hypothesis"), dict):
                 continue
             base = parent.get("expression")
             if not isinstance(base, str) or not base.strip():
@@ -760,6 +793,8 @@ class AlphaFactory:
                         "direction": "reversal" if "reversal" in template.family else "long",
                     }
                 },
+                "economic_mechanism": candidate["economic_mechanism"],
+                "direction_transform": candidate["direction_transform"],
                 "operator_mapping": candidate["rationale"],
                 "operator_evidence": {
                     "sha256": operator_reference.get("sha256"),
@@ -787,6 +822,12 @@ class AlphaFactory:
                 "direction": "reversal" if "reversal" in template.family else "long",
                 "expected_horizon": "short-term",
                 "falsification": "若六指标、checks 或健康诊断不能支持稳定增量，则关闭该字段-结构组合。",
+                "self_correlation_impact": {
+                    "expected_effect": "UNKNOWN",
+                    "basis": "no_live_behavior_series",
+                    "rationale": "模拟前没有平台结算值，不把结构差异冒充为低自相关。",
+                    "admission": "REVIEW",
+                },
             }
             proposal.update({
                 key: candidate[key]

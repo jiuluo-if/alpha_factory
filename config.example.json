@@ -18,6 +18,8 @@
     "candidates_per_round": 100,
     "max_proposals_per_round": 100,
     "max_concurrent_sims": 3,
+    "research_integrity": true,
+    "correlation_refresh_window": 256,
     "fields_per_discovery": 100,
     "field_selection": {
       "max_alpha_count": 1000000,

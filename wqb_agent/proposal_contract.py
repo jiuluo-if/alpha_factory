@@ -16,6 +16,7 @@ import os
 import re
 
 from .diversity import extract_fields
+from .research_guard import is_direction_only_change, overfit_expression_reason
 from .validation_report import validate_plan
 
 
@@ -85,12 +86,34 @@ def _expression_operators(expression):
 
 def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                       operator_reference=None, require_research_evidence=False,
-                      max_alpha_count=None):
+                      max_alpha_count=None, require_economic_integrity=False):
     """Validate proposal metadata and field/operator provenance."""
     if not isinstance(p, dict):
         return False, ["proposal 必须是对象"]
     problems = []
     expression = (p.get("expression") or "").strip()
+    if require_economic_integrity:
+        mechanism = p.get("economic_mechanism")
+        if not isinstance(mechanism, str) or len(mechanism.strip()) < 12:
+            problems.append("economic_mechanism 必须明确说明字段与收益机制")
+        direction = str(p.get("direction") or "").lower()
+        if direction not in {"long", "short", "reversal", "neutral", "conditional"}:
+            problems.append("direction 必须明确为 long/short/reversal/neutral/conditional")
+        transform = p.get("direction_transform")
+        if (not isinstance(transform, dict)
+                or not isinstance(transform.get("applied"), bool)
+                or not isinstance(transform.get("reason"), str)
+                or not transform.get("reason", "").strip()):
+            problems.append("direction_transform 必须说明是否转换方向及原因")
+        impact = p.get("self_correlation_impact")
+        impact_errors = validate_self_correlation_impact(impact)
+        problems.extend(impact_errors)
+        overfit_reason = overfit_expression_reason(expression)
+        if overfit_reason:
+            problems.append(overfit_reason)
+        parent = p.get("parent_expression")
+        if isinstance(parent, str) and is_direction_only_change(parent, expression):
+            problems.append("候选只改变 parent 方向，不能作为新的研究实验")
     declared_fields = p.get("fields")
     if not isinstance(declared_fields, list) or not declared_fields:
         problems.append("fields 必须是非空数组")
@@ -214,6 +237,34 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                     if not isinstance(evidence.get("rationale"), str) or not evidence["rationale"].strip():
                         problems.append("operator_evidence 缺少算子选择理由")
     return not problems, problems
+
+
+def validate_self_correlation_impact(value):
+    """Validate a pre-simulation correlation-impact forecast.
+
+    The forecast is a planning claim only.  ``UNKNOWN/REVIEW`` is allowed for
+    exploration, while ``HIGHER/BLOCK`` is rejected.  Actual admission still
+    requires behavioral evidence when available and the platform's settled
+    SELF_CORRELATION value later in the submission gate.
+    """
+    problems = []
+    if not isinstance(value, dict):
+        return ["self_correlation_impact 必须说明提交后的预期影响与准入动作"]
+    expected = str(value.get("expected_effect") or "").upper()
+    if expected not in {"LOWER", "SIMILAR", "HIGHER", "UNKNOWN"}:
+        problems.append("self_correlation_impact.expected_effect 必须是 LOWER/SIMILAR/HIGHER/UNKNOWN")
+    if not isinstance(value.get("basis"), str) or not value["basis"].strip():
+        problems.append("self_correlation_impact.basis 不能为空")
+    if not isinstance(value.get("rationale"), str) or not value["rationale"].strip():
+        problems.append("self_correlation_impact.rationale 不能为空")
+    admission = str(value.get("admission") or "").upper()
+    if admission not in {"ALLOW", "REVIEW", "BLOCK"}:
+        problems.append("self_correlation_impact.admission 必须是 ALLOW/REVIEW/BLOCK")
+    if expected == "HIGHER" or admission == "BLOCK":
+        problems.append("self_correlation_impact 预计提高自相关或已标记 BLOCK，不得进入模拟/提交准入")
+    if expected in {"SIMILAR", "UNKNOWN"} and admission == "ALLOW":
+        problems.append("self_correlation_impact 为 SIMILAR/UNKNOWN 只能 REVIEW，不能直接 ALLOW")
+    return problems
 
 
 def proposal_priority(proposal):

@@ -270,7 +270,7 @@ class Trajectory:
             if row.get("id"):
                 yield row["id"]
 
-    def iter_rows(self):
+    def iter_rows(self, *, stats=None):
         """Stream valid raw trajectory objects without retaining history.
 
         This is a read-only primitive for bounded identity/audit passes.  It
@@ -286,9 +286,13 @@ class Trajectory:
                     try:
                         row = json.loads(line)
                     except (ValueError, TypeError, json.JSONDecodeError):
+                        if isinstance(stats, dict):
+                            stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
                         continue
                     if isinstance(row, dict):
                         yield row
+                    elif isinstance(stats, dict):
+                        stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
         except OSError:
             return
 

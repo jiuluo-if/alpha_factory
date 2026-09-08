@@ -241,6 +241,38 @@ class TestSimulator(unittest.TestCase):
         self.assertEqual(len(client.sim_calls), 1)
         self.assertEqual(checkpoints, ["SUBMITTING", "SUBMIT_UNKNOWN"])
 
+    def test_submit_unknown_second_run_does_not_post_again(self):
+        """恢复扫描再次遇到 SUBMIT_UNKNOWN 时只能保留对账状态。"""
+        from wqb_agent.client import WQBSubmitUnknownError
+
+        class AmbiguousClient(FakeClient):
+            def submit_simulation(self, expression, settings, alpha_type="REGULAR"):
+                self.sim_calls.append(expression)
+                raise WQBSubmitUnknownError("response lost after POST")
+
+        client = AmbiguousClient()
+        sim = Simulator(client, max_concurrent=1, poll_timeout_sec=30)
+        exp = Experiment(1, "h", "rank(field)", {}, [])
+        sim.run([exp])
+        sim.run([exp])
+        self.assertEqual(exp.status, "SUBMIT_UNKNOWN")
+        self.assertEqual(len(client.sim_calls), 1)
+
+    def test_checkpoint_update_precedes_first_submit(self):
+        """本地 SUBMITTING 证据必须先于第一次 POST。"""
+        events = []
+
+        class OrderedClient(FakeClient):
+            def submit_simulation(self, expression, settings, alpha_type="REGULAR"):
+                events.append("post")
+                return super().submit_simulation(expression, settings, alpha_type)
+
+        client = OrderedClient(latency=0)
+        sim = Simulator(client, max_concurrent=1, poll_timeout_sec=30)
+        exp = Experiment(1, "h", "rank(field)", {}, [])
+        sim.run([exp], on_update=lambda item: events.append(item.status))
+        self.assertLess(events.index("SUBMITTING"), events.index("post"))
+
     def test_rolling_window_stays_full(self):
         client = FakeClient(latency=0.05)
         sim = Simulator(client, max_concurrent=3, poll_timeout_sec=30)

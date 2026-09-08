@@ -199,6 +199,13 @@ class TestArchitectureBoundaries(unittest.TestCase):
             self.assertNotIn("CheckpointStore", source, filename)
             self.assertNotIn("trajectory.jsonl", source, filename)
 
+    def test_doctor_does_not_duplicate_lifecycle_audit_rules(self):
+        path = os.path.join(PACKAGE_ROOT, "doctor.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn("lifecycle_order", source)
+        self.assertNotIn("checkpoint_ledger_mismatch", source)
+
     def test_diagnostic_config_reader_uses_typed_config_boundary(self):
         path = os.path.join(ROOT, "scripts", "check_correlation.py")
         with open(path, encoding="utf-8") as handle:

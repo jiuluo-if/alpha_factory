@@ -52,6 +52,65 @@ class TestWorkspaceSnapshotBoundaries(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertIn("p1", snapshot.ledger.committed)
 
+    def test_jsonl_summaries_retain_invalid_row_counts_and_valid_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write("not json\n[]\n")
+                handle.write(json.dumps({
+                    "proposal_id": "p1", "phase": "simulation_submitted",
+                }) + "\n")
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write("not json\n")
+                handle.write(json.dumps({
+                    "proposal_id": "p1", "phase": "simulation_committed",
+                }) + "\n")
+            with open(os.path.join(tmp, "validation_reports.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write("not json\n")
+                handle.write(json.dumps({"parent_id": "p1"}) + "\n")
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.trajectory.invalid_rows, 2)
+        self.assertEqual(snapshot.ledger.invalid_rows, 1)
+        self.assertEqual(snapshot.validation.invalid_rows, 1)
+        self.assertIn("p1", snapshot.trajectory.observed_submitted)
+        self.assertIn("p1", snapshot.ledger.committed)
+
+    def test_lifecycle_summary_retains_phase_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                for row in (
+                    {"proposal_id": "p1", "phase": "simulation_submitted"},
+                    {"proposal_id": "p1", "phase": "simulation_committed"},
+                    {"proposal_id": "p1", "phase": "simulation_committed"},
+                    {"proposal_id": "p2", "phase": "future_phase"},
+                    {"proposal_id": "p1", "phase": "research_outcome_settled"},
+                ):
+                    handle.write(json.dumps(row) + "\n")
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.ledger.unknown_phase_rows, 1)
+        self.assertEqual(snapshot.ledger.incomplete_rows, 1)
+        self.assertEqual(snapshot.ledger.duplicate_lifecycle_phases, 1)
+        self.assertEqual(
+            snapshot.ledger.phase_order_violations,
+            (("p1", "simulation_submitted", "simulation_committed"),),
+        )
+
+    def test_submission_pool_does_not_fabricate_none_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "submission_pool.json"), "w", encoding="utf-8") as handle:
+                json.dump({"candidates": [
+                    {"alpha_id": None, "proposal_id": ""},
+                    {"alpha_id": "a1", "proposal_id": None},
+                ]}, handle)
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.submission_pool.unverifiable_candidates, 1)
+        self.assertIn(frozenset(), snapshot.submission_pool.candidate_identities)
+        self.assertIn(frozenset({"a1"}), snapshot.submission_pool.candidate_identities)
+        self.assertIn(
+            frozenset({("alpha_id", "a1")}),
+            snapshot.submission_pool.candidate_identity_sources,
+        )
+        self.assertNotIn("None", snapshot.submission_pool.candidate_identities[0])
+
     def test_unexpected_json_is_inventory_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "notes.json"), "w", encoding="utf-8") as handle:
@@ -60,6 +119,16 @@ class TestWorkspaceSnapshotBoundaries(unittest.TestCase):
         info = snapshot.inventory.info("notes.json")
         self.assertEqual(info.schema_version, "PRESENT")
         self.assertIsNone(snapshot.proposal_round)
+
+    def test_snapshot_safe_types_reject_untrusted_round_and_schema_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "proposals.json"), "w", encoding="utf-8") as handle:
+                json.dump({"round_no": "7", "proposals": []}, handle)
+            with open(os.path.join(tmp, "experience.json"), "w", encoding="utf-8") as handle:
+                json.dump({"schema_version": {"unexpected": True}}, handle)
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertIsNone(snapshot.proposal_round)
+        self.assertEqual(snapshot.inventory.info("experience.json").schema_version, "INVALID")
         self.assertEqual(snapshot.proposal_count, 0)
 
     def test_empty_state_is_a_valid_empty_read_model(self):

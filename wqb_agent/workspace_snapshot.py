@@ -10,6 +10,7 @@ import re
 from .artifacts import iter_jsonl_objects
 from .checkpoints import CheckpointStore
 from .state import Trajectory
+from .trial_ledger import PHASES
 
 
 _CHECKPOINT_NAME = re.compile(r"round_\d+\.checkpoint\.json")
@@ -35,7 +36,7 @@ class ArtifactInfo:
     exists: bool = False
     readable: bool = False
     kind: str = "other"
-    schema_version: object = None
+    schema_version: int | str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,17 +62,26 @@ class LedgerSummary:
     research_settled: frozenset = frozenset()
     settlement_ids: frozenset = frozenset()
     duplicate_settlements: int = 0
+    invalid_rows: int = 0
+    unknown_phase_rows: int = 0
+    incomplete_rows: int = 0
+    duplicate_lifecycle_phases: int = 0
+    phase_order_violations: tuple = ()
+    missing_alpha_id_rows: int = 0
 
 
 @dataclass(frozen=True)
 class ValidationSummary:
     parent_ids: frozenset = frozenset()
     plan_pairs: tuple = ()
+    invalid_rows: int = 0
 
 
 @dataclass(frozen=True)
 class SubmissionPoolSummary:
     candidate_identities: tuple = ()
+    unverifiable_candidates: int = 0
+    candidate_identity_sources: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -89,6 +99,14 @@ class TrajectorySummary:
     observed_submitted: frozenset = frozenset()
     observed_simulation_settled: frozenset = frozenset()
     observed_research_settled: frozenset = frozenset()
+    invalid_rows: int = 0
+    unknown_phase_rows: int = 0
+    incomplete_rows: int = 0
+    duplicate_lifecycle_phases: int = 0
+    phase_order_violations: tuple = ()
+    missing_alpha_id_rows: int = 0
+    trajectory_alpha_ids: frozenset = frozenset()
+    trajectory_proposal_ids: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
@@ -102,7 +120,7 @@ class WorkspaceSnapshot:
     ledger: LedgerSummary = LedgerSummary()
     validation: ValidationSummary = ValidationSummary()
     submission_pool: SubmissionPoolSummary = SubmissionPoolSummary()
-    proposal_round: object = None
+    proposal_round: int | None = None
     proposal_count: int = 0
     current_best: object = None
     evidence_cache_entries: int = 0
@@ -119,9 +137,66 @@ class WorkspaceSnapshot:
         )
 
 
+_LIFECYCLE_ORDER = {
+    "simulation_committed": 0,
+    "simulation_submitted": 1,
+    "simulation_settled": 2,
+    "research_outcome_settled": 3,
+}
+
+
+def _new_lifecycle_stats():
+    return {
+        "unknown_phase_rows": 0,
+        "incomplete_rows": 0,
+        "duplicate_lifecycle_phases": 0,
+        "phase_order_violations": [],
+        "missing_alpha_id_rows": 0,
+        "seen_phases": set(),
+        "last_phase": {},
+    }
+
+
+def _observe_lifecycle(row, stats, *, require_phase):
+    phase = row.get("phase")
+    if not isinstance(phase, str) or phase not in PHASES:
+        if require_phase or phase is not None:
+            stats["unknown_phase_rows"] += 1
+        return
+    if phase not in _LIFECYCLE_ORDER:
+        return
+    proposal_id = row.get("proposal_id")
+    if proposal_id in (None, ""):
+        stats["incomplete_rows"] += 1
+        return
+    proposal_id = str(proposal_id)
+    phase_key = (proposal_id, phase)
+    if phase_key in stats["seen_phases"]:
+        stats["duplicate_lifecycle_phases"] += 1
+    stats["seen_phases"].add(phase_key)
+    previous = stats["last_phase"].get(proposal_id)
+    if previous is not None and _LIFECYCLE_ORDER[phase] < _LIFECYCLE_ORDER[previous]:
+        stats["phase_order_violations"].append((proposal_id, previous, phase))
+    stats["last_phase"][proposal_id] = phase
+    if phase == "research_outcome_settled":
+        settlement = row.get("settlement")
+        if not isinstance(settlement, dict) or settlement.get("settlement_id") in (None, ""):
+            stats["incomplete_rows"] += 1
+    if (
+        phase == "simulation_settled"
+        and str(row.get("outcome") or row.get("status") or "").upper() == "DONE"
+        and row.get("alpha_id") in (None, "")
+    ):
+        stats["missing_alpha_id_rows"] += 1
+
+
 def _trajectory_summary(state_dir):
     trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
+    lifecycle_stats = _new_lifecycle_stats()
+    read_stats = {}
     trajectory_ids = set()
+    trajectory_alpha_ids = set()
+    trajectory_proposal_ids = set()
     observed_settlement_ids = set()
     observed_committed = set()
     observed_submitted = set()
@@ -134,7 +209,7 @@ def _trajectory_summary(state_dir):
         "pending_validation_count": 0,
         "duplicate_observed_settlements": 0,
     }
-    for row in trajectory.iter_rows() or ():
+    for row in trajectory.iter_rows(stats=read_stats) or ():
         summary["records"] += 1
         if isinstance(row.get("round"), int):
             summary["latest_round"] = max(
@@ -147,8 +222,13 @@ def _trajectory_summary(state_dir):
         for key in (row.get("id"), row.get("alpha_id"), row.get("proposal_id")):
             if key:
                 trajectory_ids.add(str(key))
+        if row.get("alpha_id"):
+            trajectory_alpha_ids.add(str(row["alpha_id"]))
+        if row.get("proposal_id"):
+            trajectory_proposal_ids.add(str(row["proposal_id"]))
         proposal_id = row.get("proposal_id")
         phase = row.get("phase")
+        _observe_lifecycle(row, lifecycle_stats, require_phase=False)
         if proposal_id:
             if phase == "simulation_committed":
                 observed_committed.add(str(proposal_id))
@@ -170,12 +250,20 @@ def _trajectory_summary(state_dir):
         submit_unknown_count=summary["submit_unknown_count"],
         pending_validation_count=summary["pending_validation_count"],
         trajectory_ids=frozenset(trajectory_ids),
+        trajectory_alpha_ids=frozenset(trajectory_alpha_ids),
+        trajectory_proposal_ids=frozenset(trajectory_proposal_ids),
         observed_settlement_ids=frozenset(observed_settlement_ids),
         duplicate_observed_settlements=summary["duplicate_observed_settlements"],
         observed_committed=frozenset(observed_committed),
         observed_submitted=frozenset(observed_submitted),
         observed_simulation_settled=frozenset(observed_simulation_settled),
         observed_research_settled=frozenset(observed_research_settled),
+        invalid_rows=read_stats.get("invalid_rows", 0),
+        unknown_phase_rows=lifecycle_stats["unknown_phase_rows"],
+        incomplete_rows=lifecycle_stats["incomplete_rows"],
+        duplicate_lifecycle_phases=lifecycle_stats["duplicate_lifecycle_phases"],
+        phase_order_violations=tuple(lifecycle_stats["phase_order_violations"]),
+        missing_alpha_id_rows=lifecycle_stats["missing_alpha_id_rows"],
     )
 
 
@@ -193,6 +281,20 @@ def _kind(name):
     if name.endswith(".json"):
         return "json"
     return "other"
+
+
+def _safe_schema_version(value):
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value
+    return "INVALID"
+
+
+def _safe_proposal_round(value):
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def _inventory(state_dir, names, checkpoint_records):
@@ -215,7 +317,9 @@ def _inventory(state_dir, names, checkpoint_records):
             if record is None or record["malformed"]:
                 schema_version = "UNREADABLE"
             else:
-                schema_version = record["checkpoint"].get("schema_version", "LEGACY")
+                schema_version = _safe_schema_version(
+                    record["checkpoint"].get("schema_version", "LEGACY")
+                )
         elif readable and kind == "json" and (
             name in _FIXED_ARTIFACT_NAMES or is_doctor_artifact(name)
         ):
@@ -223,7 +327,9 @@ def _inventory(state_dir, names, checkpoint_records):
             if not valid:
                 schema_version = "UNREADABLE"
             elif isinstance(payload, dict):
-                schema_version = payload.get("schema_version", "LEGACY")
+                schema_version = _safe_schema_version(
+                    payload.get("schema_version", "LEGACY")
+                )
                 payloads[name] = payload
             else:
                 schema_version = "INVALID"
@@ -243,7 +349,10 @@ def _ledger_summary(path):
     research_settled = set()
     settlement_ids = set()
     duplicate_settlements = 0
-    for row in iter_jsonl_objects(path):
+    lifecycle_stats = _new_lifecycle_stats()
+    read_stats = {}
+    for row in iter_jsonl_objects(path, stats=read_stats):
+        _observe_lifecycle(row, lifecycle_stats, require_phase=True)
         proposal_id = row.get("proposal_id")
         phase = row.get("phase")
         if proposal_id and phase == "simulation_committed":
@@ -271,28 +380,52 @@ def _ledger_summary(path):
         research_settled=frozenset(research_settled),
         settlement_ids=frozenset(settlement_ids),
         duplicate_settlements=duplicate_settlements,
+        invalid_rows=read_stats.get("invalid_rows", 0),
+        unknown_phase_rows=lifecycle_stats["unknown_phase_rows"],
+        incomplete_rows=lifecycle_stats["incomplete_rows"],
+        duplicate_lifecycle_phases=lifecycle_stats["duplicate_lifecycle_phases"],
+        phase_order_violations=tuple(lifecycle_stats["phase_order_violations"]),
+        missing_alpha_id_rows=lifecycle_stats["missing_alpha_id_rows"],
     )
 
 
 def _validation_summary(path):
     parent_ids = set()
     plan_pairs = []
-    for row in iter_jsonl_objects(path):
+    read_stats = {}
+    for row in iter_jsonl_objects(path, stats=read_stats):
         if row.get("parent_id"):
             parent_ids.add(str(row["parent_id"]))
         nested = row.get("report")
         if isinstance(nested, dict):
             plan_pairs.append((row.get("plan_id"), nested.get("plan_id")))
-    return ValidationSummary(frozenset(parent_ids), tuple(plan_pairs))
+    return ValidationSummary(
+        frozenset(parent_ids), tuple(plan_pairs), read_stats.get("invalid_rows", 0)
+    )
 
 
 def _submission_pool_summary(payload):
     identities = []
+    identity_sources = []
+    unverifiable = 0
     rows = payload.get("candidates") if isinstance(payload, dict) else []
     for row in rows or []:
         if isinstance(row, dict):
-            identities.append(frozenset(str(row.get(key)) for key in ("alpha_id", "proposal_id")))
-    return SubmissionPoolSummary(tuple(identities))
+            identity = frozenset(
+                str(row.get(key))
+                for key in ("alpha_id", "proposal_id")
+                if row.get(key) not in (None, "")
+            )
+            sources = frozenset(
+                (key, str(row.get(key)))
+                for key in ("alpha_id", "proposal_id")
+                if row.get(key) not in (None, "")
+            )
+            if not identity:
+                unverifiable += 1
+            identities.append(identity)
+            identity_sources.append(sources)
+    return SubmissionPoolSummary(tuple(identities), unverifiable, tuple(identity_sources))
 
 
 def read_workspace_snapshot(state_dir):
@@ -316,7 +449,9 @@ def read_workspace_snapshot(state_dir):
         ledger=_ledger_summary(os.path.join(state_dir, "trial_ledger.jsonl")),
         validation=_validation_summary(os.path.join(state_dir, "validation_reports.jsonl")),
         submission_pool=_submission_pool_summary(payloads.get("submission_pool.json")),
-        proposal_round=proposals.get("round_no") if isinstance(proposals, dict) else None,
+        proposal_round=_safe_proposal_round(
+            proposals.get("round_no") if isinstance(proposals, dict) else None
+        ),
         proposal_count=(len(proposals.get("proposals") or [])
                         if isinstance(proposals, dict) else 0),
         current_best=(experience.get("current_best")

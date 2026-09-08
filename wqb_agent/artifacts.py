@@ -33,7 +33,7 @@ def _read_json(path):
         return None
 
 
-def iter_jsonl_objects(path):
+def iter_jsonl_objects(path, *, stats=None):
     """Yield valid JSON object rows from a rebuildable JSONL artifact.
 
     Readers of derived files share this boundary so malformed or non-object
@@ -44,7 +44,7 @@ def iter_jsonl_objects(path):
     if not path:
         return
     try:
-        handle = open(path, encoding="utf-8")
+        handle = open(path, encoding="utf-8-sig")
     except OSError:
         return
     with handle:
@@ -55,9 +55,13 @@ def iter_jsonl_objects(path):
             try:
                 row = json.loads(line)
             except (TypeError, ValueError, json.JSONDecodeError):
+                if isinstance(stats, dict):
+                    stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
                 continue
             if isinstance(row, dict):
                 yield row
+            elif isinstance(stats, dict):
+                stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
 
 
 def atomic_write_text_if_changed(path, text):

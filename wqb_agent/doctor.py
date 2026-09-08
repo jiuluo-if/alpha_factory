@@ -76,6 +76,16 @@ def run_doctor(raw_config, *, offline=True, snapshot=None):
             "PNL_CAPABILITY_UNAVAILABLE", "WARN", "incremental_value",
             message="仅允许记录 UNAVAILABLE，不生成行为相关性"
         ).as_dict())
+    for name, code_name, invalid_rows in (
+        ("trajectory", "TRAJECTORY_EVIDENCE_DEGRADED", snapshot.trajectory.invalid_rows),
+        ("trial_ledger", "LEDGER_EVIDENCE_DEGRADED", snapshot.ledger.invalid_rows),
+        ("validation_reports", "VALIDATION_EVIDENCE_DEGRADED", snapshot.validation.invalid_rows),
+    ):
+        if invalid_rows:
+            diagnostics.append(DiagnosticEvent(
+                code_name, "WARN", name,
+                message=f"发现 {invalid_rows} 个无效 JSONL 行；已跳过并保留后续有效行"
+            ).as_dict())
     result["diagnostics"] = diagnostics
     for info in snapshot.inventory.entries:
         name = info.name

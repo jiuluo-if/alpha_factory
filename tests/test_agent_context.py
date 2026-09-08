@@ -45,7 +45,7 @@ class TestAgentContext(unittest.TestCase):
                 side_effect=original_scan,
             ) as scan, patch.object(
                 Trajectory, "iter_rows", autospec=True,
-                side_effect=lambda self: original_iter_rows(self),
+                side_effect=lambda self, **kwargs: original_iter_rows(self, **kwargs),
             ) as iter_rows, patch(
                 "wqb_agent.workspace_snapshot.os.listdir", wraps=original_listdir,
             ) as listdir:

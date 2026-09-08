@@ -5,6 +5,7 @@ import contextlib
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from wqb_agent.config import AppConfig, FactoryConfig, normalize_config, parse_config
@@ -188,6 +189,60 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertEqual(result["committed"], 1)
         self.assertEqual(result["trajectory_observed_committed"], 0)
 
+    def test_audit_findings_identify_lifecycle_phase_source_and_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_submitted",
+                }) + "\n")
+            result = audit_state(tmp)
+        finding = next(item for item in result["findings"]
+                       if item["code"] == "trajectory_lifecycle_missing_ledger")
+        self.assertTrue(result["blocking"])
+        self.assertEqual(finding["source"], "trajectory→trial_ledger")
+        self.assertEqual(finding["phase"], "simulation_submitted")
+        self.assertEqual(finding["proposal_ids"], ["p"])
+
+    def test_audit_and_doctor_surface_malformed_jsonl_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write("not json\n")
+            result = audit_state(tmp)
+            doctor = run_doctor({"simulation": {}, "agent": {"state_dir": tmp}}, offline=True)
+        self.assertIn("malformed_ledger_evidence", result["errors"])
+        self.assertTrue(any(
+            item["code"] == "LEDGER_EVIDENCE_DEGRADED"
+            for item in doctor["diagnostics"]
+        ))
+
+    def test_known_result_records_ledger_before_trajectory(self):
+        """已知结果必须先写生命周期证据，再落 append-only trajectory。"""
+        events = []
+        agent = Agent.__new__(Agent)
+        agent.trajectory = SimpleNamespace(
+            experiments=[],
+            add=lambda experiment: events.append("trajectory"),
+        )
+        agent.reflector = SimpleNamespace(
+            _classify=lambda experiment: {"label": "BASELINE", "reason": "test"},
+        )
+        agent.quality_policy = {}
+        agent._record_trial_phase = lambda experiment, phase, **kwargs: events.append(
+            f"ledger:{phase}"
+        )
+        agent._update_search_lifecycle = lambda experiment, outcome=None: None
+        agent._print_experiment = lambda experiment: None
+        exp = Experiment(1, "h", "rank(field)", {}, [])
+        exp.status = "DONE"
+        exp.metrics = {"checks": []}
+        exp.health = None
+        exp.error = None
+        agent._record_live_result(exp)
+        self.assertLess(
+            events.index("ledger:simulation_settled"),
+            events.index("trajectory"),
+        )
+
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}
         once = migrate_artifact("submission_pool", legacy)
@@ -287,6 +342,16 @@ class TestRuntimeSafety(unittest.TestCase):
             result = audit_state(tmp)
             self.assertFalse(result["ok"])
             self.assertIn("orphan_submission", result["errors"])
+
+    def test_audit_does_not_match_alpha_id_to_proposal_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"id": "trial-1", "proposal_id": "p1"}) + "\n")
+            with open(os.path.join(tmp, "submission_pool.json"), "w", encoding="utf-8") as handle:
+                json.dump({"candidates": [{"alpha_id": "p1"}]}, handle)
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("orphan_submission", result["errors"])
 
     def test_audit_detects_duplicate_settlement_identity(self):
         with tempfile.TemporaryDirectory() as tmp:

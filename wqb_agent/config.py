@@ -74,15 +74,6 @@ class AgentRuntimeConfig:
     robustness_policy: dict = field(default_factory=dict)
     yearly_policy: dict = field(default_factory=dict)
 
-    def get(self, key, default=None):
-        """Compatibility read adapter for legacy Agent initialization code."""
-        if key == "submission_pool":
-            return {"filename": self.submission_pool_filename}
-        if hasattr(self, key):
-            return getattr(self, key)
-        return default
-
-
 @dataclass(frozen=True)
 class SearchConfig:
     enabled: bool = True
@@ -117,10 +108,6 @@ class AppConfig:
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
-
-    def as_dict(self):
-        return copy.deepcopy({"simulation": self.simulation, "agent": self.agent})
-
 
 def parse_config(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("simulation", {}), dict):
@@ -171,11 +158,20 @@ def parse_config(raw):
     statistical_policy = dict(agent.get("statistical_policy") or {})
     robustness_policy = dict(agent.get("robustness_policy") or {})
     yearly_policy = dict(agent.get("yearly_policy") or {})
+    statistical_policy.setdefault("mode", "required_when_available")
+    robustness_policy = {
+        "min_sharpe_retention": 0.7,
+        "min_fitness_retention": 0.6,
+        "max_turnover_multiple": 1.5,
+        "max_drawdown_multiple": 1.5,
+        "require_checks_passed": True,
+        **robustness_policy,
+    }
     runtime = AgentRuntimeConfig(
         state_dir=str(agent.get("state_dir", ".wqb_state")),
         max_rounds=int(agent.get("max_rounds", 5)),
         candidates_per_round=int(agent.get("candidates_per_round", 6)),
-        max_proposals_per_round=int(agent.get("max_proposals_per_round", 18)),
+        max_proposals_per_round=max(0, min(100, int(agent.get("max_proposals_per_round", 18)))),
         max_concurrent_sims=int(agent.get("max_concurrent_sims", 3)),
         research_integrity=bool(agent.get("research_integrity", False)),
         correlation_refresh_window=max(1, int(agent.get("correlation_refresh_window", 256))),
@@ -218,3 +214,10 @@ def parse_config(raw):
         simulation_config=SimulationConfig(copy.deepcopy(raw.get("simulation", {}))),
         runtime=runtime,
     )
+
+
+def normalize_config(config):
+    """Normalize the one supported external config boundary."""
+    if isinstance(config, AppConfig):
+        return config
+    return parse_config(config)

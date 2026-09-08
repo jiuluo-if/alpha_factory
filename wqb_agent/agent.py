@@ -20,7 +20,7 @@ from .artifacts import (
 )
 from .checkpoints import CheckpointStore
 from .research_guard import ResearchLoopGuard, structural_family_key
-from .search_policy import SearchPolicy, validate_budget_hierarchy
+from .search_policy import SearchPolicy
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
 from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
@@ -64,7 +64,7 @@ from .validation_report import (
     build_validation_report,
     default_validation_plan,
 )
-from .config import AppConfig
+from .config import normalize_config
 from .research_evidence import ResearchEvidenceBundle
 from .schema import (CREATED_BY_VERSION, VALIDATION_VERSION,
                       SIMULATION_RESULTS_VERSION)
@@ -129,116 +129,53 @@ EXPLORATION_HYPOTHESES = [
 class Agent:
     def __init__(self, client, config):
         self.client = client
-        typed_config = config if isinstance(config, AppConfig) else None
-        if typed_config is not None:
-            self.simulation_settings = typed_config.simulation
-            agent_cfg = typed_config.runtime
-            self.factory_config = {
-                "max_simulations": typed_config.factory.max_simulations,
-                "max_runtime_sec": typed_config.factory.max_runtime_sec,
-            }
-            self.state_dir = agent_cfg.state_dir
-            self.max_rounds = agent_cfg.max_rounds
-            self.candidates_per_round = agent_cfg.candidates_per_round
-        else:
-            self.simulation_settings = config["simulation"]
-            agent_cfg = config["agent"]
-            self.state_dir = agent_cfg.get("state_dir", ".wqb_state")
-            self.max_rounds = agent_cfg.get("max_rounds", 5)
-            self.factory_config = dict(agent_cfg.get("factory") or {})
-            self.candidates_per_round = agent_cfg.get("candidates_per_round", 6)
+        config = normalize_config(config)
+        runtime = config.runtime
+        self.simulation_settings = config.simulation
+        self.factory_config = {
+            **runtime.factory,
+            "max_simulations": config.factory.max_simulations,
+            "max_runtime_sec": config.factory.max_runtime_sec,
+        }
+        self.state_dir = runtime.state_dir
+        self.max_rounds = runtime.max_rounds
+        self.candidates_per_round = runtime.candidates_per_round
         # Keep ordinary runs at the historical 18 cap, while allowing the
         # unattended factory to opt into a bounded 100-proposal batch.
-        configured_batch = (
-            agent_cfg.max_proposals_per_round
-            if typed_config is not None
-            else self.factory_config.get(
-                "max_proposals_per_round", agent_cfg.get("max_proposals_per_round", 18)
-            )
-        )
-        try:
-            self.max_proposals_per_round = max(0, min(100, int(configured_batch)))
-        except (TypeError, ValueError):
-            self.max_proposals_per_round = 18
-        self.research_allocation = (
-            {**agent_cfg.research_allocation, "max_simulations": typed_config.research_allocation.max_simulations}
-            if typed_config is not None
-            else agent_cfg.get("research_allocation") or {}
-        )
-        self.research_integrity = (
-            agent_cfg.research_integrity if typed_config is not None
-            else bool(agent_cfg.get("research_integrity", False))
-        )
-        search_cfg = (
-            {**agent_cfg.search_policy,
-             "enabled": typed_config.search.enabled,
-             "max_simulations": typed_config.search.max_simulations,
-             "validation_max_simulations": typed_config.search.validation_max_simulations}
-            if typed_config is not None
-            else dict(agent_cfg.get("search_policy") or {})
-        )
-        search_cfg.setdefault("enabled", bool(self.research_allocation))
-        if "max_simulations" not in search_cfg:
-            search_cfg["max_simulations"] = self.research_allocation.get(
-                "max_simulations", 100
-            )
-        validate_budget_hierarchy(
-            factory_max_simulations=self.factory_config.get(
-                "max_simulations", search_cfg["max_simulations"]
-            ),
-            search_max_simulations=search_cfg["max_simulations"],
-            research_max_simulations=self.research_allocation.get(
-                "max_simulations", search_cfg["max_simulations"]
-            ),
-        )
-        search_cfg.setdefault(
-            "validation_max_simulations",
-            (self.research_allocation.get("maximum") or {}).get("VALIDATION", 0),
-        )
+        self.max_proposals_per_round = runtime.max_proposals_per_round
+        self.research_allocation = dict(runtime.research_allocation)
+        self.research_integrity = runtime.research_integrity
+        search_cfg = {
+            **runtime.search_policy,
+            "enabled": config.search.enabled,
+            "max_simulations": config.search.max_simulations,
+            "validation_max_simulations": config.search.validation_max_simulations,
+        }
         self.search_policy = SearchPolicy(search_cfg)
-        self.fields_per_discovery = agent_cfg.fields_per_discovery if typed_config is not None else agent_cfg.get("fields_per_discovery", 6)
-        self.pagination_limit = agent_cfg.pagination_limit if typed_config is not None else agent_cfg.get("pagination_limit", 50)
-        self.max_pagination_pages = agent_cfg.max_pagination_pages if typed_config is not None else agent_cfg.get("max_pagination_pages", 20)
-        self.poll_timeout_sec = agent_cfg.poll_timeout_sec if typed_config is not None else agent_cfg.get("poll_timeout_sec", 1500)
-        self.context_experiments = agent_cfg.context_experiments if typed_config is not None else agent_cfg.get("context_experiments", 10)
-        self.correlation_refresh_window = (
-            agent_cfg.correlation_refresh_window if typed_config is not None
-            else max(1, int(agent_cfg.get("correlation_refresh_window", 256)))
+        self.fields_per_discovery = runtime.fields_per_discovery
+        self.pagination_limit = runtime.pagination_limit
+        self.max_pagination_pages = runtime.max_pagination_pages
+        self.poll_timeout_sec = runtime.poll_timeout_sec
+        self.context_experiments = runtime.context_experiments
+        self.correlation_refresh_window = runtime.correlation_refresh_window
+        self.quality_policy = runtime.quality
+        self.statistical_policy = dict(runtime.statistical_policy)
+        self.robustness_policy = dict(runtime.robustness_policy)
+        self.incremental_policy = IncrementalValuePolicy(
+            config.incremental_value.mode,
+            config.incremental_value.max_abs_correlation,
+            config.incremental_value.min_overlap,
         )
-        self.quality_policy = agent_cfg.quality if typed_config is not None else agent_cfg.get("quality", {})
-        self.statistical_policy = dict(agent_cfg.statistical_policy if typed_config is not None else agent_cfg.get("statistical_policy") or {})
-        self.statistical_policy.setdefault("mode", "required_when_available")
-        self.robustness_policy = dict(agent_cfg.robustness_policy if typed_config is not None else agent_cfg.get("robustness_policy") or {
-            "min_sharpe_retention": 0.7,
-            "min_fitness_retention": 0.6,
-            "max_turnover_multiple": 1.5,
-            "max_drawdown_multiple": 1.5,
-            "require_checks_passed": True,
-        })
-        if typed_config is not None:
-            self.incremental_policy = IncrementalValuePolicy(
-                typed_config.incremental_value.mode,
-                typed_config.incremental_value.max_abs_correlation,
-                typed_config.incremental_value.min_overlap,
-            )
-        else:
-            incremental_cfg = dict(agent_cfg.get("incremental_value") or {})
-            self.incremental_policy = IncrementalValuePolicy(
-                mode=incremental_cfg.get("mode", "required_when_available"),
-                max_abs_correlation=incremental_cfg.get("max_abs_correlation", 0.7),
-                min_overlap=incremental_cfg.get("min_overlap", 60),
-            )
-        field_selection = agent_cfg.field_selection if typed_config is not None else agent_cfg.get("field_selection") or {}
-        self.max_field_alpha_count = agent_cfg.max_field_alpha_count if typed_config is not None else field_selection.get("max_alpha_count")
+        field_selection = runtime.field_selection
+        self.max_field_alpha_count = runtime.max_field_alpha_count
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md"))
         self.operator_reference = _operator_reference(operator_path)
         self.submission_pool = SubmissionPool(
             self.state_dir,
-            filename=(agent_cfg.submission_pool_filename if typed_config is not None
-                      else (agent_cfg.get("submission_pool") or {}).get("filename", "submission_pool.json")),
+            filename=runtime.submission_pool_filename,
         )
 
-        mem_cfg = agent_cfg.memory if typed_config is not None else agent_cfg.get("memory", {})
+        mem_cfg = runtime.memory
         self.memory = ExperienceMemory(
             self.state_dir,
             max_lessons=mem_cfg.get("max_lessons", 20),
@@ -256,7 +193,7 @@ class Agent:
             max_used_hypotheses=mem_cfg.get("max_used_hypotheses", 256),
         )
         self.trajectory = Trajectory(
-            max_len=agent_cfg.trajectory_window if typed_config is not None else agent_cfg.get("trajectory_window", 100),
+            max_len=runtime.trajectory_window,
             path=os.path.join(self.state_dir, "trajectory.jsonl"),
         )
         self.trial_ledger = TrialLedger(
@@ -271,7 +208,7 @@ class Agent:
             pagination_limit=self.pagination_limit,
             max_pages=self.max_pagination_pages,
             cache_path=os.path.join(self.state_dir, "fields_cache.json"),
-            cache_ttl_sec=(agent_cfg.fields_cache_ttl_sec if typed_config is not None else agent_cfg.get("fields_cache_ttl_sec", 7 * 24 * 3600)),
+            cache_ttl_sec=runtime.fields_cache_ttl_sec,
             max_alpha_count=self.max_field_alpha_count,
             selection_mode=field_selection.get("mode", "semantic_random"),
             random_fraction=field_selection.get("random_fraction", 0.35),
@@ -279,15 +216,15 @@ class Agent:
         )
         self.simulator = Simulator(
             self.client,
-            max_concurrent=(agent_cfg.max_concurrent_sims if typed_config is not None else agent_cfg.get("max_concurrent_sims", 3)),
+            max_concurrent=runtime.max_concurrent_sims,
             poll_timeout_sec=self.poll_timeout_sec,
-            replace_attempts=(agent_cfg.replace_attempts if typed_config is not None else agent_cfg.get("replace_attempts", 3)),
-            replace_backoff_sec=(agent_cfg.replace_backoff_sec if typed_config is not None else agent_cfg.get("replace_backoff_sec", 60)),
+            replace_attempts=runtime.replace_attempts,
+            replace_backoff_sec=runtime.replace_backoff_sec,
             yearly_policy={
                 "min_sharpe": (self.quality_policy or {}).get("promising_sharpe", 0.0),
                 "min_fitness": (self.quality_policy or {}).get("promising_fitness", 0.0),
                 "max_turnover": (self.quality_policy or {}).get("max_turnover"),
-                "min_years": (agent_cfg.yearly_policy if typed_config is not None else agent_cfg.get("yearly_policy") or {}).get("min_years", 2),
+                "min_years": runtime.yearly_policy.get("min_years", config.validation.yearly_min_years),
             },
         )
         _REFLECTOR_KWARGS = {

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 
 from .audit import audit_state
+from .checkpoints import CheckpointStore
 from .config import AppConfig, parse_config
 from .doctor import run_doctor
 
@@ -62,19 +62,11 @@ TASK_ROUTES = {
 
 
 def _count_unfinished_checkpoints(state_dir):
-    unfinished = []
-    for name in os.listdir(state_dir) if os.path.isdir(state_dir) else ():
-        if not re.fullmatch(r"round_\d+\.checkpoint\.json", name):
-            continue
-        path = os.path.join(state_dir, name)
-        try:
-            with open(path, encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if not isinstance(payload, dict) or not payload.get("complete", False):
-                unfinished.append(name)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            unfinished.append(name)
-    return sorted(unfinished)
+    return sorted(
+        os.path.basename(record["path"])
+        for record in CheckpointStore(state_dir).scan()
+        if record["malformed"] or not record["checkpoint"].get("complete", False)
+    )
 
 
 def _read_json(path, default):
@@ -182,7 +174,7 @@ def run_takeover_preflight(raw_config):
     second state machine or treating cache/report files as platform truth.
     """
     config = raw_config if isinstance(raw_config, AppConfig) else parse_config(raw_config)
-    state_dir = config.agent.get("state_dir", ".wqb_state")
+    state_dir = config.runtime.state_dir if isinstance(config, AppConfig) else config.agent.get("state_dir", ".wqb_state")
     doctor = run_doctor(config, offline=True)
     state = audit_state(state_dir)
     unfinished = _count_unfinished_checkpoints(state_dir)

@@ -161,7 +161,9 @@ def parse_config(raw):
     if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
         raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
     field_selection = dict(agent.get("field_selection") or {})
-    factory = dict(agent.get("factory") or {})
+    # Keep the validated typed factory model; the raw mapping remains
+    # available only through ``runtime.factory`` for extensible legacy keys.
+    factory_settings = dict(agent.get("factory") or {})
     research_allocation_raw = dict(agent.get("research_allocation") or {})
     search_policy = dict(agent.get("search_policy") or {})
     memory = dict(agent.get("memory") or {})
@@ -187,7 +189,7 @@ def parse_config(raw):
         context_experiments=int(agent.get("context_experiments", 10)),
         fields_cache_ttl_sec=float(agent.get("fields_cache_ttl_sec", 7 * 24 * 3600)),
         max_field_alpha_count=field_selection.get("max_alpha_count"),
-        factory=copy.deepcopy(factory),
+        factory=copy.deepcopy(factory_settings),
         research_allocation=copy.deepcopy(research_allocation_raw),
         search_policy=copy.deepcopy(search_policy),
         field_selection=copy.deepcopy(field_selection),

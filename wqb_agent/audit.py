@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 
+from .checkpoints import CheckpointStore
+from .state import TERMINAL_STATUSES
+
 
 def audit_state(state_dir):
     errors = []
@@ -44,28 +47,23 @@ def audit_state(state_dir):
                             trajectory_ids.add(str(key))
     except OSError:
         pass
-    try:
-        for name in os.listdir(state_dir):
-            if not name.startswith("round_") or not name.endswith(".checkpoint.json"):
+    for record in CheckpointStore(state_dir).scan():
+        if record["malformed"]:
+            errors.append("checkpoint_unreadable")
+        for row in record["checkpoint"].get("experiments") or []:
+            if isinstance(row, dict) and row.get("status") == "PENDING" and not row.get("proposal_id"):
+                errors.append("phantom_reservation")
+                break
+            if not isinstance(row, dict):
                 continue
-            with open(os.path.join(state_dir, name), encoding="utf-8") as handle:
-                checkpoint = json.load(handle)
-            for row in ((checkpoint.get("experiments") or []) if isinstance(checkpoint, dict) else ()):
-                if isinstance(row, dict) and row.get("status") == "PENDING" and not row.get("proposal_id"):
-                    errors.append("phantom_reservation")
-                    break
-                if not isinstance(row, dict):
-                    continue
-                status = str(row.get("status") or "").upper()
-                proposal_id = row.get("proposal_id")
-                if proposal_id and status in {"DONE", "FAILED", "SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
-                    checkpoint_terminal[str(proposal_id)] = status
-                if status == "SUBMIT_UNKNOWN" and row.get("budget_held") is False:
-                    errors.append("unknown_not_budget_held")
-                if status in {"DONE", "FAILED", "SKIPPED"} and row.get("reserved") is True:
-                    errors.append("terminal_occupies_arm")
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        errors.append("checkpoint_unreadable")
+            status = str(row.get("status") or "").upper()
+            proposal_id = row.get("proposal_id")
+            if proposal_id and status in TERMINAL_STATUSES:
+                checkpoint_terminal[str(proposal_id)] = status
+            if status == "SUBMIT_UNKNOWN" and row.get("budget_held") is False:
+                errors.append("unknown_not_budget_held")
+            if status in {"DONE", "FAILED", "SKIPPED"} and row.get("reserved") is True:
+                errors.append("terminal_occupies_arm")
     ledger_path = os.path.join(state_dir, "trial_ledger.jsonl")
     try:
         with open(ledger_path, encoding="utf-8") as handle:

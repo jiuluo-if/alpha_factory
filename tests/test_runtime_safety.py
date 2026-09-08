@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from wqb_agent.config import parse_config
+from wqb_agent.config import AppConfig, FactoryConfig, parse_config
 from wqb_agent.schema import CURRENT_SCHEMA_VERSION, migrate_artifact, ARTIFACT_SCHEMAS
 from wqb_agent.doctor import run_doctor
 from wqb_agent.audit import audit_state
@@ -22,6 +22,24 @@ import main as main_entry
 
 
 class TestRuntimeSafety(unittest.TestCase):
+    def test_parse_config_keeps_typed_factory_and_nested_runtime_models(self):
+        config = parse_config({"simulation": {}, "agent": {
+            "factory": {"max_simulations": 12, "max_runtime_sec": 99},
+            "search_policy": {"max_simulations": 12},
+            "max_rounds": 8,
+        }})
+        self.assertIsInstance(config, AppConfig)
+        self.assertIsInstance(config.factory, FactoryConfig)
+        self.assertEqual(config.factory.max_simulations, 12)
+        self.assertEqual(config.factory.max_runtime_sec, 99)
+        self.assertEqual(config.runtime.max_rounds, 8)
+
+    def test_agent_typed_config_does_not_round_trip_through_legacy_dict(self):
+        typed = parse_config({"simulation": {"neutralization": "SUBINDUSTRY"}, "agent": {}})
+        with patch.object(AppConfig, "as_dict", side_effect=AssertionError("legacy config")):
+            agent = Agent(object(), typed)
+        self.assertEqual(agent.simulation_settings["neutralization"], "SUBINDUSTRY")
+
     def test_invalid_config_fails_closed(self):
         with self.assertRaises(ValueError):
             parse_config({"simulation": {}, "agent": {"incremental_value": {"mode": "unknown"}}})

@@ -13,11 +13,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: python -m pip install .
+        run: python -m pip install ".[dev]"
       - name: Syntax layer
         run: python -m compileall -q wqb_agent scripts tests
       - name: Unit layer
         run: python -m unittest discover -s tests
+      - name: Ruff
+        run: python -m ruff check .
+      - name: Coverage report
+        run: coverage run -m unittest discover -s tests && coverage report
       - name: Offline doctor
         run: python main.py --doctor --offline --state-dir tests/fixtures
       - name: Offline state audit

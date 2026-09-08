@@ -7,6 +7,7 @@ import os
 import re
 
 from .config import AppConfig, parse_config
+from .checkpoints import CheckpointStore
 from .diagnostics import DiagnosticEvent
 
 
@@ -16,7 +17,7 @@ def _readable(path):
 
 def run_doctor(raw_config, *, offline=True):
     parsed = raw_config if isinstance(raw_config, AppConfig) else parse_config(raw_config)
-    state_dir = parsed.agent.get("state_dir", ".wqb_state")
+    state_dir = parsed.runtime.state_dir
     ledger_path = os.path.join(state_dir, "trial_ledger.jsonl")
     ledger_exists = os.path.isfile(ledger_path)
     result = {
@@ -43,20 +44,14 @@ def run_doctor(raw_config, *, offline=True):
     unresolved = 0
     submit_unknown = 0
     pending_validation = 0
-    for name in (os.listdir(state_dir) if os.path.isdir(state_dir) else ()):
-        if not re.fullmatch(r"round_\d+\.checkpoint\.json", name):
-            continue
-        try:
-            with open(os.path.join(state_dir, name), encoding="utf-8") as handle:
-                checkpoint = json.load(handle)
-            if not isinstance(checkpoint, dict) or not checkpoint.get("complete", False):
-                unresolved += 1
-            for row in checkpoint.get("experiments") or []:
-                if isinstance(row, dict) and row.get("status") == "SUBMIT_UNKNOWN":
-                    submit_unknown += 1
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    for record in CheckpointStore(state_dir).scan():
+        checkpoint = record["checkpoint"]
+        if record["malformed"] or not checkpoint.get("complete", False):
             result["checkpoint_consistency"] = "FAIL"
             unresolved += 1
+        for row in checkpoint.get("experiments") or []:
+            if isinstance(row, dict) and row.get("status") == "SUBMIT_UNKNOWN":
+                submit_unknown += 1
     trajectory_path = os.path.join(state_dir, "trajectory.jsonl")
     try:
         with open(trajectory_path, encoding="utf-8") as handle:

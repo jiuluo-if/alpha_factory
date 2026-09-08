@@ -15,28 +15,11 @@
 """
 
 import re
-from functools import lru_cache
 
+from .expression import analyze_expression
 from .metrics import score_of
 
 _FIELD_TOKEN_RE = re.compile(r"[a-z0-9_]+")
-_WORD_BOUNDARY_RE = re.compile(r"(?<![\w])")
-
-
-@lru_cache(maxsize=1024)
-def _field_boundary_pattern(field_id):
-    """Compile each field boundary pattern once for repeated proposals."""
-    return re.compile(
-        _WORD_BOUNDARY_RE.pattern + re.escape(field_id) + r"(?![\w])"
-    )
-
-
-@lru_cache(maxsize=64)
-def _sorted_field_ids(fields):
-    """Cache longest-first ordering for recurring discovery field bundles."""
-    return tuple(sorted(dict.fromkeys(fields), key=len, reverse=True))
-
-
 def extract_fields(expression, known_fields):
     r"""返回表达式里实际出现的 known_fields 子集。
 
@@ -44,18 +27,12 @@ def extract_fields(expression, known_fields):
     关系产生误报；边界用 (?<!\w)(?!\w) 防止把 ``returns`` 匹配进
     ``returns_5d``。
     """
-    expression = str(expression or "")
     known_fields = [
         str(field) for field in (known_fields or [])
         if isinstance(field, (str, int)) and str(field)
     ]
-    found = []
-    for fid in _sorted_field_ids(tuple(known_fields or ())):
-        if not fid:
-            continue
-        if _field_boundary_pattern(fid).search(expression):
-            found.append(fid)
-    return found
+    found = set(analyze_expression(expression, known_fields).fields)
+    return [field for field in sorted(set(known_fields), key=len, reverse=True) if field in found]
 
 
 def expression_tokens(expr):

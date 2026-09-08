@@ -9,10 +9,15 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 
 from .expression import canonical_expression
 from .schema import TRAJECTORY_VERSION, CREATED_BY_VERSION
+
+
+ACTIVE_EXECUTION_STATUSES = frozenset({"PENDING", "RUNNING", "SUBMITTING"})
+UNRESOLVED_STATUSES = ACTIVE_EXECUTION_STATUSES | frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
+TERMINAL_STATUSES = frozenset({"DONE", "FAILED", "SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"})
 
 def dataset_ref(value):
     """数据集条目归一化为字符串 id。
@@ -24,27 +29,6 @@ def dataset_ref(value):
     if isinstance(value, dict):
         value = value.get("id") or value.get("name")
     return str(value) if value is not None else None
-
-
-_EXPERIMENT_FIELDS = (
-    "id", "candidate_id", "proposal_id", "submission_fingerprint",
-    "submission_started_at", "field_source", "field_understanding",
-    "field_analysis", "field_hypothesis_basis", "operator_evidence",
-    "template_id", "template_family", "template_stage_path", "template_ref",
-    "template_slots", "search_evidence", "search_outcome", "provisional_outcome",
-    "final_outcome", "robustness_evidence", "incremental_evidence", "pnl_evidence",
-    "research_classification", "research_evidence_bundle", "submission_eligibility",
-    "novelty_score", "allocation_arm", "allocation_key", "factory_session_id",
-    "self_correlation", "round", "hypothesis_id", "expression", "settings",
-    "fields_used", "datasets", "status", "metrics", "error", "alpha_id",
-    "progress_url", "skip_record", "mutation", "lineage_id", "experiment_stage",
-    "research_role", "change_type", "parent_expression", "changed_variable",
-    "expected_failure_modes", "tuning_risk", "rationale", "direction",
-    "economic_mechanism", "direction_transform", "self_correlation_impact",
-    "expected_horizon", "falsification", "health", "yearly_evidence",
-    "validation_plan", "validation_report", "validation_status", "elapsed_sec",
-    "created_at",
-)
 
 
 @dataclass
@@ -129,7 +113,7 @@ class Experiment:
             "schema_version": TRAJECTORY_VERSION,
             "created_by_version": CREATED_BY_VERSION,
         }
-        data.update({name: getattr(self, name) for name in _EXPERIMENT_FIELDS})
+        data.update({item.name: getattr(self, item.name) for item in dataclass_fields(self)})
         return data
 
     @classmethod
@@ -138,7 +122,8 @@ class Experiment:
             data["round"], data["hypothesis_id"], data["expression"],
             data["settings"], data["fields_used"], data.get("datasets"),
         )
-        for name in _EXPERIMENT_FIELDS:
+        field_names = {item.name for item in dataclass_fields(cls)}
+        for name in field_names:
             if name in {"round", "hypothesis_id", "expression", "settings", "fields_used", "datasets"}:
                 continue
             if name in data:

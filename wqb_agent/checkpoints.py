@@ -78,31 +78,49 @@ class CheckpointStore:
 
     def unfinished_except(self, round_no):
         """Return the lowest-round unfinished or malformed checkpoint path."""
-        try:
-            entries = os.scandir(self.state_dir)
-        except OSError:
-            return None
         result = None
         result_round = None
-        with entries:
-            for entry in entries:
-                match = _CHECKPOINT_NAME.fullmatch(entry.name)
-                if not match:
-                    continue
-                checkpoint_round = int(match.group(1))
-                if checkpoint_round == int(round_no):
-                    continue
-                if result_round is not None and checkpoint_round >= result_round:
-                    continue
-                try:
-                    with open(entry.path, encoding="utf-8") as handle:
-                        payload = json.load(handle)
-                    unfinished = not isinstance(payload, dict) or not payload.get(
-                        "complete", False
-                    )
-                except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    unfinished = True
-                if unfinished:
-                    result = entry.path
-                    result_round = checkpoint_round
+        for record in self.scan():
+            checkpoint_round = record["round_no"]
+            if checkpoint_round == int(round_no):
+                continue
+            if result_round is not None and checkpoint_round >= result_round:
+                continue
+            if record["malformed"] or not record["checkpoint"].get("complete", False):
+                result = record["path"]
+                result_round = checkpoint_round
         return result
+
+    def scan(self):
+        """Return the authoritative read-only view of checkpoint files.
+
+        Every consumer uses the same filename rule and ``load`` validation;
+        malformed files remain visible so callers can fail closed.
+        """
+        try:
+            names = os.listdir(self.state_dir)
+        except OSError:
+            return []
+        records = []
+        for name in sorted(names):
+            match = _CHECKPOINT_NAME.fullmatch(name)
+            if not match:
+                continue
+            round_no = int(match.group(1))
+            path = os.path.join(self.state_dir, name)
+            checkpoint = self.load(round_no)
+            raw = {}
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    decoded = json.load(handle)
+                if isinstance(decoded, dict):
+                    raw = decoded
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+            records.append({
+                "path": path,
+                "round_no": round_no,
+                "checkpoint": checkpoint if checkpoint is not None else raw,
+                "malformed": checkpoint is None,
+            })
+        return records

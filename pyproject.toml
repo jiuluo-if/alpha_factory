@@ -9,6 +9,9 @@ description = "Safety-first, state-driven Alpha research factory"
 requires-python = ">=3.11"
 dependencies = ["requests>=2.28"]
 
+[project.optional-dependencies]
+dev = ["ruff", "coverage"]
+
 [tool.setuptools]
 packages = ["wqb_agent"]
 

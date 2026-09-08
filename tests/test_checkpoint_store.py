@@ -37,11 +37,26 @@ class TestCheckpointStore(unittest.TestCase):
             store = CheckpointStore(tmp)
             for round_no in (6, 8):
                 with open(store.path(round_no), "w", encoding="utf-8") as handle:
-                    json.dump({"round_no": round_no, "complete": False}, handle)
+                    json.dump({"round_no": round_no, "complete": False,
+                               "hypothesis": {}, "experiments": []}, handle)
             with open(store.path(7), "w", encoding="utf-8") as handle:
-                json.dump({"round_no": 7, "complete": True}, handle)
+                json.dump({"round_no": 7, "complete": True,
+                           "hypothesis": {}, "experiments": []}, handle)
             self.assertEqual(store.unfinished_except(9), store.path(6))
             self.assertEqual(store.unfinished_except(6), store.path(8))
+
+    def test_scan_is_authoritative_for_valid_and_malformed_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            with open(store.path(4), "w", encoding="utf-8") as handle:
+                json.dump({"round_no": 4, "complete": False, "hypothesis": {}, "experiments": []}, handle)
+            with open(store.path(5), "w", encoding="utf-8") as handle:
+                handle.write("not json")
+            records = store.scan()
+            self.assertEqual([record["round_no"] for record in records], [4, 5])
+            self.assertFalse(records[0]["malformed"])
+            self.assertTrue(records[1]["malformed"])
+            self.assertEqual(store.unfinished_except(9), records[0]["path"])
 
 
 if __name__ == "__main__":

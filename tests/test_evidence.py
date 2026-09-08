@@ -165,6 +165,25 @@ class TestEvidenceCacheIO(unittest.TestCase):
             self.assertEqual(check["result"], "PASS")
             self.assertEqual(check["value"], 0.42)
 
+    def test_refresh_reads_nested_is_data_correlation_shape(self):
+        class Client:
+            def get_self_correlation(self, alpha_id, timeout_sec=20):
+                return {
+                    "is": {
+                        "data": [
+                            {"correlation": -0.21},
+                            {"correlation": 0.33},
+                        ],
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            count = refresh_self_correlation_cache(Client(), tmp, ["nested-alpha"])
+            self.assertEqual(count, 1)
+            check = load_evidence_cache(tmp)["nested-alpha"]["checks"][0]
+            self.assertEqual(check["value"], 0.33)
+            self.assertEqual(check["result"], "PASS")
+
     def test_refresh_uses_configured_correlation_limit(self):
         class Response:
             status_code = 200

@@ -263,9 +263,9 @@ def main():
     print("\n[7] Checking lineage completeness...")
 
     hyps_in_lineages = {
-        str(l.get("root_hypothesis")) for l in iter_jsonl(lineages_path)
-        if isinstance(l.get("root_hypothesis"), (str, int, float, bool))
-        and str(l.get("root_hypothesis")).strip()
+        str(lineage.get("root_hypothesis")) for lineage in iter_jsonl(lineages_path)
+        if isinstance(lineage.get("root_hypothesis"), (str, int, float, bool))
+        and str(lineage.get("root_hypothesis")).strip()
     }
     hyps_in_sims = hypothesis_ids
 

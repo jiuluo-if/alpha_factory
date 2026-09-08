@@ -45,6 +45,31 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertEqual(config.research_allocation.max_simulations, 8)
         self.assertEqual(config.research_allocation.maximum["VALIDATION"], 3)
 
+    def test_agent_runtime_values_are_typed_once_and_consumed_by_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = {
+                "simulation": {"neutralization": "SUBINDUSTRY"},
+                "agent": {
+                    "state_dir": tmp,
+                    "max_rounds": 7,
+                    "candidates_per_round": 11,
+                    "max_concurrent_sims": 2,
+                    "poll_timeout_sec": 123,
+                    "trajectory_window": 17,
+                    "fields_cache_ttl_sec": 456,
+                },
+            }
+            typed = parse_config(raw)
+            self.assertEqual(typed.runtime.state_dir, tmp)
+            self.assertEqual(typed.runtime.max_rounds, 7)
+            self.assertEqual(typed.runtime.poll_timeout_sec, 123)
+            agent = Agent(object(), typed)
+            self.assertEqual(agent.state_dir, tmp)
+            self.assertEqual(agent.max_rounds, 7)
+            self.assertEqual(agent.candidates_per_round, 11)
+            self.assertEqual(agent.simulator.poll_timeout_sec, 123)
+            self.assertEqual(agent.trajectory.max_len, 17)
+
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}
         once = migrate_artifact("submission_pool", legacy)

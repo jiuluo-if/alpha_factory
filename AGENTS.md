@@ -2,6 +2,15 @@
 
 本仓库是面向 AI Agents 的 WorldQuant BRAIN Alpha 研究工具。仓库是研究仪器，不是研究员：Agent 做研究判断，Python 保证真实执行、证据、恢复和安全边界。
 
+## 30 秒安全接管
+
+- 先读：`AGENTS.md` → `wqb_agent/research_api.py` → 当前任务目标 → 一个直接依赖和一个测试；不要递归扫描仓库。
+- 只读上下文：`python main.py --agent-context --compact`；机器读取加 `--json`。它复用 takeover preflight/audit/doctor，`BLOCKED` 时只做对账/恢复，不启动 Simulation。
+- 唯一执行入口：`python main.py --suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py --run-proposals`；不得绕过 `Agent.run_proposals()`。
+- 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、trajectory append-only、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。
+- 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
+- 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。
+
 ## 四个核心概念
 
 ### BRAIN 接口

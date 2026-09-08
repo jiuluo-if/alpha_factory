@@ -24,11 +24,12 @@ from dataclasses import dataclass, field
 import json
 import os
 import tempfile
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .artifacts import atomic_write_json_if_changed
 from .config import parse_config
-from .proposal_contract import _expression_operators, _operator_reference
+from .expression import analyze_expression
+from .proposal_contract import _operator_reference
 from .state import Trajectory
 
 
@@ -273,7 +274,7 @@ def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None
     if reference:
         merged.setdefault("operator_evidence", {
             "sha256": reference.get("sha256"),
-            "operators": _expression_operators(spec.expression),
+            "operators": list(analyze_expression(spec.expression).operators),
             "rationale": spec.rationale.strip() or spec.hypothesis.strip(),
         })
     round_no = int(merged.get("round_no") or runtime.next_round_no())

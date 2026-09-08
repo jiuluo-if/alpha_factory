@@ -21,7 +21,6 @@ import re
 
 from .evidence import overlay_cached_checks
 from .failures import (
-    FailureKind,
     classify_experiment,
     is_research_relevant,
 )

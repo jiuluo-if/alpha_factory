@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import is_dataclass
 from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wqb_agent.agent import (
@@ -185,6 +186,20 @@ class TestMemory(TmpStateMixin, unittest.TestCase):
 
 
 class TestTrajectory(TmpStateMixin, unittest.TestCase):
+    def test_experiment_is_dataclass_and_preserves_legacy_round_trip(self):
+        experiment = Experiment(
+            3, "h", "rank(close)", {"decay": 4}, ["close"], ["pv1"]
+        )
+        experiment.self_correlation = {
+            "status": "PENDING", "source": "BRAIN alpha payload",
+        }
+        restored = Experiment.from_dict(experiment.to_dict())
+        self.assertTrue(is_dataclass(Experiment))
+        self.assertEqual(restored.round, 3)
+        self.assertEqual(restored.datasets, ["pv1"])
+        self.assertEqual(restored.self_correlation["status"], "PENDING")
+        self.assertEqual(restored.to_dict(), experiment.to_dict())
+
     def test_datasets_dict_entries_normalized(self):
         """proposal datasets 允许 {"id":...} 字典形态；Experiment 入口必须
         归一化为字符串 id，保证 trajectory/ResearchState 聚合可哈希。"""
@@ -209,7 +224,7 @@ class TestTrajectory(TmpStateMixin, unittest.TestCase):
         e2.status = "DONE"
         traj.add(e2)
         with open(path, encoding="utf-8") as f:
-            lines = [l for l in f if l.strip()]
+            lines = [line for line in f if line.strip()]
         self.assertEqual(len(lines), 2)
 
         traj2 = Trajectory(max_len=100, path=path).load()

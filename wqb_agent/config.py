@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import copy
+from dataclasses import dataclass, field
 
 from .incremental_policy import IncrementalValuePolicy
 from .search_policy import validate_budget_hierarchy
@@ -35,6 +35,52 @@ class RobustnessConfig:
 @dataclass(frozen=True)
 class SimulationConfig:
     settings: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AgentRuntimeConfig:
+    """Typed values consumed while constructing the existing Agent runtime.
+
+    Policy mappings remain mappings because their schemas are intentionally
+    extensible; scalar defaults and path/limit values are resolved once here.
+    This is a configuration boundary, not a second runtime or state model.
+    """
+
+    state_dir: str = ".wqb_state"
+    max_rounds: int = 5
+    candidates_per_round: int = 6
+    max_proposals_per_round: int = 18
+    max_concurrent_sims: int = 3
+    research_integrity: bool = False
+    correlation_refresh_window: int = 256
+    fields_per_discovery: int = 6
+    pagination_limit: int = 50
+    max_pagination_pages: int = 20
+    poll_timeout_sec: float = 1500
+    replace_attempts: int = 3
+    replace_backoff_sec: float = 60
+    trajectory_window: int = 100
+    context_experiments: int = 10
+    fields_cache_ttl_sec: float = 7 * 24 * 3600
+    max_field_alpha_count: int | None = None
+    factory: dict = field(default_factory=dict)
+    research_allocation: dict = field(default_factory=dict)
+    search_policy: dict = field(default_factory=dict)
+    field_selection: dict = field(default_factory=dict)
+    submission_pool_filename: str = "submission_pool.json"
+    memory: dict = field(default_factory=dict)
+    quality: dict = field(default_factory=dict)
+    statistical_policy: dict = field(default_factory=dict)
+    robustness_policy: dict = field(default_factory=dict)
+    yearly_policy: dict = field(default_factory=dict)
+
+    def get(self, key, default=None):
+        """Compatibility read adapter for legacy Agent initialization code."""
+        if key == "submission_pool":
+            return {"filename": self.submission_pool_filename}
+        if hasattr(self, key):
+            return getattr(self, key)
+        return default
 
 
 @dataclass(frozen=True)
@@ -70,6 +116,7 @@ class AppConfig:
     statistical: StatisticalConfig = field(default_factory=StatisticalConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
+    runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
 
     def as_dict(self):
         return copy.deepcopy({"simulation": self.simulation, "agent": self.agent})
@@ -77,10 +124,10 @@ class AppConfig:
 
 def parse_config(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("simulation", {}), dict):
-        raise ValueError("config.simulation 必须是对象")
+        raise ValueError("config.simulation 必须是对象")  # noqa: TRY004
     agent = raw.get("agent")
     if not isinstance(agent, dict):
-        raise ValueError("config.agent 必须是对象")
+        raise ValueError("config.agent 必须是对象")  # noqa: TRY004
     incremental = dict(agent.get("incremental_value") or {})
     policy = IncrementalValuePolicy(
         mode=incremental.get("mode", "required_when_available"),
@@ -113,6 +160,46 @@ def parse_config(raw):
     )
     if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
         raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
+    field_selection = dict(agent.get("field_selection") or {})
+    factory = dict(agent.get("factory") or {})
+    research_allocation_raw = dict(agent.get("research_allocation") or {})
+    search_policy = dict(agent.get("search_policy") or {})
+    memory = dict(agent.get("memory") or {})
+    quality = dict(agent.get("quality") or {})
+    statistical_policy = dict(agent.get("statistical_policy") or {})
+    robustness_policy = dict(agent.get("robustness_policy") or {})
+    yearly_policy = dict(agent.get("yearly_policy") or {})
+    runtime = AgentRuntimeConfig(
+        state_dir=str(agent.get("state_dir", ".wqb_state")),
+        max_rounds=int(agent.get("max_rounds", 5)),
+        candidates_per_round=int(agent.get("candidates_per_round", 6)),
+        max_proposals_per_round=int(agent.get("max_proposals_per_round", 18)),
+        max_concurrent_sims=int(agent.get("max_concurrent_sims", 3)),
+        research_integrity=bool(agent.get("research_integrity", False)),
+        correlation_refresh_window=max(1, int(agent.get("correlation_refresh_window", 256))),
+        fields_per_discovery=int(agent.get("fields_per_discovery", 6)),
+        pagination_limit=int(agent.get("pagination_limit", 50)),
+        max_pagination_pages=int(agent.get("max_pagination_pages", 20)),
+        poll_timeout_sec=float(agent.get("poll_timeout_sec", 1500)),
+        replace_attempts=int(agent.get("replace_attempts", 3)),
+        replace_backoff_sec=float(agent.get("replace_backoff_sec", 60)),
+        trajectory_window=int(agent.get("trajectory_window", 100)),
+        context_experiments=int(agent.get("context_experiments", 10)),
+        fields_cache_ttl_sec=float(agent.get("fields_cache_ttl_sec", 7 * 24 * 3600)),
+        max_field_alpha_count=field_selection.get("max_alpha_count"),
+        factory=copy.deepcopy(factory),
+        research_allocation=copy.deepcopy(research_allocation_raw),
+        search_policy=copy.deepcopy(search_policy),
+        field_selection=copy.deepcopy(field_selection),
+        submission_pool_filename=str(
+            (agent.get("submission_pool") or {}).get("filename", "submission_pool.json")
+        ),
+        memory=copy.deepcopy(memory),
+        quality=copy.deepcopy(quality),
+        statistical_policy=copy.deepcopy(statistical_policy),
+        robustness_policy=copy.deepcopy(robustness_policy),
+        yearly_policy=copy.deepcopy(yearly_policy),
+    )
     return AppConfig(
         simulation=copy.deepcopy(raw.get("simulation", {})),
         agent=copy.deepcopy(agent),
@@ -127,4 +214,5 @@ def parse_config(raw):
             float((agent.get("robustness_policy") or {}).get("min_fitness_retention", 0.6)),
         ),
         simulation_config=SimulationConfig(copy.deepcopy(raw.get("simulation", {}))),
+        runtime=runtime,
     )

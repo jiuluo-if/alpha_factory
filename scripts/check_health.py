@@ -11,7 +11,6 @@ Reads the alpha's is block and reports:
 Exit code 0 = healthy, 1 = noise trap / not healthy, 2 = error.
 """
 import argparse
-import json
 import os
 import sys
 

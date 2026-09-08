@@ -16,6 +16,7 @@ import os
 import re
 
 from .diversity import extract_fields
+from .expression import analyze_expression, expression_field_identifiers
 from .research_guard import is_direction_only_change, overfit_expression_reason
 from .validation_report import validate_plan
 
@@ -43,18 +44,6 @@ _VEC_INPUT_RE = re.compile(
     r"\b(vec_avg|vec_sum)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
     re.IGNORECASE,
 )
-_EXPR_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
-_EXPR_NON_FIELD_IDENTIFIERS = {
-    "abs", "add", "and", "bucket", "densify", "divide", "group_backfill", "group_mean", "group_neutralize",
-    "group_rank", "group_scale", "group_zscore", "if_else", "inverse", "is_nan", "kth_element", "log", "max",
-    "min", "multiply", "normalize", "not", "or", "power", "quantile", "rank", "reverse", "scale", "sign", "signed_power", "sqrt", "subtract",
-    "trade_when", "days_from_last_change", "last_diff_value", "ts_arg_max", "ts_arg_min", "ts_av_diff", "ts_backfill", "ts_corr", "ts_count_nans", "ts_covariance", "ts_decay_linear", "ts_delay",
-    "ts_delta", "ts_mean", "ts_product", "ts_quantile", "ts_rank", "ts_regression", "ts_scale", "ts_step",
-    "ts_std_dev", "ts_sum", "ts_zscore", "vec_avg", "vec_sum", "winsorize", "zscore",
-    "driver", "gaussian", "cauchy", "uniform", "filter", "dense", "constant",
-    "longscale", "shortscale", "std", "rate", "hump", "ignore", "range", "sigma",
-    "subindustry", "industry", "sector", "market", "lookback",
-}
 
 
 def proposal_budget_cap(candidates_per_round, allocation_cap, hard_cap=18):
@@ -81,7 +70,7 @@ def _operator_reference(path):
 
 
 def _expression_operators(expression):
-    return sorted(set(re.findall(r"\b([a-z][a-z0-9_]*)\s*\(", expression or "")))
+    return list(analyze_expression(expression).operators)
 
 
 def validate_proposal(p, discovered_fields=None, strict_experiment=False,
@@ -202,10 +191,10 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                         continue
                     if item.get("data_type") != (profiles.get(field_id) or {}).get("type"):
                         problems.append(f"field_analysis 的 {field_id} data_type 必须与 BRAIN discovery 一致")
-            identifiers = set(_EXPR_IDENTIFIER_RE.findall(expression))
+            identifiers = set(expression_field_identifiers(analyze_expression(expression)))
             unknown = sorted(
                 ident for ident in identifiers
-                if ident not in profiles and ident.lower() not in _EXPR_NON_FIELD_IDENTIFIERS
+                if ident not in profiles
             )
             if unknown:
                 problems.append(f"表达式含本轮 discovery 未确认的字段/标识符: {unknown}")

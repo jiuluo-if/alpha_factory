@@ -41,7 +41,6 @@ from .client import (
     WQBTimeoutError,
 )
 from .metrics import check_health as _check_health
-from .metrics import check_pass as _check_pass
 from .metrics import extract_metrics as _extract_metrics
 from .yearly import build_yearly_evidence
 
@@ -222,9 +221,10 @@ class Simulator:
             for attempt in range(1, self.replace_attempts + 1):
                 try:
                     progress_url = experiment.progress_url
-                    callback = lambda elapsed, polls, code: print(
-                        f"[POLL] {experiment.id} elapsed={elapsed:.0f}s polls={polls} status={code}"
-                    )
+                    def callback(elapsed, polls, code):
+                        print(
+                            f"[POLL] {experiment.id} elapsed={elapsed:.0f}s polls={polls} status={code}"
+                        )
                     try:
                         alpha_id = self.client.poll_progress(
                             progress_url,

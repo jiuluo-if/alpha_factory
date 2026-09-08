@@ -125,7 +125,7 @@ class TestGarbage(TmpStateMixin, unittest.TestCase):
                           note="replaced by newer evidence", round_no=9)
         self.assertEqual(len(m.lessons), 1)  # still referenced in long term
         # soft-delete means: remove from long term after moving
-        m.lessons = [l for l in m.lessons if l["id"] != lesson["id"]]
+        m.lessons = [item for item in m.lessons if item["id"] != lesson["id"]]
         self.assertEqual(len(m.lessons), 0)
         self.assertEqual(m.garbage_stats()["total"], 1)
         restored = m.restore_from_garbage(m.garbage[0]["id"])

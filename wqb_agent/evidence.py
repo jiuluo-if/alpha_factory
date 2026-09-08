@@ -111,6 +111,39 @@ def has_resolved_self_correlation(entry):
     return False
 
 
+def _correlation_values(payload):
+    """Extract finite correlation candidates from known BRAIN read shapes."""
+    if not isinstance(payload, dict):
+        return []
+    roots = [payload]
+    nested = payload.get("is")
+    if isinstance(nested, dict):
+        roots.insert(0, nested)
+    values = []
+    for root in roots:
+        schema = root.get("schema")
+        properties = schema.get("properties", []) if isinstance(schema, dict) else []
+        names = [
+            item.get("name") for item in properties
+            if isinstance(item, dict) and item.get("name")
+        ]
+        records = root.get("records") or root.get("data") or []
+        if isinstance(records, list):
+            for record in records:
+                if isinstance(record, dict):
+                    value = record.get("correlation")
+                    if value is not None:
+                        values.append(value)
+                elif isinstance(record, (list, tuple)) and names:
+                    row = dict(zip(names, record))
+                    if row.get("correlation") is not None:
+                        values.append(row["correlation"])
+        for key in ("correlation", "max"):
+            if root.get(key) is not None:
+                values.append(root[key])
+    return values
+
+
 def refresh_self_correlation_cache(client, state_dir, alpha_ids,
                                    timeout_sec=20, correlation_limit=None):
     """Read-only refresh of settled BRAIN SELF_CORRELATION checks.
@@ -156,21 +189,7 @@ def refresh_self_correlation_cache(client, state_dir, alpha_ids,
             continue
         if not isinstance(payload, dict):
             continue
-        schema = payload.get("schema") or {}
-        properties = schema.get("properties", []) if isinstance(schema, dict) else []
-        props = [
-            p.get("name") for p in properties
-            if isinstance(p, dict) and p.get("name")
-        ]
-        records = payload.get("records") or []
-        rows = [
-            dict(zip(props, rec)) for rec in records
-            if isinstance(rec, (list, tuple))
-        ]
-        values = [r.get("correlation") for r in rows
-                  if r.get("correlation") is not None]
-        if not values and payload.get("max") is not None:
-            values = [payload.get("max")]
+        values = _correlation_values(payload)
         if not values:
             continue
         numeric_values = []

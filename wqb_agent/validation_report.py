@@ -228,7 +228,6 @@ def pbo_proxy(aligned_return_series, n_splits=4):
     if len(lengths) != 1 or not lengths or next(iter(lengths)) < 2 * splits or splits < 2 or splits % 2:
         return annotate_evidence({"status": "UNAVAILABLE", "reason": "need equal aligned series and even CSCV splits >= 4"}, status="UNAVAILABLE")
     n_obs = next(iter(lengths))
-    half = n_obs // 2
     logits = []
     for train_indices in itertools.combinations(range(splits), splits // 2):
         folds = [range(i * (n_obs // splits), (i + 1) * (n_obs // splits)) for i in range(splits)]

@@ -1,7 +1,6 @@
 """Rebuildable search state view; no writes and no transport dependencies."""
 
 from collections import Counter, defaultdict
-import re
 
 from .search_policy import BudgetAllocator, structural_fingerprint
 from .schema import CREATED_BY_VERSION, SEARCH_SNAPSHOT_VERSION

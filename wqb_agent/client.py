@@ -367,7 +367,6 @@ class WQBClient:
         """
         rate_limit_budget_sec = _finite_nonnegative(rate_limit_budget_sec, 1800.0)
         start = time.monotonic()
-        last_status = None
         transport_attempt = 0
         while True:
             remaining = max(0.0, rate_limit_budget_sec - (time.monotonic() - start))
@@ -406,7 +405,6 @@ class WQBClient:
                 transport_attempt += 1
                 continue
 
-            last_status = resp.status_code
             if resp.status_code in accepted:
                 return resp
             if resp.status_code == 401:

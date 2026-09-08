@@ -9,6 +9,7 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass, field
 
 from .expression import canonical_expression
 from .schema import TRAJECTORY_VERSION, CREATED_BY_VERSION
@@ -25,228 +26,126 @@ def dataset_ref(value):
     return str(value) if value is not None else None
 
 
+_EXPERIMENT_FIELDS = (
+    "id", "candidate_id", "proposal_id", "submission_fingerprint",
+    "submission_started_at", "field_source", "field_understanding",
+    "field_analysis", "field_hypothesis_basis", "operator_evidence",
+    "template_id", "template_family", "template_stage_path", "template_ref",
+    "template_slots", "search_evidence", "search_outcome", "provisional_outcome",
+    "final_outcome", "robustness_evidence", "incremental_evidence", "pnl_evidence",
+    "research_classification", "research_evidence_bundle", "submission_eligibility",
+    "novelty_score", "allocation_arm", "allocation_key", "factory_session_id",
+    "self_correlation", "round", "hypothesis_id", "expression", "settings",
+    "fields_used", "datasets", "status", "metrics", "error", "alpha_id",
+    "progress_url", "skip_record", "mutation", "lineage_id", "experiment_stage",
+    "research_role", "change_type", "parent_expression", "changed_variable",
+    "expected_failure_modes", "tuning_risk", "rationale", "direction",
+    "economic_mechanism", "direction_transform", "self_correlation_impact",
+    "expected_horizon", "falsification", "health", "yearly_evidence",
+    "validation_plan", "validation_report", "validation_status", "elapsed_sec",
+    "created_at",
+)
+
+
+@dataclass
 class Experiment:
-    def __init__(
-        self, round_no, hypothesis_id, expression, settings, fields_used,
-        datasets=None,
-    ):
-        self.id = uuid.uuid4().hex[:12]
-        self.candidate_id = None
-        self.proposal_id = None
-        self.submission_fingerprint = None
-        self.submission_started_at = None
-        self.field_source = None
-        self.field_understanding = None
-        self.field_analysis = None
-        self.field_hypothesis_basis = None
-        self.operator_evidence = None
-        self.template_id = None
-        self.template_family = None
-        self.template_stage_path = None
-        self.template_ref = None
-        self.template_slots = None
-        self.search_evidence = None
-        self.search_outcome = None
-        self.provisional_outcome = None
-        self.final_outcome = None
-        self.robustness_evidence = None
-        self.incremental_evidence = None
-        self.pnl_evidence = None
-        self.research_classification = None
-        self.research_evidence_bundle = None
-        self.submission_eligibility = None
-        self.novelty_score = None
-        self.allocation_arm = None
-        self.allocation_key = None
-        self.factory_session_id = None
-        self.self_correlation = None
-        self.round = round_no
-        self.hypothesis_id = hypothesis_id
-        self.expression = expression
-        self.settings = dict(settings)
-        self.fields_used = list(fields_used)
-        refs = [dataset_ref(d) for d in (datasets or [])]
-        self.datasets = [r for r in refs if r]
-        self.status = "PENDING"
-        self.metrics = None
-        self.error = None
-        self.alpha_id = None
-        # Persisted immediately after a successful POST.  On resume, the
-        # scheduler polls this URL instead of submitting the expression again.
-        self.progress_url = None
-        # Transport-only terminal outcome after repeated read-only stale
-        # reconciliation.  It is never a research-quality conclusion.
-        self.skip_record = None
-        self.mutation = None
-        # Persist the proposal design so a result is traceable to one
-        # baseline or one explicit variable change.
-        self.lineage_id = None
-        self.experiment_stage = None
-        self.research_role = None
-        self.change_type = None
-        self.parent_expression = None
-        self.changed_variable = None
-        self.expected_failure_modes = []
-        self.tuning_risk = None
-        self.rationale = None
-        self.direction = None
-        self.economic_mechanism = None
-        self.direction_transform = None
-        self.self_correlation_impact = None
-        self.expected_horizon = None
-        self.falsification = None
-        self.health = None
-        # Optional read-only annual aggregate evidence.  Missing in legacy
-        # rows is intentionally compatible and remains UNKNOWN.
-        self.yearly_evidence = None
-        # A robustness plan is registered before its jobs are submitted.
-        self.validation_plan = None
-        self.validation_report = None
-        # Only an explicit robustness procedure may set this to STABLE.
-        # Unset means the record is evidence, not a promotable champion.
-        self.validation_status = None
-        self.elapsed_sec = None
-        self.created_at = time.time()
+    round: int
+    hypothesis_id: str
+    expression: str
+    settings: dict
+    fields_used: list
+    datasets: list | None = None
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    candidate_id: object = None
+    proposal_id: object = None
+    submission_fingerprint: object = None
+    submission_started_at: object = None
+    field_source: object = None
+    field_understanding: object = None
+    field_analysis: object = None
+    field_hypothesis_basis: object = None
+    operator_evidence: object = None
+    template_id: object = None
+    template_family: object = None
+    template_stage_path: object = None
+    template_ref: object = None
+    template_slots: object = None
+    search_evidence: object = None
+    search_outcome: object = None
+    provisional_outcome: object = None
+    final_outcome: object = None
+    robustness_evidence: object = None
+    incremental_evidence: object = None
+    pnl_evidence: object = None
+    research_classification: object = None
+    research_evidence_bundle: object = None
+    submission_eligibility: object = None
+    novelty_score: object = None
+    allocation_arm: object = None
+    allocation_key: object = None
+    factory_session_id: object = None
+    self_correlation: object = None
+    status: str = "PENDING"
+    metrics: object = None
+    error: object = None
+    alpha_id: object = None
+    progress_url: object = None
+    skip_record: object = None
+    mutation: object = None
+    lineage_id: object = None
+    experiment_stage: object = None
+    research_role: object = None
+    change_type: object = None
+    parent_expression: object = None
+    changed_variable: object = None
+    expected_failure_modes: list = field(default_factory=list)
+    tuning_risk: object = None
+    rationale: object = None
+    direction: object = None
+    economic_mechanism: object = None
+    direction_transform: object = None
+    self_correlation_impact: object = None
+    expected_horizon: object = None
+    falsification: object = None
+    health: object = None
+    yearly_evidence: object = None
+    validation_plan: object = None
+    validation_report: object = None
+    validation_status: object = None
+    elapsed_sec: object = None
+    created_at: float = field(default_factory=time.time)
+
+    def __post_init__(self):
+        self.settings = dict(self.settings)
+        self.fields_used = list(self.fields_used)
+        self.datasets = [
+            ref for ref in (dataset_ref(item) for item in (self.datasets or []))
+            if ref
+        ]
+        self.expected_failure_modes = list(self.expected_failure_modes or [])
 
     def to_dict(self):
-        return {
+        data = {
             "schema_version": TRAJECTORY_VERSION,
             "created_by_version": CREATED_BY_VERSION,
-            "id": self.id,
-            "candidate_id": self.candidate_id,
-            "proposal_id": self.proposal_id,
-            "submission_fingerprint": self.submission_fingerprint,
-            "submission_started_at": self.submission_started_at,
-            "field_source": self.field_source,
-            "field_understanding": self.field_understanding,
-            "field_analysis": self.field_analysis,
-            "field_hypothesis_basis": self.field_hypothesis_basis,
-            "operator_evidence": self.operator_evidence,
-            "template_id": self.template_id,
-            "template_family": self.template_family,
-            "template_stage_path": self.template_stage_path,
-            "template_ref": self.template_ref,
-            "template_slots": self.template_slots,
-            "search_evidence": self.search_evidence,
-            "search_outcome": self.search_outcome,
-            "provisional_outcome": self.provisional_outcome,
-            "final_outcome": self.final_outcome,
-            "robustness_evidence": self.robustness_evidence,
-            "incremental_evidence": self.incremental_evidence,
-            "pnl_evidence": self.pnl_evidence,
-            "research_classification": self.research_classification,
-            "research_evidence_bundle": self.research_evidence_bundle,
-            "submission_eligibility": self.submission_eligibility,
-            "novelty_score": self.novelty_score,
-            "allocation_arm": self.allocation_arm,
-            "allocation_key": self.allocation_key,
-            "factory_session_id": self.factory_session_id,
-            "self_correlation": self.self_correlation,
-            "round": self.round,
-            "hypothesis_id": self.hypothesis_id,
-            "expression": self.expression,
-            "settings": self.settings,
-            "fields_used": self.fields_used,
-            "datasets": self.datasets,
-            "status": self.status,
-            "metrics": self.metrics,
-            "error": self.error,
-            "alpha_id": self.alpha_id,
-            "progress_url": self.progress_url,
-            "skip_record": self.skip_record,
-            "mutation": self.mutation,
-            "lineage_id": self.lineage_id,
-            "experiment_stage": self.experiment_stage,
-            "research_role": self.research_role,
-            "change_type": self.change_type,
-            "parent_expression": self.parent_expression,
-            "changed_variable": self.changed_variable,
-            "expected_failure_modes": self.expected_failure_modes,
-            "tuning_risk": self.tuning_risk,
-            "rationale": self.rationale,
-            "direction": self.direction,
-            "economic_mechanism": self.economic_mechanism,
-            "direction_transform": self.direction_transform,
-            "self_correlation_impact": self.self_correlation_impact,
-            "expected_horizon": self.expected_horizon,
-            "falsification": self.falsification,
-            "health": self.health,
-            "yearly_evidence": self.yearly_evidence,
-            "validation_plan": self.validation_plan,
-            "validation_report": self.validation_report,
-            "validation_status": self.validation_status,
-            "elapsed_sec": self.elapsed_sec,
-            "created_at": self.created_at,
         }
+        data.update({name: getattr(self, name) for name in _EXPERIMENT_FIELDS})
+        return data
 
     @classmethod
     def from_dict(cls, data):
         exp = cls(
-            data["round"],
-            data["hypothesis_id"],
-            data["expression"],
-            data["settings"],
-            data["fields_used"],
-            data.get("datasets"),
+            data["round"], data["hypothesis_id"], data["expression"],
+            data["settings"], data["fields_used"], data.get("datasets"),
         )
+        for name in _EXPERIMENT_FIELDS:
+            if name in {"round", "hypothesis_id", "expression", "settings", "fields_used", "datasets"}:
+                continue
+            if name in data:
+                setattr(exp, name, data[name])
         exp.id = data["id"]
-        exp.candidate_id = data.get("candidate_id")
-        exp.proposal_id = data.get("proposal_id")
-        exp.submission_fingerprint = data.get("submission_fingerprint")
-        exp.submission_started_at = data.get("submission_started_at")
-        exp.field_source = data.get("field_source")
-        exp.field_understanding = data.get("field_understanding")
-        exp.field_analysis = data.get("field_analysis")
-        exp.field_hypothesis_basis = data.get("field_hypothesis_basis")
-        exp.operator_evidence = data.get("operator_evidence")
-        exp.template_id = data.get("template_id")
-        exp.template_family = data.get("template_family")
-        exp.template_stage_path = data.get("template_stage_path")
-        exp.template_ref = data.get("template_ref")
-        exp.template_slots = data.get("template_slots")
-        exp.search_evidence = data.get("search_evidence")
-        exp.search_outcome = data.get("search_outcome")
-        exp.provisional_outcome = data.get("provisional_outcome")
-        exp.final_outcome = data.get("final_outcome")
-        exp.robustness_evidence = data.get("robustness_evidence")
-        exp.incremental_evidence = data.get("incremental_evidence")
-        exp.pnl_evidence = data.get("pnl_evidence")
-        exp.research_classification = data.get("research_classification")
-        exp.research_evidence_bundle = data.get("research_evidence_bundle")
-        exp.submission_eligibility = data.get("submission_eligibility")
-        exp.novelty_score = data.get("novelty_score")
-        exp.allocation_arm = data.get("allocation_arm")
-        exp.allocation_key = data.get("allocation_key")
-        exp.factory_session_id = data.get("factory_session_id")
-        exp.self_correlation = data.get("self_correlation")
         exp.status = data["status"]
-        exp.metrics = data.get("metrics")
-        exp.error = data.get("error")
-        exp.alpha_id = data.get("alpha_id")
-        exp.progress_url = data.get("progress_url")
-        exp.skip_record = data.get("skip_record")
-        exp.mutation = data.get("mutation")
-        exp.lineage_id = data.get("lineage_id")
-        exp.experiment_stage = data.get("experiment_stage")
-        exp.research_role = data.get("research_role")
-        exp.change_type = data.get("change_type")
-        exp.parent_expression = data.get("parent_expression")
-        exp.changed_variable = data.get("changed_variable")
         exp.expected_failure_modes = data.get("expected_failure_modes") or []
-        exp.tuning_risk = data.get("tuning_risk")
-        exp.rationale = data.get("rationale")
-        exp.direction = data.get("direction")
-        exp.economic_mechanism = data.get("economic_mechanism")
-        exp.direction_transform = data.get("direction_transform")
-        exp.self_correlation_impact = data.get("self_correlation_impact")
-        exp.expected_horizon = data.get("expected_horizon")
-        exp.falsification = data.get("falsification")
-        exp.health = data.get("health")
-        exp.yearly_evidence = data.get("yearly_evidence")
-        exp.validation_plan = data.get("validation_plan")
-        exp.validation_report = data.get("validation_report")
-        exp.validation_status = data.get("validation_status")
-        exp.elapsed_sec = data.get("elapsed_sec")
         exp.created_at = data.get("created_at", 0)
         return exp
 

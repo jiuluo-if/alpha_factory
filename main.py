@@ -86,6 +86,22 @@ def main():
         help="人工执行的只读平台 smoke 检查；禁止 Simulation/Alpha 写入",
     )
     parser.add_argument(
+        "--agent-context", action="store_true",
+        help="输出低噪声、只读的 Agent 接管上下文",
+    )
+    parser.add_argument(
+        "--compact", action="store_true",
+        help="压缩 Agent context 输出；只能与 --agent-context 一起使用",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="以 JSON 输出 Agent context；只能与 --agent-context 一起使用",
+    )
+    parser.add_argument(
+        "--task", default="general",
+        help="Agent context 任务路由：general/state-recovery/execution/config/expression",
+    )
+    parser.add_argument(
         "--sync-alpha-colors", action="store_true",
         help="依据已评估证据同步 BRAIN Alpha 顶层 color 元数据；不提交 Alpha",
     )
@@ -123,34 +139,40 @@ def main():
         args.skip_submit_unknown, args.finalize_recorded_round is not None,
         args.factory_stop, args.factory_status,
         args.doctor, args.audit_state, args.takeover_preflight, args.smoke_readonly,
-        args.sync_alpha_colors,
+        args.sync_alpha_colors, args.agent_context,
     )):
         parser.error("--factory-run 不能与其他研究动作同时使用")
     if args.sync_alpha_colors and any((
         args.suggest, args.run_proposals, args.factory_run,
         args.factory_stop, args.factory_status, args.doctor,
         args.audit_state, args.takeover_preflight, args.smoke_readonly,
+        args.agent_context,
         args.skip_stale, args.skip_submit_unknown,
         args.finalize_recorded_round is not None,
     )):
         parser.error("--sync-alpha-colors 不能与其他研究动作同时使用")
     if args.dry_run and not args.sync_alpha_colors:
         parser.error("--dry-run 只能与 --sync-alpha-colors 一起使用")
+    if (args.compact or args.json or args.task != "general") and not args.agent_context:
+        parser.error("--compact、--json、--task 只能与 --agent-context 一起使用")
     if args.factory_stop and args.factory_status:
         parser.error("--factory-stop 不能与 --factory-status 同时使用")
     if (args.factory_stop or args.factory_status) and args.factory_hours is not None:
         parser.error("工厂状态/停止动作不能携带 --factory-hours")
-    readonly_actions = sum(bool(value) for value in (args.doctor, args.audit_state, args.takeover_preflight, args.smoke_readonly))
+    readonly_actions = sum(bool(value) for value in (
+        args.doctor, args.audit_state, args.takeover_preflight,
+        args.smoke_readonly, args.agent_context,
+    ))
     if readonly_actions > 1:
-        parser.error("--doctor、--audit-state、--takeover-preflight、--smoke-readonly 只能选择一个")
-    if args.offline and not (args.doctor or args.audit_state or args.takeover_preflight):
-        parser.error("--offline 只能与 --doctor、--audit-state 或 --takeover-preflight 一起使用")
+        parser.error("只读诊断动作只能选择一个")
+    if args.offline and not (args.doctor or args.audit_state or args.takeover_preflight or args.agent_context):
+        parser.error("--offline 只能与只读诊断动作一起使用")
 
     config = None
     # Read-only diagnostics are intentionally runnable on a fresh checkout:
     # they use the checked-in example as a schema-safe fallback, while all
     # production actions still require the user-created config.json.
-    if (args.doctor or args.audit_state or args.takeover_preflight) and not os.path.exists(args.config):
+    if (args.doctor or args.audit_state or args.takeover_preflight or args.agent_context) and not os.path.exists(args.config):
         example = os.path.join(os.path.dirname(__file__), "config.example.json")
         config = load_config(example)
     else:
@@ -193,6 +215,11 @@ def main():
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("status") != "READY":
             sys.exit(2)
+        return
+    if args.agent_context:
+        from wqb_agent.preflight import build_agent_context, render_agent_context
+        context = build_agent_context(config, task=args.task)
+        print(render_agent_context(context, compact=args.compact, json_mode=args.json))
         return
     if args.smoke_readonly:
         from wqb_agent import WQBClient

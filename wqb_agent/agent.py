@@ -19,6 +19,7 @@ from .artifacts import (
     append_jsonl_if_unique,
     iter_jsonl_objects,
 )
+from .checkpoints import CheckpointStore
 from .research_guard import ResearchLoopGuard, structural_family_key
 from .search_policy import SearchPolicy, validate_budget_hierarchy
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
@@ -42,13 +43,8 @@ from .metrics import (
     num,
 )
 from .proposal_contract import (
-    CHILD_CHANGE_TYPES,
-    EXPERIMENT_STAGES,
-    MAX_PROPOSALS_PER_ROUND,
-    PROPOSAL_EXPERIMENT_QS,
     RESEARCH_ROLES,
     SETTING_OVERRIDES,
-    _expression_operators,
     _operator_reference,
     proposal_budget_cap,
     proposal_priority,
@@ -71,8 +67,8 @@ from .validation_report import (
 )
 from .config import AppConfig
 from .research_evidence import ResearchEvidenceBundle
-from .schema import (CREATED_BY_VERSION, CHECKPOINT_VERSION, VALIDATION_VERSION,
-                      SIMULATION_RESULTS_VERSION, migrate_artifact)
+from .schema import (CREATED_BY_VERSION, VALIDATION_VERSION,
+                      SIMULATION_RESULTS_VERSION)
 
 SEED_HYPOTHESES = [
     {
@@ -138,7 +134,7 @@ class Agent:
         if typed_config is not None:
             config = config.as_dict()
         self.simulation_settings = config["simulation"]
-        agent_cfg = config["agent"]
+        agent_cfg = typed_config.runtime if typed_config is not None else config["agent"]
         self.state_dir = agent_cfg.get("state_dir", ".wqb_state")
         self.max_rounds = agent_cfg.get("max_rounds", 5)
         self.factory_config = dict(agent_cfg.get("factory") or {})
@@ -293,6 +289,7 @@ class Agent:
         # second validation path or a second ledger.
         self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}
         self._checkpoint_lock = threading.Lock()
+        self.checkpoints = CheckpointStore(self.state_dir, lock=self._checkpoint_lock)
 
     # ------------------------------------------------------------ running
 
@@ -715,19 +712,22 @@ class Agent:
                 )
                 if role == "EXPLORE" and p.get("experiment_stage") != "BASELINE":
                     self._record_candidate_rejection(p, "research_guard", "EXPLORE_STAGE_MISMATCH", "EXPLORE 必须是新的 BASELINE")
-                    rejected.append((expression, ["EXPLORE 必须是新的 BASELINE"])); continue
+                    rejected.append((expression, ["EXPLORE 必须是新的 BASELINE"]))
+                    continue
                 if role in {"EXPLOIT", "VALIDATION"} and parent is None:
                     self._record_candidate_rejection(p, "research_guard", "PARENT_NOT_DONE", f"{role} 缺少已完成 parent_expression")
                     rejected.append((expression, [
                         f"{role} 只能引用已完成的 parent_expression，不能在同一批提案中预支结果"
-                    ])); continue
+                    ]))
+                    continue
                 if role == "VALIDATION":
                     parent_verdict = self.reflector._classify(parent).get("label")
                     if parent_verdict not in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}:
                         self._record_candidate_rejection(p, "research_guard", "PARENT_QUALITY_FAIL", "VALIDATION 的 parent 未通过质量门")
                         rejected.append((expression, [
                             "VALIDATION 的 parent 必须已通过质量门或为需审计的高信号"
-                        ])); continue
+                        ]))
+                        continue
             lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis.get("id")
             lineage_decision = self.memory.lineage_decision(lineage_id)
             # STOP ends further exploration.  It permits only one explicitly
@@ -1075,7 +1075,7 @@ class Agent:
     # ----------------------------------------------------- crash recovery
 
     def _proposal_checkpoint_path(self, round_no):
-        return os.path.join(self.state_dir, f"round_{round_no}.checkpoint.json")
+        return self.checkpoints.path(round_no)
 
     def skip_stale_reconciled(self, round_no, simulation_id, min_attempts=3):
         """Close one known remote job after repeated read-only STALE results.
@@ -1246,86 +1246,14 @@ class Agent:
         stale housekeeping: starting a new proposal file could otherwise
         consume slots while a previous POST is still ambiguous.
         """
-        try:
-            entries = os.scandir(self.state_dir)
-        except OSError:
-            return None
-        result = None
-        result_round = None
-        with entries:
-            for entry in entries:
-                match = re.fullmatch(r"round_(\d+)\.checkpoint\.json", entry.name)
-                if not match:
-                    continue
-                checkpoint_round = int(match.group(1))
-                if checkpoint_round == int(round_no):
-                    continue
-                if result_round is not None and checkpoint_round >= result_round:
-                    continue
-                path = entry.path
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        payload = json.load(f)
-                    if not isinstance(payload, dict) or not payload.get("complete", False):
-                        result = path
-                        result_round = checkpoint_round
-                except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    # A malformed checkpoint cannot establish submission
-                    # state; block instead of assuming it is safe to submit.
-                    result = path
-                    result_round = checkpoint_round
-        if result is not None:
-            return result
-        return None
+        return self.checkpoints.unfinished_except(round_no)
 
     def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete):
         """Atomically persist execution state around every POST/poll update."""
-        os.makedirs(self.state_dir, exist_ok=True)
-        path = self._proposal_checkpoint_path(round_no)
-        data = {
-            "schema_version": CHECKPOINT_VERSION,
-            "created_by_version": CREATED_BY_VERSION,
-            "round_no": round_no,
-            "hypothesis": hypothesis,
-            "experiments": [exp.to_dict() for exp in experiments],
-            "complete": bool(complete),
-            "updated_at": time.time(),
-        }
-        with self._checkpoint_lock:
-            atomic_write_json_if_changed(path, data, ignored_keys=("updated_at",))
+        return self.checkpoints.write(round_no, hypothesis, experiments, complete)
 
     def _load_proposal_checkpoint(self, round_no):
-        path = self._proposal_checkpoint_path(round_no)
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            data = migrate_artifact("checkpoint", data)
-            if (not isinstance(data, dict)
-                    or data.get("round_no") != round_no
-                    or not isinstance(data.get("experiments"), list)
-                    or not isinstance(data.get("hypothesis"), dict)):
-                return None
-            # A malformed checkpoint is a recovery boundary, not an empty
-            # batch.  Validate the fields consumed by Experiment.from_dict()
-            # here so an unattended resume fails closed without constructing
-            # partial objects or issuing a replacement POST.
-            required = {"id", "round", "hypothesis_id", "expression",
-                        "settings", "fields_used", "status"}
-            for row in data["experiments"]:
-                if not isinstance(row, dict) or not required.issubset(row):
-                    return None
-                if (not isinstance(row["id"], (str, int))
-                        or not str(row["id"]).strip()
-                        or not isinstance(row["expression"], str)
-                        or not row["expression"].strip()
-                        or not isinstance(row["settings"], dict)
-                        or not isinstance(row["fields_used"], (list, tuple))
-                        or not isinstance(row["status"], str)):
-                    return None
-            return data
-        except (OSError, ValueError, json.JSONDecodeError):
-            return None
-        return None
+        return self.checkpoints.load(round_no)
 
     def _resume_proposal_checkpoint(self, checkpoint):
         """Resume only known BRAIN jobs; unknown submits remain budget-held."""

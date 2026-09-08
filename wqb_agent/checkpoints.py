@@ -46,14 +46,17 @@ class CheckpointStore:
                 path, data, ignored_keys=("updated_at",)
             )
 
-    def load(self, round_no):
-        """Load a validated checkpoint; malformed input returns ``None``."""
-        path = self.path(round_no)
+    @staticmethod
+    def _read_decoded(path):
         try:
-            with open(path, encoding="utf-8") as handle:
-                data = migrate_artifact("checkpoint", json.load(handle))
+            with open(path, encoding="utf-8-sig") as handle:
+                return True, json.load(handle)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return None
+            return False, None
+
+    @staticmethod
+    def _validate(round_no, data):
+        data = migrate_artifact("checkpoint", data)
         if (
             not isinstance(data, dict)
             or data.get("round_no") != int(round_no)
@@ -75,6 +78,16 @@ class CheckpointStore:
             ):
                 return None
         return data
+
+    def load(self, round_no):
+        """Load a validated checkpoint; malformed input returns ``None``."""
+        readable, raw = self._read_decoded(self.path(round_no))
+        if not readable:
+            return None
+        try:
+            return self._validate(round_no, raw)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
 
     def unfinished_except(self, round_no):
         """Return the lowest-round unfinished or malformed checkpoint path."""
@@ -109,15 +122,12 @@ class CheckpointStore:
                 continue
             round_no = int(match.group(1))
             path = os.path.join(self.state_dir, name)
-            checkpoint = self.load(round_no)
-            raw = {}
+            readable, decoded = self._read_decoded(path)
             try:
-                with open(path, encoding="utf-8") as handle:
-                    decoded = json.load(handle)
-                if isinstance(decoded, dict):
-                    raw = decoded
+                checkpoint = self._validate(round_no, decoded) if readable else None
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                pass
+                checkpoint = None
+            raw = decoded if readable and isinstance(decoded, dict) else {}
             records.append({
                 "path": path,
                 "round_no": round_no,

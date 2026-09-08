@@ -85,6 +85,33 @@ TASK_ROUTES = {
         "tests": ["tests/test_recovery.py", "tests/test_agent_context.py"],
         "docs": ["AGENTS.md"],
     },
+    "lifecycle-audit": {
+        "files": [
+            "wqb_agent/audit.py",
+            "wqb_agent/workspace_snapshot.py",
+            "wqb_agent/trial_ledger.py",
+        ],
+        "tests": ["tests/test_runtime_safety.py", "tests/test_workspace_snapshot.py"],
+        "docs": ["docs/ARCHITECTURE_AGENT.md"],
+    },
+    "protocol-safety": {
+        "files": [
+            "wqb_agent/client.py",
+            "wqb_agent/simulator.py",
+            "wqb_agent/protocol.py",
+        ],
+        "tests": ["tests/test_simulator.py", "tests/test_protocol_truth.py"],
+        "docs": ["AGENTS.md"],
+    },
+    "proposal-validation": {
+        "files": [
+            "wqb_agent/proposal_contract.py",
+            "wqb_agent/expression.py",
+            "wqb_agent/research_api.py",
+        ],
+        "tests": ["tests/test_proposal_safety.py", "tests/test_research_api.py"],
+        "docs": ["docs/RESEARCH_POLICY.md"],
+    },
 }
 
 

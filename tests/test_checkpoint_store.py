@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from wqb_agent.checkpoints import CheckpointStore
 
@@ -57,6 +58,33 @@ class TestCheckpointStore(unittest.TestCase):
             self.assertFalse(records[0]["malformed"])
             self.assertTrue(records[1]["malformed"])
             self.assertEqual(store.unfinished_except(9), records[0]["path"])
+
+    def test_scan_parses_each_checkpoint_json_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            with open(store.path(4), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "round_no": 4, "complete": False, "hypothesis": {},
+                    "experiments": [],
+                }, handle)
+            with patch("wqb_agent.checkpoints.json.load",
+                       wraps=json.load) as load:
+                records = store.scan()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(load.call_count, 1)
+
+    def test_load_accepts_utf8_bom_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            payload = json.dumps({
+                "round_no": 4, "complete": False, "hypothesis": {},
+                "experiments": [],
+            }).encode("utf-8-sig")
+            with open(store.path(4), "wb") as handle:
+                handle.write(payload)
+            checkpoint = store.load(4)
+        self.assertIsNotNone(checkpoint)
+        self.assertEqual(checkpoint["round_no"], 4)
 
 
 if __name__ == "__main__":

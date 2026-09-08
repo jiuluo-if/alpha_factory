@@ -38,6 +38,22 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertEqual(typed.runtime.quality["promising_sharpe"], 0.9)
         self.assertEqual(typed.runtime.yearly_policy["min_years"], 2)
 
+    def test_config_boolean_strings_are_strict_and_fail_closed(self):
+        config = parse_config({
+            "simulation": {},
+            "agent": {
+                "research_integrity": "false",
+                "search_policy": {"enabled": "false"},
+            },
+        })
+        self.assertFalse(config.runtime.research_integrity)
+        self.assertFalse(config.search.enabled)
+        with self.assertRaises(ValueError):
+            parse_config({
+                "simulation": {},
+                "agent": {"research_integrity": "maybe"},
+            })
+
     def test_parse_config_keeps_typed_factory_and_nested_runtime_models(self):
         config = parse_config({"simulation": {}, "agent": {
             "factory": {"max_simulations": 12, "max_runtime_sec": 99},
@@ -145,6 +161,32 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertIn("p1", snapshot.ledger.committed)
         self.assertIn("p1", snapshot.ledger.submitted)
         self.assertIn("p1", snapshot.ledger.simulation_settled)
+
+    def test_audit_reports_trajectory_lifecycle_without_ledger_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_committed",
+                }) + "\n")
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("trajectory_lifecycle_missing_ledger", result["errors"])
+        self.assertNotIn("ledger_lifecycle_missing_trajectory", result["errors"])
+        self.assertEqual(result["committed"], 0)
+        self.assertEqual(result["trajectory_observed_committed"], 1)
+
+    def test_audit_reports_ledger_lifecycle_without_trajectory_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_committed",
+                }) + "\n")
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("ledger_lifecycle_missing_trajectory", result["errors"])
+        self.assertNotIn("trajectory_lifecycle_missing_ledger", result["errors"])
+        self.assertEqual(result["committed"], 1)
+        self.assertEqual(result["trajectory_observed_committed"], 0)
 
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}

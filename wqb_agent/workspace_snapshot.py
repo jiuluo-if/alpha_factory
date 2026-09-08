@@ -83,11 +83,12 @@ class TrajectorySummary:
     submit_unknown_count: int = 0
     pending_validation_count: int = 0
     trajectory_ids: frozenset = frozenset()
-    settlement_ids: frozenset = frozenset()
-    committed: frozenset = frozenset()
-    submitted: frozenset = frozenset()
-    settled: frozenset = frozenset()
-    duplicate_settlements: int = 0
+    observed_settlement_ids: frozenset = frozenset()
+    duplicate_observed_settlements: int = 0
+    observed_committed: frozenset = frozenset()
+    observed_submitted: frozenset = frozenset()
+    observed_simulation_settled: frozenset = frozenset()
+    observed_research_settled: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
@@ -121,16 +122,17 @@ class WorkspaceSnapshot:
 def _trajectory_summary(state_dir):
     trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
     trajectory_ids = set()
-    settlement_ids = set()
-    committed = set()
-    submitted = set()
-    settled = set()
+    observed_settlement_ids = set()
+    observed_committed = set()
+    observed_submitted = set()
+    observed_simulation_settled = set()
+    observed_research_settled = set()
     summary = {
         "records": 0,
         "latest_round": None,
         "submit_unknown_count": 0,
         "pending_validation_count": 0,
-        "duplicate_settlements": 0,
+        "duplicate_observed_settlements": 0,
     }
     for row in trajectory.iter_rows() or ():
         summary["records"] += 1
@@ -149,24 +151,31 @@ def _trajectory_summary(state_dir):
         phase = row.get("phase")
         if proposal_id:
             if phase == "simulation_committed":
-                committed.add(str(proposal_id))
+                observed_committed.add(str(proposal_id))
             elif phase in {"simulation_submitted", "simulation_settled"}:
-                submitted.add(str(proposal_id))
+                observed_submitted.add(str(proposal_id))
+            if phase == "simulation_settled":
+                observed_simulation_settled.add(str(proposal_id))
             elif phase == "research_outcome_settled":
-                settled.add(str(proposal_id))
+                observed_research_settled.add(str(proposal_id))
         if phase == "research_outcome_settled":
             settlement_id = (row.get("settlement") or {}).get("settlement_id")
-            if settlement_id and str(settlement_id) in settlement_ids:
-                summary["duplicate_settlements"] += 1
+            if settlement_id and str(settlement_id) in observed_settlement_ids:
+                summary["duplicate_observed_settlements"] += 1
             elif settlement_id:
-                settlement_ids.add(str(settlement_id))
+                observed_settlement_ids.add(str(settlement_id))
     return TrajectorySummary(
-        **summary,
+        records=summary["records"],
+        latest_round=summary["latest_round"],
+        submit_unknown_count=summary["submit_unknown_count"],
+        pending_validation_count=summary["pending_validation_count"],
         trajectory_ids=frozenset(trajectory_ids),
-        settlement_ids=frozenset(settlement_ids),
-        committed=frozenset(committed),
-        submitted=frozenset(submitted),
-        settled=frozenset(settled),
+        observed_settlement_ids=frozenset(observed_settlement_ids),
+        duplicate_observed_settlements=summary["duplicate_observed_settlements"],
+        observed_committed=frozenset(observed_committed),
+        observed_submitted=frozenset(observed_submitted),
+        observed_simulation_settled=frozenset(observed_simulation_settled),
+        observed_research_settled=frozenset(observed_research_settled),
     )
 
 

@@ -206,6 +206,15 @@ class TestArchitectureBoundaries(unittest.TestCase):
         self.assertIn("normalize_config", source)
         self.assertNotIn('json.load(handle)["agent"]', source)
 
+    def test_workspace_snapshot_only_depends_on_read_only_persistence_primitives(self):
+        imports = _direct_imports("workspace_snapshot")
+        for forbidden in (".agent", ".simulator", ".client", "wqb_agent.agent",
+                          "wqb_agent.simulator", "wqb_agent.client"):
+            self.assertNotIn(forbidden, imports)
+        self.assertIn(".artifacts", imports)
+        self.assertIn(".checkpoints", imports)
+        self.assertIn(".state", imports)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -136,6 +136,21 @@ class TestAgentContext(unittest.TestCase):
                 "wqb_agent/agent.py",
                 "wqb_agent/workspace_snapshot.py",
             ],
+            "lifecycle-audit": [
+                "wqb_agent/audit.py",
+                "wqb_agent/workspace_snapshot.py",
+                "wqb_agent/trial_ledger.py",
+            ],
+            "protocol-safety": [
+                "wqb_agent/client.py",
+                "wqb_agent/simulator.py",
+                "wqb_agent/protocol.py",
+            ],
+            "proposal-validation": [
+                "wqb_agent/proposal_contract.py",
+                "wqb_agent/expression.py",
+                "wqb_agent/research_api.py",
+            ],
         }
         for task_name, files in expected.items():
             context = build_agent_context(

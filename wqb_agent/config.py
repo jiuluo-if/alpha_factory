@@ -148,6 +148,22 @@ class AppConfig:
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
 
 
+def _as_bool(value, default, key):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "on", "1"}:
+            return True
+        if normalized in {"false", "no", "off", "0"}:
+            return False
+    raise ValueError(f"{key} 必须是布尔值")
+
+
 def _resolved_ints(values, defaults, *, minimum=0):
     resolved = dict(values)
     for key, default in defaults.items():
@@ -219,7 +235,10 @@ def parse_config(raw):
         research_max_simulations=research_max,
     )
     search = SearchConfig(
-        enabled=bool(search_raw.get("enabled", bool(research_raw))),
+        enabled=_as_bool(
+            search_raw.get("enabled"), bool(research_raw),
+            "config.agent.search_policy.enabled",
+        ),
         max_simulations=search_max,
         validation_max_simulations=int(search_raw.get("validation_max_simulations", 0) or 0),
     )
@@ -262,7 +281,10 @@ def parse_config(raw):
         candidates_per_round=int(agent.get("candidates_per_round", 6)),
         max_proposals_per_round=max(0, min(100, int(agent.get("max_proposals_per_round", 18)))),
         max_concurrent_sims=int(agent.get("max_concurrent_sims", 3)),
-        research_integrity=bool(agent.get("research_integrity", False)),
+        research_integrity=_as_bool(
+            agent.get("research_integrity"), False,
+            "config.agent.research_integrity",
+        ),
         correlation_refresh_window=max(1, int(agent.get("correlation_refresh_window", 256))),
         fields_per_discovery=int(agent.get("fields_per_discovery", 6)),
         pagination_limit=int(agent.get("pagination_limit", 50)),

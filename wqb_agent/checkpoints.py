@@ -91,16 +91,17 @@ class CheckpointStore:
                 result_round = checkpoint_round
         return result
 
-    def scan(self):
+    def scan(self, names=None):
         """Return the authoritative read-only view of checkpoint files.
 
         Every consumer uses the same filename rule and ``load`` validation;
         malformed files remain visible so callers can fail closed.
         """
-        try:
-            names = os.listdir(self.state_dir)
-        except OSError:
-            return []
+        if names is None:
+            try:
+                names = os.listdir(self.state_dir)
+            except OSError:
+                return []
         records = []
         for name in sorted(names):
             match = _CHECKPOINT_NAME.fullmatch(name)

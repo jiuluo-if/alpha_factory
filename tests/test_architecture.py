@@ -2,6 +2,7 @@
 
 import ast
 import os
+import re
 import unittest
 
 
@@ -178,6 +179,32 @@ class TestArchitectureBoundaries(unittest.TestCase):
             source = handle.read()
         self.assertIn("RECOVERABLE_STATUSES", source)
         self.assertNotIn("ACTIVE_LOCAL =", source)
+
+    def test_runtime_modules_do_not_read_compatibility_raw_mappings(self):
+        for filename in (
+            "agent.py", "audit.py", "doctor.py", "preflight.py",
+            "runtime_components.py", "simulator.py",
+        ):
+            path = os.path.join(PACKAGE_ROOT, filename)
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            self.assertIsNone(re.search(r"config\.agent\.", source), filename)
+            self.assertIsNone(re.search(r"config\.simulation\.", source), filename)
+
+    def test_doctor_and_audit_consume_snapshot_facts(self):
+        for filename in ("doctor.py", "audit.py"):
+            path = os.path.join(PACKAGE_ROOT, filename)
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            self.assertNotIn("CheckpointStore", source, filename)
+            self.assertNotIn("trajectory.jsonl", source, filename)
+
+    def test_diagnostic_config_reader_uses_typed_config_boundary(self):
+        path = os.path.join(ROOT, "scripts", "check_correlation.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("normalize_config", source)
+        self.assertNotIn('json.load(handle)["agent"]', source)
 
 
 if __name__ == "__main__":

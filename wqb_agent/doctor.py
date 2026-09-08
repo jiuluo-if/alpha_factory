@@ -2,46 +2,43 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 
 from .config import normalize_config
 from .diagnostics import DiagnosticEvent
-from .workspace_snapshot import read_workspace_snapshot
-
-
-def _readable(path):
-    return os.path.isfile(path) and os.access(path, os.R_OK)
+from .workspace_snapshot import is_doctor_artifact, read_workspace_snapshot
 
 
 def run_doctor(raw_config, *, offline=True, snapshot=None):
     parsed = normalize_config(raw_config)
     state_dir = parsed.runtime.state_dir
+    snapshot = snapshot or read_workspace_snapshot(state_dir)
+    ledger_info = snapshot.inventory.info("trial_ledger.jsonl")
     ledger_path = os.path.join(state_dir, "trial_ledger.jsonl")
-    ledger_exists = os.path.isfile(ledger_path)
     result = {
         "config_valid": True,
         "offline": bool(offline),
         "state_dir": state_dir,
         "state_dir_writable": os.path.isdir(state_dir) and os.access(state_dir, os.W_OK),
-        "ledger_readable": _readable(ledger_path),
+        "ledger_readable": ledger_info.readable,
         "ledger_status": (
-            "MISSING" if not ledger_exists
-            else "READABLE" if _readable(ledger_path)
+            "MISSING" if not ledger_info.exists
+            else "READABLE" if ledger_info.readable
             else "UNREADABLE"
         ),
         "checkpoint_consistency": "PASS",
         "schema_versions": {},
         "operator_reference": os.path.exists(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md")),
-        "field_cache_status": "PRESENT" if os.path.exists(os.path.join(state_dir, "fields_cache.json")) else "MISSING",
+        "field_cache_status": (
+            "PRESENT" if snapshot.inventory.info("fields_cache.json").exists
+            else "MISSING"
+        ),
         "unresolved_simulation_count": 0,
         "submit_unknown_count": 0,
         "pending_validation_count": 0,
         "pnl_capability": "UNAVAILABLE",
         "incremental_capability": "UNAVAILABLE",
     }
-    snapshot = snapshot or read_workspace_snapshot(state_dir)
     unresolved = 0
     submit_unknown = 0
     for record in snapshot.checkpoint_records:
@@ -80,29 +77,9 @@ def run_doctor(raw_config, *, offline=True, snapshot=None):
             message="仅允许记录 UNAVAILABLE，不生成行为相关性"
         ).as_dict())
     result["diagnostics"] = diagnostics
-    artifact_names = [
-        "trajectory.jsonl", "trial_ledger.jsonl", "submission_pool.json",
-        "fields_cache.json", "evidence_cache.json", "factory_session.json",
-        "sims_results.json", "validation_reports.jsonl",
-    ]
-    if os.path.isdir(state_dir):
-        artifact_names.extend(
-            name for name in os.listdir(state_dir)
-            if re.fullmatch(r"round_\d+\.checkpoint\.json", name)
-            or re.fullmatch(r"active_alphas_\d{8}\.json", name)
-        )
-    for name in artifact_names:
-        path = os.path.join(state_dir, name)
-        if not os.path.exists(path):
+    for info in snapshot.inventory.entries:
+        name = info.name
+        if not is_doctor_artifact(name) or not info.exists:
             continue
-        try:
-            if name.endswith(".json"):
-                with open(path, encoding="utf-8") as handle:
-                    payload = json.load(handle)
-                result["schema_versions"][name] = payload.get("schema_version", "LEGACY") if isinstance(payload, dict) else "INVALID"
-            else:
-                with open(path, encoding="utf-8") as handle:
-                    result["schema_versions"][name] = "JSONL_PRESENT"
-        except (OSError, ValueError, json.JSONDecodeError):
-            result["schema_versions"][name] = "UNREADABLE"
+        result["schema_versions"][name] = info.schema_version or "LEGACY"
     return result

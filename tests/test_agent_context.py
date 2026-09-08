@@ -7,6 +7,7 @@ from unittest.mock import patch
 import main as main_entry
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.preflight import build_agent_context, render_agent_context, run_takeover_preflight
+from wqb_agent.state import Trajectory
 
 
 def _preflight(*, status="READY", blocking=None, latest_round=12,
@@ -33,15 +34,24 @@ class TestAgentContext(unittest.TestCase):
     def test_takeover_preflight_scans_checkpoints_once_per_command(self):
         with __import__("tempfile").TemporaryDirectory() as state_dir:
             original_scan = CheckpointStore.scan
+            original_iter_rows = Trajectory.iter_rows
+            original_listdir = __import__("os").listdir
             with patch.object(
                 CheckpointStore, "scan", autospec=True,
                 side_effect=original_scan,
-            ) as scan:
+            ) as scan, patch.object(
+                Trajectory, "iter_rows", autospec=True,
+                side_effect=lambda self: original_iter_rows(self),
+            ) as iter_rows, patch(
+                "wqb_agent.workspace_snapshot.os.listdir", wraps=original_listdir,
+            ) as listdir:
                 result = run_takeover_preflight({
                     "simulation": {}, "agent": {"state_dir": state_dir},
                 })
         self.assertEqual(result["status"], "READY")
         self.assertEqual(scan.call_count, 1)
+        self.assertEqual(iter_rows.call_count, 1)
+        self.assertEqual(listdir.call_count, 1)
 
     def test_context_reuses_authoritative_preflight_and_blocks_next_action(self):
         with patch(
@@ -90,6 +100,48 @@ class TestAgentContext(unittest.TestCase):
         self.assertFalse(payload["network_write"])
         self.assertEqual(payload["task"]["name"], "config")
         self.assertIn("wqb_agent/config.py", payload["task"]["files"])
+
+    def test_snapshot_keeps_bom_encoded_json_compatible(self):
+        with __import__("tempfile").TemporaryDirectory() as state_dir:
+            with open(
+                __import__("os").path.join(state_dir, "proposals.json"),
+                "w", encoding="utf-8-sig",
+            ) as handle:
+                json.dump({"round_no": 7, "proposals": [{"id": "p1"}]}, handle)
+            result = run_takeover_preflight({
+                "simulation": {}, "agent": {"state_dir": state_dir},
+            })
+        self.assertEqual(result["proposal_round"], 7)
+        self.assertEqual(result["proposal_count"], 1)
+
+    def test_context_routes_new_architecture_tasks_to_current_files(self):
+        expected = {
+            "runtime-composition": [
+                "wqb_agent/runtime_components.py",
+                "wqb_agent/config.py",
+                "wqb_agent/agent.py",
+            ],
+            "workspace-diagnostics": [
+                "wqb_agent/workspace_snapshot.py",
+                "wqb_agent/preflight.py",
+                "wqb_agent/doctor.py",
+            ],
+            "checkpoint-recovery": [
+                "wqb_agent/checkpoints.py",
+                "wqb_agent/agent.py",
+                "wqb_agent/workspace_snapshot.py",
+            ],
+        }
+        for task_name, files in expected.items():
+            context = build_agent_context(
+                {"simulation": {}, "agent": {}}, task=task_name,
+                preflight=_preflight(),
+            )
+            self.assertEqual(context["task"]["name"], task_name)
+            self.assertEqual(context["task"]["files"], files)
+            self.assertLessEqual(len(context["task"]["files"]), 3)
+            self.assertLessEqual(len(context["task"]["tests"]), 2)
+            self.assertLessEqual(len(context["task"]["docs"]), 1)
 
     def test_unknown_task_uses_low_noise_default_route(self):
         context = build_agent_context(

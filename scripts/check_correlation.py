@@ -12,6 +12,7 @@ makes a new alpha genuinely additive rather than a re-skin of an old one.
 Exit code 0 = below threshold, 1 = above threshold, 2 = error.
 """
 import argparse
+import json
 import math
 import os
 import sys
@@ -19,6 +20,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.client import WQBClient
+from wqb_agent.config import normalize_config
 
 DEFAULT_THRESHOLD = 0.5
 
@@ -31,9 +33,8 @@ def configured_threshold(config_path=None):
             "config.json",
         )
     try:
-        import json
         with open(config_path, encoding="utf-8") as handle:
-            value = json.load(handle)["agent"]["quality"]["max_self_correlation"]
+            value = normalize_config(json.load(handle)).runtime.quality["max_self_correlation"]
         value = float(value)
         if math.isfinite(value) and 0.0 < value < 1.0:
             return value

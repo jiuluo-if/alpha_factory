@@ -17,6 +17,7 @@ from wqb_agent.state import Experiment
 from wqb_agent.diagnostics import DiagnosticEvent
 from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.behavior import extract_behavior_series
+from wqb_agent.workspace_snapshot import read_workspace_snapshot
 from wqb_agent.protocol import retry_after_seconds
 import main as main_entry
 
@@ -134,6 +135,17 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertEqual(runtime.quality["promising_fitness"], 0.6)
         self.assertEqual(runtime.yearly_policy["min_years"], 2)
 
+    def test_snapshot_exposes_ledger_lifecycle_evidence_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"proposal_id": "p1", "phase": "simulation_committed"}) + "\n")
+                handle.write(json.dumps({"proposal_id": "p1", "phase": "simulation_submitted"}) + "\n")
+                handle.write(json.dumps({"proposal_id": "p1", "phase": "simulation_settled"}) + "\n")
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertIn("p1", snapshot.ledger.committed)
+        self.assertIn("p1", snapshot.ledger.submitted)
+        self.assertIn("p1", snapshot.ledger.simulation_settled)
+
     def test_schema_migration_is_idempotent(self):
         legacy = {"schema_version": 1, "candidates": []}
         once = migrate_artifact("submission_pool", legacy)
@@ -244,6 +256,29 @@ class TestRuntimeSafety(unittest.TestCase):
             result = audit_state(tmp)
             self.assertFalse(result["ok"])
             self.assertIn("duplicate_settlement", result["errors"])
+
+    def test_audit_accepts_same_settlement_in_ledger_and_trajectory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_committed",
+                }) + "\n")
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "simulation_submitted",
+                }) + "\n")
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "research_outcome_settled",
+                    "settlement": {"settlement_id": "same"},
+                }) + "\n")
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                for phase in ("simulation_committed", "simulation_submitted", "simulation_settled"):
+                    handle.write(json.dumps({"proposal_id": "p", "phase": phase}) + "\n")
+                handle.write(json.dumps({
+                    "proposal_id": "p", "phase": "research_outcome_settled",
+                    "settlement": {"settlement_id": "same"},
+                }) + "\n")
+            result = audit_state(tmp)
+        self.assertTrue(result["ok"], result["errors"])
 
     def test_audit_detects_phantom_checkpoint_reservation(self):
         with tempfile.TemporaryDirectory() as tmp:

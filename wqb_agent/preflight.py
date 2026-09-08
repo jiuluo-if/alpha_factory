@@ -58,16 +58,34 @@ TASK_ROUTES = {
         "tests": ["tests/test_research_api.py", "tests/test_proposal_safety.py"],
         "docs": ["docs/RESEARCH_POLICY.md"],
     },
+    "runtime-composition": {
+        "files": [
+            "wqb_agent/runtime_components.py",
+            "wqb_agent/config.py",
+            "wqb_agent/agent.py",
+        ],
+        "tests": ["tests/test_runtime_safety.py", "tests/test_agent_flow.py"],
+        "docs": ["AGENTS.md"],
+    },
+    "workspace-diagnostics": {
+        "files": [
+            "wqb_agent/workspace_snapshot.py",
+            "wqb_agent/preflight.py",
+            "wqb_agent/doctor.py",
+        ],
+        "tests": ["tests/test_agent_context.py", "tests/test_runtime_safety.py"],
+        "docs": ["AGENTS.md"],
+    },
+    "checkpoint-recovery": {
+        "files": [
+            "wqb_agent/checkpoints.py",
+            "wqb_agent/agent.py",
+            "wqb_agent/workspace_snapshot.py",
+        ],
+        "tests": ["tests/test_recovery.py", "tests/test_agent_context.py"],
+        "docs": ["AGENTS.md"],
+    },
 }
-
-
-def _read_json(path, default):
-    try:
-        with open(path, encoding="utf-8-sig") as handle:
-            value = json.load(handle)
-        return value
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return default
 
 
 def _task_route(task):
@@ -171,9 +189,6 @@ def run_takeover_preflight(raw_config):
     doctor = run_doctor(config, offline=True, snapshot=snapshot)
     state = audit_state(state_dir, snapshot=snapshot)
     unfinished = list(snapshot.unfinished_checkpoint_paths)
-    proposals = _read_json(os.path.join(state_dir, "proposals.json"), {})
-    evidence_cache = _read_json(os.path.join(state_dir, "evidence_cache.json"), {})
-    experience = _read_json(os.path.join(state_dir, "experience.json"), {})
     blocking = list(unfinished)
     if not state.get("ok"):
         blocking.extend(state.get("errors") or [])
@@ -190,8 +205,8 @@ def run_takeover_preflight(raw_config):
             "records": snapshot.trajectory.records,
             "latest_round": snapshot.trajectory.latest_round,
         },
-        "current_best": experience.get("current_best") if isinstance(experience, dict) else None,
-        "evidence_cache_entries": len(evidence_cache) if isinstance(evidence_cache, dict) else 0,
-        "proposal_round": proposals.get("round_no") if isinstance(proposals, dict) else None,
-        "proposal_count": len(proposals.get("proposals") or []) if isinstance(proposals, dict) else 0,
+        "current_best": snapshot.current_best,
+        "evidence_cache_entries": snapshot.evidence_cache_entries,
+        "proposal_round": snapshot.proposal_round,
+        "proposal_count": snapshot.proposal_count,
     }

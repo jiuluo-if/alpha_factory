@@ -8,6 +8,7 @@ import main as main_entry
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.preflight import build_agent_context, render_agent_context, run_takeover_preflight
 from wqb_agent.state import Trajectory
+from wqb_agent.workspace_snapshot import read_workspace_snapshot
 
 
 def _preflight(*, status="READY", blocking=None, latest_round=12,
@@ -36,7 +37,10 @@ class TestAgentContext(unittest.TestCase):
             original_scan = CheckpointStore.scan
             original_iter_rows = Trajectory.iter_rows
             original_listdir = __import__("os").listdir
-            with patch.object(
+            with patch(
+                "wqb_agent.preflight.read_workspace_snapshot",
+                wraps=read_workspace_snapshot,
+            ) as snapshot, patch.object(
                 CheckpointStore, "scan", autospec=True,
                 side_effect=original_scan,
             ) as scan, patch.object(
@@ -52,6 +56,7 @@ class TestAgentContext(unittest.TestCase):
         self.assertEqual(scan.call_count, 1)
         self.assertEqual(iter_rows.call_count, 1)
         self.assertEqual(listdir.call_count, 1)
+        self.assertEqual(snapshot.call_count, 1)
 
     def test_context_reuses_authoritative_preflight_and_blocks_next_action(self):
         with patch(

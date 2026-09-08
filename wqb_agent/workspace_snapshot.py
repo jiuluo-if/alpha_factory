@@ -76,6 +76,8 @@ class SubmissionPoolSummary:
 
 @dataclass(frozen=True)
 class TrajectorySummary:
+    """Experiment/result/dedupe projection; TrialLedger owns lifecycle facts."""
+
     records: int = 0
     latest_round: int | None = None
     submit_unknown_count: int = 0

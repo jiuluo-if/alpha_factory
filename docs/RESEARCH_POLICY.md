@@ -59,6 +59,10 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 
 研究策略属于 Agent 判断；Python 只保证事实、边界、证据和恢复，不替研究员选择方向。
 
+## Alpha 顶层 color
+
+`--sync-alpha-colors` 只把已有研究证据映射到 BRAIN Alpha 顶层 `color`，不评分、不创建 Simulation、不提交 Alpha；`--dry-run` 仅预览。`PURPLE` 表示可提交且已有独立/增量价值证据，`GREEN` 表示可提交，`RED` 表示有信号但存在自相关、相关性或稳健性阻断，`BLUE` 表示强信号但仍待关键证据，`YELLOW` 表示有机制的 promising 信号。无信号、失败、重复、参数幸运或证据不足保持无颜色；已有非本项目颜色不覆盖。
+
 ## Agent 接管与效率
 
 接管已有 workspace 的第一步是 `python main.py --takeover-preflight --offline`。该命令只读汇总未完成 checkpoint、状态审计、proposal/cache 概况和 trajectory 计数；`BLOCKED` 时先恢复或对账，不直接启动新实验。自相关回填使用 `scripts/refresh_self_correlation.py` 的时间窗和数量上限，避免重复扫描全部历史。它只调用现有 evidence cache GET 路径，不创建第二套 Simulation 或 submission API。

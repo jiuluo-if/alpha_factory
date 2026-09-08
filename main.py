@@ -86,6 +86,14 @@ def main():
         help="人工执行的只读平台 smoke 检查；禁止 Simulation/Alpha 写入",
     )
     parser.add_argument(
+        "--sync-alpha-colors", action="store_true",
+        help="依据已评估证据同步 BRAIN Alpha 顶层 color 元数据；不提交 Alpha",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="仅预览 Alpha 颜色同步，不发送 PATCH；只能与 --sync-alpha-colors 一起使用",
+    )
+    parser.add_argument(
         "--force-new-round",
         action="store_true",
         help="明确保留未解决的旧 checkpoint 并开启新研究轮次",
@@ -115,8 +123,19 @@ def main():
         args.skip_submit_unknown, args.finalize_recorded_round is not None,
         args.factory_stop, args.factory_status,
         args.doctor, args.audit_state, args.takeover_preflight, args.smoke_readonly,
+        args.sync_alpha_colors,
     )):
         parser.error("--factory-run 不能与其他研究动作同时使用")
+    if args.sync_alpha_colors and any((
+        args.suggest, args.run_proposals, args.factory_run,
+        args.factory_stop, args.factory_status, args.doctor,
+        args.audit_state, args.takeover_preflight, args.smoke_readonly,
+        args.skip_stale, args.skip_submit_unknown,
+        args.finalize_recorded_round is not None,
+    )):
+        parser.error("--sync-alpha-colors 不能与其他研究动作同时使用")
+    if args.dry_run and not args.sync_alpha_colors:
+        parser.error("--dry-run 只能与 --sync-alpha-colors 一起使用")
     if args.factory_stop and args.factory_status:
         parser.error("--factory-stop 不能与 --factory-status 同时使用")
     if (args.factory_stop or args.factory_status) and args.factory_hours is not None:
@@ -183,6 +202,41 @@ def main():
             print(json.dumps(run_readonly_smoke(client, config), ensure_ascii=False, indent=2))
         except Exception as exc:
             print(json.dumps({"network_write": False, "status": "UNAVAILABLE", "reason": str(exc)}, ensure_ascii=False, indent=2))
+        return
+
+    if args.sync_alpha_colors:
+        from wqb_agent import WQBClient
+        from wqb_agent.alpha_colors import load_color_candidates, sync_alpha_colors
+
+        state_dir = config["agent"].get("state_dir", ".wqb_state")
+        lock_path = acquire_single_instance_lock(
+            state_dir, operation="sync-alpha-colors"
+        )
+        if lock_path is None:
+            sys.exit(1)
+        try:
+            client = WQBClient()
+            candidates = load_color_candidates(state_dir)
+            changes = sync_alpha_colors(
+                candidates, client, state_dir, dry_run=args.dry_run
+            )
+            print(json.dumps({
+                "dry_run": args.dry_run,
+                "candidate_count": len(candidates),
+                "change_count": len(changes),
+                "network_write": not args.dry_run,
+                "changes": changes,
+            }, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({
+                "dry_run": args.dry_run,
+                "network_write": not args.dry_run,
+                "status": "FAILED",
+                "reason": str(exc),
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        finally:
+            release_single_instance_lock(lock_path)
         return
 
     if args.factory_stop or args.factory_status:

@@ -45,6 +45,7 @@ CREDENTIALS_FILE = os.path.expanduser("~/.brain_credentials.txt")
 
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
+ALPHA_COLOR_VALUES = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
 
 
 def _finite_nonnegative(value, default):
@@ -688,6 +689,43 @@ class WQBClient:
             "GET", f"{self.base_url}/alphas/{alpha_id}", context=f"GET alpha {alpha_id}"
         )
         return resp.json()
+
+    def set_alpha_color(self, alpha_id, color, *, verify=True):
+        """Update only top-level Alpha metadata color and optionally read it back.
+
+        This deliberately uses the metadata PATCH endpoint.  It never calls an
+        Alpha submit endpoint and therefore cannot create a new Simulation.
+        ``None`` clears a project-owned color when the live API supports it.
+        """
+        if not isinstance(alpha_id, (str, int)) or not str(alpha_id).strip():
+            raise ValueError("alpha_id must be a non-empty string or integer")
+        normalized = None if color is None else str(color).strip().upper()
+        if normalized is not None and normalized not in ALPHA_COLOR_VALUES:
+            raise ValueError(
+                f"unsupported Alpha color {color!r}; expected one of "
+                f"{sorted(ALPHA_COLOR_VALUES)} or None"
+            )
+        alpha_id = str(alpha_id).strip()
+        resp = self._request(
+            "PATCH",
+            f"{self.base_url}/alphas/{alpha_id}",
+            json={"color": normalized},
+            accepted=(200, 201, 204),
+            context=f"PATCH alpha color {alpha_id}",
+        )
+        if not verify:
+            try:
+                return resp.json()
+            except ValueError:
+                return {"id": alpha_id, "color": normalized}
+        payload = self.get_alpha(alpha_id)
+        actual = payload.get("color") if isinstance(payload, dict) else None
+        if actual != normalized:
+            raise WQBError(
+                f"Alpha {alpha_id} color readback mismatch: "
+                f"{actual!r} != {normalized!r}"
+            )
+        return payload
 
     def get_aggregates(self, alpha_id):
         """Fetch per-year aggregate metrics for an alpha (BRAIN /alphas/{id}/aggregates).

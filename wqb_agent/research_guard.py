@@ -11,6 +11,29 @@ import re
 from .expression import canonical_expression
 from .metrics import score_of
 
+_NUMERIC_LITERAL = re.compile(r"(?<![A-Za-z_])\d+(?:\.\d+)?(?![A-Za-z_])")
+
+
+def parameter_only_change_reason(parent_expression, candidate_expression):
+    """Return a reason when two expressions differ only by numeric tuning.
+
+    Numeric window/weight changes are allowed only inside a pre-registered
+    ROBUSTNESS experiment.  This catches the general form instead of naming a
+    few historically observed windows.
+    """
+    parent = canonical_expression(parent_expression)
+    candidate = canonical_expression(candidate_expression)
+    if not parent or not candidate or parent == candidate:
+        return None
+    parent_skeleton = _NUMERIC_LITERAL.sub("<number>", parent)
+    candidate_skeleton = _NUMERIC_LITERAL.sub("<number>", candidate)
+    if parent_skeleton == candidate_skeleton:
+        return (
+            "候选只改变数值窗口/权重等参数；必须注册 ROBUSTNESS 验证，"
+            "不能把参数扫描当作新的 Alpha 机制"
+        )
+    return None
+
 
 def overfit_expression_reason(expression):
     """Explain why a fixed multi-leg parameter blend is not a new hypothesis.

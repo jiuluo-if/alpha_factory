@@ -72,6 +72,7 @@ class Experiment:
     allocation_arm: object = None
     allocation_key: object = None
     factory_session_id: object = None
+    proposal_origin: object = None
     self_correlation: object = None
     status: str = "PENDING"
     metrics: object = None
@@ -85,6 +86,7 @@ class Experiment:
     research_role: object = None
     change_type: object = None
     parent_expression: object = None
+    child_economic_hypothesis: object = None
     changed_variable: object = None
     expected_failure_modes: list = field(default_factory=list)
     tuning_risk: object = None
@@ -148,13 +150,14 @@ class Trajectory:
 
     COMPLETED_EXPRESSION_CACHE_MAX = 512
 
-    def __init__(self, max_len=100, path=None):
+    def __init__(self, max_len=100, path=None, persist=True):
         self.experiments = []
         try:
             self.max_len = max(1, int(max_len))
         except (TypeError, ValueError):
             self.max_len = 100
         self.path = path
+        self.persist = bool(persist)
         self._recent_ids = set()
         self._completed_expression_cache = {}
         self._append_batch_scope = None
@@ -197,10 +200,10 @@ class Trajectory:
             if experiment.id in scoped_ids:
                 self._append_batch_known.add(experiment.id)
             self._completed_expression_cache.clear()
-            if self.path:
+            if self.path and self.persist:
                 to_persist.append(experiment)
             added.append(experiment)
-        if self.path and to_persist:
+        if self.path and self.persist and to_persist:
             self._append_jsonl_many(to_persist)
         if len(self.experiments) > self.max_len:
             self.experiments = self.experiments[-self.max_len:]
@@ -243,6 +246,8 @@ class Trajectory:
 
     def contains_ids(self, experiment_ids):
         """Find a set of IDs in one streaming pass over trajectory."""
+        if not self.persist:
+            return set()
         if isinstance(experiment_ids, (str, int)):
             experiment_ids = {experiment_ids}
         targets = {value for value in (experiment_ids or set()) if value}
@@ -278,6 +283,8 @@ class Trajectory:
         so callers do not materialize the day-long append-only file or create
         a persistent sidecar index.
         """
+        if not self.persist:
+            return
         if not self.path or not os.path.exists(self.path):
             return
         try:
@@ -316,6 +323,8 @@ class Trajectory:
         scale with the batch, while the bounded cache retains repeat-call
         idempotency without creating a new sidecar index.
         """
+        if not self.persist:
+            return {}
         targets = {
             canonical_expression(expression)
             for expression in (expressions or [])
@@ -359,9 +368,9 @@ class Trajectory:
         }
 
     def load(self):
-        """Load trajectory.jsonl. Only the last ``max_len`` lines are parsed
-        into memory (the full history stays on disk); a big history therefore
-        never slows down startup or dedupe."""
+        """Load the optional durable trajectory when persistence is enabled."""
+        if not self.persist:
+            return self
         if self.path and os.path.exists(self.path):
             loaded = []
             for line in self._tail_lines(self.max_len):

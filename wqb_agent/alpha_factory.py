@@ -12,6 +12,7 @@ import json
 
 from .diversity import extract_fields
 from .expression import analyze_expression, canonical_expression
+from .research_guard import parameter_only_change_reason, overfit_expression_reason
 
 
 @dataclass(frozen=True)
@@ -250,6 +251,34 @@ ECONOMIC_TEMPLATES = (
         rationale="检验两类互补信息同步程度的变化，而非简单堆叠字段。",
         economic=True,
     ),
+    # Generic slot names are intentional: ``data_field`` is the semantic
+    # primary field selected from the current dataset catalog, not a literal
+    # field called data_field.  This keeps templates reusable for low/high/
+    # close/volume and for platform fields with different names.
+    AlphaTemplate(
+        "generic_pair_spread_change", "generic_multi_field_spread",
+        "rank(ts_delta(subtract({data_field}, {s}), 5))",
+        required_slots=("data_field", "s"),
+        stage_path="L0:generic fields -> L1:spread -> L2:delta -> L3:rank",
+        rationale="用动态主字段与语义互补字段的差值检验相对变化，不绑定 low 等具体字段名。",
+        economic=True,
+    ),
+    AlphaTemplate(
+        "generic_pair_ratio_extreme", "generic_multi_field_ratio",
+        "rank(ts_zscore(divide({data_field}, add(abs({s}), 0.001)), 20))",
+        required_slots=("data_field", "s"),
+        stage_path="L0:generic fields -> L1:safe ratio -> L2:zscore -> L3:rank",
+        rationale="对任意可兼容字段构造受保护比例，检验相对极端状态而非字段名称本身。",
+        economic=True,
+    ),
+    AlphaTemplate(
+        "generic_triple_confirmation", "generic_multi_field_confirmation",
+        "rank(add(ts_zscore({data_field}, 20), add(ts_zscore({s}, 20), ts_zscore({t}, 20))))",
+        required_slots=("data_field", "s", "t"),
+        stage_path="L0:generic fields -> L1:three standardized legs -> L2:additive confirmation -> L3:rank",
+        rationale="将三个动态选择的互补字段标准化后检验一致性确认，避免把 low 等名称硬编码成机制。",
+        economic=True,
+    ),
     AlphaTemplate(
         "group_centered_level", "group_centered_level",
         "group_scale(group_mean(ts_zscore({p}, 20), 1, {g}), {g})",
@@ -474,21 +503,45 @@ class AlphaFactory:
         if limit <= 0 or not isinstance(fields, (list, tuple)) or not fields:
             return []
         normalized = []
+        normalized_profiles = []
+        seen_profile_keys = set()
         for field in fields:
             field_id = field.get("id") if isinstance(field, dict) else field
-            if isinstance(field_id, (str, int)) and field_id and str(field_id) not in normalized:
-                normalized.append(str(field_id))
+            if not isinstance(field_id, (str, int)) or not field:
+                continue
+            field_id = str(field_id)
+            dataset = field.get("dataset") if isinstance(field, dict) else None
+            dataset = str(dataset) if dataset is not None else None
+            profile_key = (dataset, field_id)
+            if profile_key in seen_profile_keys:
+                continue
+            seen_profile_keys.add(profile_key)
+            normalized.append(field_id)
+            normalized_profiles.append(
+                dict(field) if isinstance(field, dict) else {"id": field_id}
+            )
         if not normalized:
             return []
         primary = normalized[0]
         secondary = normalized[1] if len(normalized) > 1 else None
+        tertiary = normalized[2] if len(normalized) > 2 else None
         ref_input = hypothesis.get("template_ref") or {}
         candidates = []
         seen = set()
         for template in self.registry.select(hypothesis):
-            if any(slot == "s" and not secondary for slot in template.required_slots):
+            values = {
+                "p": primary,
+                "data_field": primary,
+                "s": secondary,
+                "t": tertiary,
+                "g": self.neutralization,
+            }
+            if any(
+                slot in {"p", "data_field", "s", "t"}
+                and not values.get(slot)
+                for slot in template.required_slots
+            ):
                 continue
-            values = {"p": primary, "s": secondary, "g": self.neutralization}
             try:
                 expression = template.expression.format(**values)
             except (KeyError, ValueError):
@@ -503,16 +556,35 @@ class AlphaFactory:
             ref.setdefault("lifecycle", "runnable")
             ref.setdefault("source", "newwqb_builtin")
             ref.setdefault("slot_name", "p")
-            slot_values = {"p": primary, "g": self.neutralization}
-            if secondary:
-                slot_values["s"] = secondary
+            slot_values = {"p": primary, "data_field": primary,
+                           "g": self.neutralization}
+            for slot in ("s", "t"):
+                if values.get(slot):
+                    slot_values[slot] = values[slot]
+            used_ids = extract_fields(expression, normalized)
+            profile_by_id = {}
+            for profile in normalized_profiles:
+                profile_by_id.setdefault(str(profile.get("id")), profile)
+            # Keep references in slot/input order.  ``extract_fields`` is
+            # intentionally canonical (length-sorted) for parsing, while a
+            # template audit must show which profile filled p/data_field/s/t.
+            field_refs = []
+            for profile in normalized_profiles:
+                field_id = str(profile.get("id"))
+                if field_id not in used_ids:
+                    continue
+                field_refs.append({
+                    "id": field_id,
+                    "dataset": profile.get("dataset"),
+                })
             candidates.append(
                 {
                     "expression": expression,
                     "rationale": template.rationale,
                     "mutation": f"template:{template.template_id}",
                     "parent": None,
-                    "fields_used": extract_fields(expression, normalized),
+                    "fields_used": used_ids,
+                    "field_refs": field_refs,
                     "template_id": template.template_id,
                     "template_family": template.family,
                     "template_stage_path": template.stage_path,
@@ -541,6 +613,64 @@ class AlphaFactory:
 
     def catalog(self):
         return self.registry.catalog()
+
+    @staticmethod
+    def _profile_dataset(profile):
+        value = profile.get("dataset") if isinstance(profile, dict) else None
+        return str(value) if value is not None else None
+
+    @classmethod
+    def _profile_key(cls, profile):
+        if not isinstance(profile, dict):
+            return (None, None)
+        value = profile.get("id")
+        return cls._profile_dataset(profile), str(value) if value is not None else None
+
+    def _select_companion_profiles(self, fields, primary, required_count, offset):
+        """Select distinct, type-compatible companion fields for generic slots.
+
+        When the discovery pool contains multiple datasets, prefer companions
+        from another dataset.  If no compatible cross-dataset field exists,
+        fall back to the same dataset only when that is the sole viable pool;
+        this records a truthful limitation instead of silently pretending the
+        batch is cross-dataset.
+        """
+        if required_count <= 0:
+            return []
+        primary_key = self._profile_key(primary)
+        primary_id = str(primary.get("id"))
+        primary_type = str(primary.get("type") or "").upper()
+        candidates = []
+        for candidate in list(fields[offset + 1:]) + list(fields[:offset]):
+            if not isinstance(candidate, dict) or not candidate.get("id"):
+                continue
+            candidate_id = str(candidate.get("id"))
+            if candidate_id == primary_id or self._profile_key(candidate) == primary_key:
+                continue
+            if not isinstance(candidate.get("description"), str) or not candidate["description"].strip():
+                continue
+            if str(candidate.get("semantic_status", "UNKNOWN")).upper() == "UNKNOWN":
+                continue
+            candidate_type = str(candidate.get("type") or "").upper()
+            if primary_type and candidate_type and candidate_type != primary_type:
+                continue
+            if any(candidate_id == str(item.get("id")) for item in candidates):
+                continue
+            candidates.append(candidate)
+        dataset_ids = {
+            self._profile_dataset(item) for item in fields
+            if isinstance(item, dict) and item.get("id")
+        }
+        if len(dataset_ids) > 1:
+            cross_dataset = [
+                item for item in candidates
+                if self._profile_dataset(item) != self._profile_dataset(primary)
+            ]
+            if cross_dataset:
+                candidates = cross_dataset + [
+                    item for item in candidates if item not in cross_dataset
+                ]
+        return candidates[:required_count]
 
     def optimize_signal_proposals(self, parents, operator_reference,
                                    max_candidates=4, excluded_expressions=None,
@@ -617,11 +747,21 @@ class AlphaFactory:
                     or not common["field_analysis"] or not common["field_source"]
                     or not common["field_hypothesis_basis"]):
                 continue
-            variants = (
-                ("smoothing", f"hump({base}, 0.01)", "限制日间变化以降低换手"),
-                ("operator_variant", f"rank(ts_decay_linear({base}, 10))",
-                 "对已有信号增加近期加权平滑"),
-            )
+            child = parent.get("child_economic_hypothesis") or {}
+            if not isinstance(child, dict):
+                continue
+            child_expression = child.get("expression")
+            child_mechanism = child.get("economic_mechanism")
+            child_change = child.get("change_type")
+            if not all(isinstance(value, str) and value.strip() for value in (
+                child_expression, child_mechanism, child_change
+            )):
+                continue
+            if parameter_only_change_reason(base, child_expression):
+                continue
+            if overfit_expression_reason(child_expression):
+                continue
+            variants = ((child_change, child_expression, child_mechanism),)
             for change_type, expression, rationale in variants:
                 if len(out) >= limit:
                     break
@@ -640,14 +780,15 @@ class AlphaFactory:
                         "operators": actual_ops,
                         "rationale": rationale,
                     },
-                    "experiment_question": (
-                        f"在保持 parent 信号机制不变时，{change_type} 是否改善净收益与稳定性？"
+                    "experiment_question": child.get(
+                        "experiment_question",
+                        f"新的经济机制 {change_type} 是否在独立证据上改善净收益与稳定性？",
                     ),
                     "expected_failure_modes": [
                         "平滑过度导致信号衰减或延迟",
                         "优化后换手、相关性或健康检查恶化",
                     ],
-                    "tuning_risk": True,
+                    "tuning_risk": bool(child.get("tuning_risk", False)),
                     "experiment_stage": "CHILD",
                     "change_type": change_type,
                     "parent_expression": base,
@@ -660,11 +801,15 @@ class AlphaFactory:
                     "template_ref": {"source": "newwqb_autonomous_optimizer",
                                      "parent": identity},
                     "template_slots": {"parent": base},
-                    "rationale": rationale,
+                    "rationale": child.get("rationale") or rationale,
                     "direction": parent.get("direction") or "long",
                     "expected_horizon": parent.get("expected_horizon") or "short-term",
-                    "falsification": "若 Sharpe/Fitness 或换手健康恶化，则关闭该优化分支。",
+                    "falsification": child.get(
+                        "falsification",
+                        "若独立样本、健康检查或自相关证据恶化，则关闭该优化分支。",
+                    ),
                 })
+                proposal["proposal_origin"] = "agent_optimizer"
                 out.append(proposal)
                 excluded.add(normalized)
         return out
@@ -703,13 +848,24 @@ class AlphaFactory:
         vector_template_id = (
             "vector_persistent_signal" if economic_mode else "vector_mean_rank"
         )
-        template_order = (
-            [template.template_id for template in self.registry.economic_templates()]
-            if economic_mode else [
-                "rank_level", "zscore_level", "reversal_zscore_20",
-                "momentum_mean_20", "change_delta_5", "vector_mean_rank",
-            ]
+        explicit_templates = self.registry.select(hypothesis)
+        has_explicit_templates = bool(
+            hypothesis.get("template_ids") or hypothesis.get("template_family")
+            or (isinstance(hypothesis.get("template_ref"), dict)
+                and hypothesis.get("template_ref"))
         )
+        template_order = (
+            [template.template_id for template in explicit_templates]
+            if has_explicit_templates else (
+                [template.template_id for template in self.registry.economic_templates()]
+                if economic_mode else [
+                    "rank_level", "zscore_level", "reversal_zscore_20",
+                    "momentum_mean_20", "change_delta_5", "vector_mean_rank",
+                ]
+            )
+        )
+        if not template_order:
+            return []
         family_counts = {}
         for offset, profile in enumerate(fields):
             if not isinstance(profile, dict):
@@ -724,7 +880,8 @@ class AlphaFactory:
             if str(profile.get("semantic_status", "UNKNOWN")).upper() == "UNKNOWN":
                 continue
             field_type = str(profile.get("type") or "").upper()
-            if field_id in used_fields:
+            primary_key = self._profile_key(profile)
+            if primary_key in used_fields:
                 continue
             selected = None
             # If the preferred skeleton was already seen, rotate through the
@@ -743,51 +900,110 @@ class AlphaFactory:
                 family_cap = 4 if economic_mode else MAX_TEMPLATE_FAMILY_PER_BATCH
                 if family_counts.get(template.family, 0) >= family_cap:
                     continue
+                companion_slots = [
+                    slot for slot in template.required_slots
+                    if slot not in {"p", "data_field"}
+                ]
+                slot_profiles = [profile]
+                slot_profiles.extend(self._select_companion_profiles(
+                    fields, profile, len(companion_slots), offset
+                ))
+                if len(slot_profiles) != len(companion_slots) + 1:
+                    continue
                 generated = self.generate(
-                    dict(hypothesis, template_ids=[template_id]), [field_id], count=1
+                    dict(hypothesis, template_ids=[template_id]),
+                    slot_profiles,
+                    count=1,
                 )
                 if not generated:
                     continue
                 generated_candidate = generated[0]
                 generated_expression = generated_candidate["expression"]
+                if (
+                    field_type != "VECTOR"
+                    and {"vec_avg", "vec_sum"}.intersection(
+                        analyze_expression(generated_expression).operators
+                    )
+                ):
+                    continue
                 if canonical_expression(generated_expression) in excluded:
                     continue
                 actual_ops = list(analyze_expression(generated_expression).operators)
                 if not set(actual_ops).issubset(operators):
                     continue
-                selected = (template, generated_candidate, actual_ops)
+                selected = (template, generated_candidate, actual_ops, slot_profiles)
                 break
             if selected is None:
                 continue
-            template, candidate, actual_ops = selected
+            template, candidate, actual_ops, slot_profiles = selected
             field_source = profile.get("field_source") or source_default
             if not isinstance(field_source, dict):
                 field_source = {"kind": "unknown", "path": None, "snapshot_date": None}
+            profile_by_id = {
+                str(item.get("id")): item
+                for item in slot_profiles
+                if isinstance(item, dict) and item.get("id") is not None
+            }
+            profile_by_key = {
+                self._profile_key(item): item for item in slot_profiles
+                if isinstance(item, dict) and item.get("id") is not None
+            }
+            used_field_ids = [
+                str(item) for item in (candidate.get("fields_used") or [field_id])
+                if str(item) in profile_by_id
+            ]
+            if not used_field_ids:
+                continue
+            used_profiles = []
+            for field_ref in candidate.get("field_refs") or []:
+                if not isinstance(field_ref, dict) or not field_ref.get("id"):
+                    continue
+                key = (
+                    str(field_ref.get("dataset")) if field_ref.get("dataset") is not None else None,
+                    str(field_ref.get("id")),
+                )
+                profile = profile_by_key.get(key) or profile_by_id.get(str(field_ref["id"]))
+                if profile is not None and profile not in used_profiles:
+                    used_profiles.append(profile)
+            if not used_profiles:
+                used_profiles = [profile_by_id[item] for item in used_field_ids]
+            used_field_ids = [str(item.get("id")) for item in used_profiles]
+            field_understanding = {
+                item: f"基于本轮 discovery 原文：{profile_by_id[item].get('description')}"
+                for item in used_field_ids
+            }
+            field_analysis = {
+                item: {
+                    "semantic": profile_by_id[item].get("description"),
+                    "coverage": profile_by_id[item].get("coverage"),
+                    "frequency": profile_by_id[item].get("frequency"),
+                    "data_type": profile_by_id[item].get("type"),
+                }
+                for item in used_field_ids
+            }
+            field_hypothesis_basis = {
+                item: {
+                    "description": profile_by_id[item].get("description"),
+                    "mechanism": candidate["rationale"],
+                    "independent_increment": "该 BASELINE 只检验这些字段组合的独立增量信息。",
+                    "direction": "reversal" if "reversal" in template.family else "long",
+                }
+                for item in used_field_ids
+            }
+            datasets = []
+            for item in used_profiles:
+                dataset = item.get("dataset")
+                if dataset and dataset not in datasets:
+                    datasets.append(dataset)
             proposal = {
                 "expression": candidate["expression"],
-                "fields": [field_id],
-                "datasets": ([profile.get("dataset")] if profile.get("dataset")
-                              else list(hypothesis.get("datasets") or [])),
-                "field_understanding": {
-                    field_id: f"基于本轮 discovery 原文：{description}"
-                },
-                "field_analysis": {
-                    field_id: {
-                        "semantic": description,
-                        "coverage": profile.get("coverage"),
-                        "frequency": profile.get("frequency"),
-                        "data_type": profile.get("type"),
-                    }
-                },
+                "fields": used_field_ids,
+                "field_refs": list(candidate.get("field_refs") or []),
+                "datasets": datasets,
+                "field_understanding": field_understanding,
+                "field_analysis": field_analysis,
                 "field_source": field_source,
-                "field_hypothesis_basis": {
-                    field_id: {
-                        "description": description,
-                        "mechanism": candidate["rationale"],
-                        "independent_increment": "该 BASELINE 只检验这一字段的独立增量信息。",
-                        "direction": "reversal" if "reversal" in template.family else "long",
-                    }
-                },
+                "field_hypothesis_basis": field_hypothesis_basis,
                 "economic_mechanism": candidate["economic_mechanism"],
                 "direction_transform": candidate["direction_transform"],
                 "operator_mapping": candidate["rationale"],
@@ -809,6 +1025,11 @@ class AlphaFactory:
                 "research_role": "EXPLORE",
                 "lineage_id": f"{hypothesis.get('id', 'factory')}:field:{field_id}",
                 "signal_family": f"{template.family}:{field_id}",
+                # Budget arms distinguish an economic template applied to
+                # different verified fields.  This permits breadth in the
+                # 100-slot factory batch without treating one field's
+                # numeric tuning as a new arm.
+                "mechanism_family": f"{template.family}:{field_id}",
                 "expected_quality": 1.0,
                 "information_gain": 1.0,
                 "novelty": 1.0,
@@ -830,10 +1051,97 @@ class AlphaFactory:
                             "template_stage_path", "template_ref", "template_slots",
                             "factory_version")
             })
+            proposal["proposal_origin"] = "factory"
             assembled.append(proposal)
             excluded.add(canonical_expression(proposal["expression"]))
-            used_fields.add(field_id)
+            used_fields.add(primary_key)
             family_counts[template.family] = family_counts.get(template.family, 0) + 1
             if len(assembled) >= limit:
                 break
         return assembled
+
+    def generate_factory_batch(self, hypothesis, fields, operator_reference,
+                               target=100, optimized=(),
+                               excluded_expressions=None):
+        """Generate one large, structurally diverse factory batch.
+
+        The factory owns breadth.  It cycles verified field profiles through
+        the bounded economic template catalog; it does not scan arbitrary
+        windows, weights, signs, or other numeric parameters.  Optimizer
+        proposals are accepted as a separately marked prefix so the caller
+        can retain provenance while the factory still owns the 100-slot
+        envelope.
+        """
+        try:
+            limit = max(0, int(target))
+        except (TypeError, ValueError):
+            return []
+        if limit <= 0 or not isinstance(fields, list):
+            return []
+        result = []
+        excluded = {
+            canonical_expression(value)
+            for value in (excluded_expressions or [])
+            if isinstance(value, str) and value.strip()
+        }
+        for proposal in optimized or ():
+            if not isinstance(proposal, dict):
+                continue
+            expression = proposal.get("expression")
+            if not isinstance(expression, str) or not expression.strip():
+                continue
+            identity = canonical_expression(expression)
+            if identity in excluded:
+                continue
+            item = dict(proposal)
+            item.setdefault("proposal_origin", "agent_optimizer")
+            result.append(item)
+            excluded.add(identity)
+            if len(result) >= limit:
+                return result[:limit]
+
+        templates = self.registry.economic_templates()
+        if not templates:
+            return result
+        verified = [
+            field for field in fields
+            if isinstance(field, dict)
+            and isinstance(field.get("id"), (str, int))
+            and isinstance(field.get("description"), str)
+            and field.get("description", "").strip()
+            and str(field.get("semantic_status", "UNKNOWN")).upper() != "UNKNOWN"
+        ]
+        for offset, profile in enumerate(verified):
+            if len(result) >= limit:
+                break
+            for step, template in enumerate(templates):
+                if len(result) >= limit:
+                    break
+                # Pair templates require a semantically reviewed secondary
+                # field.  The normal assemble path remains the single source
+                # of proposal metadata and operator evidence.
+                companion_slots = [
+                    slot for slot in template.required_slots
+                    if slot not in {"p", "data_field"}
+                ]
+                if companion_slots:
+                    # Give assemble_proposals the full rotated pool so its
+                    # cross-dataset preference is real.  Passing a preselected
+                    # same-dataset pair here would make that safety rule
+                    # impossible to enforce.
+                    slots = [profile] + verified[offset + 1:] + verified[:offset]
+                else:
+                    slots = [profile]
+                generated = self.assemble_proposals(
+                    dict(hypothesis, template_mode="economic",
+                         template_ids=[template.template_id]),
+                    slots, operator_reference, max_candidates=1,
+                    excluded_expressions=excluded,
+                )
+                if not generated:
+                    continue
+                proposal = generated[0]
+                proposal["proposal_origin"] = "factory"
+                result.append(proposal)
+                excluded.add(canonical_expression(proposal["expression"]))
+        return result[:limit]

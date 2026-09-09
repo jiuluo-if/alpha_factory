@@ -16,8 +16,16 @@ import os
 import re
 
 from .diversity import extract_fields
-from .expression import analyze_expression, expression_field_identifiers
-from .research_guard import is_direction_only_change, overfit_expression_reason
+from .expression import (
+    analyze_expression,
+    expression_field_identifiers,
+    submission_fingerprint,
+)
+from .research_guard import (
+    is_direction_only_change,
+    overfit_expression_reason,
+    parameter_only_change_reason,
+)
 from .validation_report import validate_plan
 
 
@@ -33,6 +41,7 @@ RESEARCH_ROLES = {"EXPLORE", "EXPLOIT", "VALIDATION"}
 # inbox from becoming a production batch.
 MAX_PROPOSALS_PER_ROUND = 18
 MAX_CONFIGURED_PROPOSALS_PER_ROUND = 100
+FACTORY_BATCH_SIZE = 100
 EXPERIMENT_STAGES = {"BASELINE", "CHILD", "ROBUSTNESS"}
 CHILD_CHANGE_TYPES = {
     "field_swap", "window_change", "operator_variant", "smoothing",
@@ -57,6 +66,124 @@ def proposal_budget_cap(candidates_per_round, allocation_cap, hard_cap=18):
     )
 
 
+def validate_factory_batch(proposals, target=FACTORY_BATCH_SIZE,
+                           min_datasets=1, require_cross_dataset_pairs=False):
+    """Validate the factory's all-or-nothing batch envelope.
+
+    This check is intentionally independent of proposal preflight.  The
+    caller must run normal preflight on every member too; if any member is
+    rejected, the complete factory batch is blocked before the first POST.
+    """
+    errors = []
+    if not isinstance(proposals, list):
+        return False, ["工厂 proposals 必须是 list"]
+    try:
+        expected = int(target)
+    except (TypeError, ValueError):
+        expected = FACTORY_BATCH_SIZE
+    if len(proposals) != expected:
+        errors.append(f"工厂批次必须恰好包含 {expected} 个题案，实际 {len(proposals)}")
+    identities = set()
+    batch_datasets = set()
+    cross_dataset_pairs = 0
+    for index, proposal in enumerate(proposals):
+        if not isinstance(proposal, dict):
+            errors.append(f"第 {index + 1} 个题案不是对象")
+            continue
+        expression = str(proposal.get("expression") or "").strip()
+        if not expression:
+            errors.append(f"第 {index + 1} 个题案缺 expression")
+            continue
+        origin = str(proposal.get("proposal_origin") or "").strip().lower()
+        if origin not in {"factory", "agent_optimizer"}:
+            errors.append(f"第 {index + 1} 个题案来源必须是 factory/agent_optimizer")
+        settings = proposal.get("settings") or {}
+        identity = submission_fingerprint(expression, settings)
+        if identity in identities:
+            errors.append(f"第 {index + 1} 个题案与批次内其他题案重复")
+        identities.add(identity)
+        raw_datasets = proposal.get("datasets") or []
+        if isinstance(raw_datasets, (str, int)):
+            raw_datasets = [raw_datasets]
+        proposal_datasets = {
+            str(item.get("id") or item.get("name")) if isinstance(item, dict)
+            else str(item)
+            for item in raw_datasets
+            if isinstance(item, (str, int)) or (
+                isinstance(item, dict) and (item.get("id") or item.get("name"))
+            )
+        }
+        batch_datasets.update(proposal_datasets)
+        field_refs = proposal.get("field_refs") or []
+        ref_datasets = {
+            str(item.get("dataset")) for item in field_refs
+            if isinstance(item, dict) and item.get("dataset") is not None
+        }
+        if len(proposal_datasets | ref_datasets) > 1:
+            cross_dataset_pairs += 1
+    try:
+        required_datasets = max(0, int(min_datasets))
+    except (TypeError, ValueError):
+        required_datasets = 1
+    if required_datasets > 1 and len(batch_datasets) < required_datasets:
+        errors.append(
+            f"工厂批次至少覆盖 {required_datasets} 个 dataset，实际 {len(batch_datasets)}"
+        )
+    if require_cross_dataset_pairs and cross_dataset_pairs < 1:
+        errors.append("工厂批次至少包含 1 个跨 dataset 多字段题案")
+    return not errors, errors
+
+
+def factory_batch_stats(proposals):
+    """Return auditable composition counts without retaining result payloads."""
+    stats = {
+        "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
+        "dataset_counts": {},
+        "field_dataset_counts": {},
+        "template_counts": {},
+        "dual_or_multi_field_count": 0,
+        "cross_dataset_pair_count": 0,
+    }
+    for proposal in proposals or []:
+        if not isinstance(proposal, dict):
+            continue
+        datasets = []
+        for value in proposal.get("datasets") or []:
+            value = value.get("id") or value.get("name") if isinstance(value, dict) else value
+            if value is not None and str(value) not in datasets:
+                datasets.append(str(value))
+        refs = proposal.get("field_refs") or []
+        ref_datasets = []
+        for ref in refs:
+            if not isinstance(ref, dict) or ref.get("dataset") is None:
+                continue
+            dataset = str(ref["dataset"])
+            if dataset not in ref_datasets:
+                ref_datasets.append(dataset)
+        effective_datasets = ref_datasets or datasets
+        primary_dataset = effective_datasets[0] if effective_datasets else None
+        if primary_dataset:
+            stats["dataset_counts"][primary_dataset] = (
+                stats["dataset_counts"].get(primary_dataset, 0) + 1
+            )
+        for dataset in effective_datasets:
+            stats["field_dataset_counts"][dataset] = (
+                stats["field_dataset_counts"].get(dataset, 0) + 1
+            )
+        fields = proposal.get("fields") or proposal.get("fields_used") or []
+        if len(fields) > 1:
+            stats["dual_or_multi_field_count"] += 1
+        if len(set(effective_datasets)) > 1:
+            stats["cross_dataset_pair_count"] += 1
+        template = proposal.get("template_id") or proposal.get("template_family")
+        if template:
+            template = str(template)
+            stats["template_counts"][template] = (
+                stats["template_counts"].get(template, 0) + 1
+            )
+    return stats
+
+
 def _operator_reference(path):
     """Read the checked-in operator table and produce proposal evidence."""
     with open(path, encoding="utf-8") as handle:
@@ -75,7 +202,8 @@ def _expression_operators(expression):
 
 def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                       operator_reference=None, require_research_evidence=False,
-                      max_alpha_count=None, require_economic_integrity=False):
+                      max_alpha_count=None, require_economic_integrity=False,
+                      require_platform_alpha_count=False):
     """Validate proposal metadata and field/operator provenance."""
     if not isinstance(p, dict):
         return False, ["proposal 必须是对象"]
@@ -103,6 +231,9 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
         parent = p.get("parent_expression")
         if isinstance(parent, str) and is_direction_only_change(parent, expression):
             problems.append("候选只改变 parent 方向，不能作为新的研究实验")
+        parameter_reason = parameter_only_change_reason(parent, expression)
+        if parameter_reason and p.get("experiment_stage") != "ROBUSTNESS":
+            problems.append(parameter_reason)
     declared_fields = p.get("fields")
     if not isinstance(declared_fields, list) or not declared_fields:
         problems.append("fields 必须是非空数组")
@@ -148,11 +279,32 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                 if not plan_ok:
                     problems.extend(["ROBUSTNESS 必须先注册 ValidationPlan: " + error
                                      for error in plan_errors])
-        profiles = {
-            str(field.get("id")): field for field in (discovered_fields or [])
-            if isinstance(field, dict) and field.get("id")
-        }
-        if not profiles:
+        profiles_by_id = {}
+        profiles_by_key = {}
+        for field in discovered_fields or []:
+            if not isinstance(field, dict) or not field.get("id"):
+                continue
+            field_id = str(field["id"])
+            profiles_by_id.setdefault(field_id, []).append(field)
+            dataset = field.get("dataset")
+            if dataset is not None:
+                profiles_by_key[(str(dataset), field_id)] = field
+
+        def profile_for(field_id):
+            candidates = profiles_by_id.get(field_id) or []
+            refs = p.get("field_refs")
+            if isinstance(refs, list):
+                for ref in refs:
+                    if not isinstance(ref, dict) or str(ref.get("id")) != field_id:
+                        continue
+                    dataset = ref.get("dataset")
+                    if dataset is not None:
+                        profile = profiles_by_key.get((str(dataset), field_id))
+                        if profile is not None:
+                            return profile
+            return candidates[0] if len(candidates) == 1 else None
+
+        if not profiles_by_id:
             problems.append("缺少本轮 discovery 字段画像；请先运行 --suggest")
         else:
             used = extract_fields(expression, [str(f) for f in declared_fields or []])
@@ -160,17 +312,32 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
             if not isinstance(understanding, dict):
                 problems.append("field_understanding 必须是以 field id 为键的对象")
             for field_id in used:
-                profile = profiles.get(field_id)
+                profile = profile_for(field_id)
                 if profile is None:
-                    problems.append(f"字段 {field_id} 不在本轮真实 discovery 中")
+                    if len(profiles_by_id.get(field_id) or []) > 1:
+                        problems.append(
+                            f"字段 {field_id} 在多个 dataset 中存在，必须提供准确 field_refs"
+                        )
+                    else:
+                        problems.append(f"字段 {field_id} 不在本轮真实 discovery 中")
                     continue
                 if profile.get("semantic_status") == "UNKNOWN" or not profile.get("description"):
                     problems.append(f"字段 {field_id} 缺平台语义 metadata，状态为 UNKNOWN")
                 entry = understanding.get(field_id) if isinstance(understanding, dict) else None
                 if not isinstance(entry, str) or not entry.strip():
                     problems.append(f"field_understanding 缺 {field_id} 的解释")
+                count = profile.get("alpha_count", profile.get("alphaCount"))
+                platform_dedupe = profile.get("platform_dedupe") or {}
+                if (
+                    require_platform_alpha_count
+                    and str(platform_dedupe.get("status") or "UNKNOWN").upper()
+                    != "KNOWN"
+                ):
+                    problems.append(
+                        f"字段 {field_id} 平台 alphaCount 状态为 "
+                        f"{platform_dedupe.get('status') or 'UNKNOWN'}，不能准入"
+                    )
                 if max_alpha_count is not None:
-                    count = profile.get("alpha_count", profile.get("alphaCount"))
                     try:
                         if count is not None and float(count) > float(max_alpha_count):
                             problems.append(f"字段 {field_id} alphaCount={count} 超过上限 {max_alpha_count}")
@@ -189,12 +356,15 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                     if not required.issubset(item):
                         problems.append(f"field_analysis 缺 {field_id} 的 semantic/coverage/frequency/data_type")
                         continue
-                    if item.get("data_type") != (profiles.get(field_id) or {}).get("type"):
+                    profile = profile_for(field_id)
+                    if profile is None:
+                        continue
+                    if item.get("data_type") != profile.get("type"):
                         problems.append(f"field_analysis 的 {field_id} data_type 必须与 BRAIN discovery 一致")
             identifiers = set(expression_field_identifiers(analyze_expression(expression)))
             unknown = sorted(
                 ident for ident in identifiers
-                if ident not in profiles
+                if ident not in profiles_by_id
             )
             if unknown:
                 problems.append(f"表达式含本轮 discovery 未确认的字段/标识符: {unknown}")
@@ -205,7 +375,7 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                 else:
                     for field_id in used:
                         item = basis.get(field_id)
-                        profile = profiles.get(field_id) or {}
+                        profile = profile_for(field_id) or {}
                         if not isinstance(item, dict) or not isinstance(item.get("mechanism"), str) or not item["mechanism"].strip():
                             problems.append(f"field_hypothesis_basis 缺 {field_id} 的机制说明")
                         elif item.get("description") != profile.get("description"):

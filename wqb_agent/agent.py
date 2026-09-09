@@ -20,13 +20,10 @@ from .research_guard import ResearchLoopGuard, structural_family_key
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
 from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
-from .context import key_experiments, write_context
+from .context import key_experiments
 from .diversity import extract_fields, is_redundant
-from .evidence import (
-    load_evidence_cache,
-    overlay_cached_checks,
-    refresh_self_correlation_cache,
-)
+from .evidence import overlay_cached_checks, refresh_self_correlation_cache
+from .alpha_colors import classify_alpha_color
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
 from .metrics import (
@@ -38,10 +35,12 @@ from .metrics import (
 from .proposal_contract import (
     RESEARCH_ROLES,
     SETTING_OVERRIDES,
+    FACTORY_BATCH_SIZE,
     _operator_reference,
     proposal_budget_cap,
     proposal_priority,
     validate_proposal,
+    validate_factory_batch,
     validate_vector_inputs,
 )
 from .state import (
@@ -64,8 +63,7 @@ from .validation_report import (
 )
 from .config import normalize_config
 from .research_evidence import ResearchEvidenceBundle
-from .schema import (CREATED_BY_VERSION, VALIDATION_VERSION,
-                      SIMULATION_RESULTS_VERSION)
+from .daily_cache import DailyResearchCache
 
 SEED_HYPOTHESES = [
     {
@@ -134,6 +132,8 @@ class Agent:
             **runtime.factory,
             "max_simulations": config.factory.max_simulations,
             "max_runtime_sec": config.factory.max_runtime_sec,
+            "daily_simulation_cap": config.factory.daily_simulation_cap,
+            "weekly_simulation_cap": config.factory.weekly_simulation_cap,
         }
         self.state_dir = runtime.state_dir
         self.max_rounds = runtime.max_rounds
@@ -141,6 +141,10 @@ class Agent:
         # Keep ordinary runs at the historical 18 cap, while allowing the
         # unattended factory to opt into a bounded 100-proposal batch.
         self.max_proposals_per_round = runtime.max_proposals_per_round
+        # The factory batch size is a user-level invariant, not a tuning
+        # knob. Keep it fixed so a config cannot silently reintroduce small
+        # partial rounds.
+        self.factory_batch_size = FACTORY_BATCH_SIZE
         self.research_allocation = dict(runtime.research_allocation)
         self.research_integrity = runtime.research_integrity
         self.fields_per_discovery = runtime.fields_per_discovery
@@ -158,6 +162,18 @@ class Agent:
             config.incremental_value.min_overlap,
         )
         self.max_field_alpha_count = runtime.max_field_alpha_count
+        self.require_platform_alpha_count = bool(
+            runtime.field_selection.get("require_platform_alpha_count", False)
+        )
+        self.min_factory_datasets = int(
+            runtime.field_selection.get("min_datasets", 1)
+        )
+        self.min_cross_dataset_pairs = int(
+            runtime.field_selection.get("min_cross_dataset_pairs", 0)
+        )
+        self.dataset_pool = list(
+            runtime.field_selection.get("dataset_pool") or []
+        )
         operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md"))
         self.operator_reference = _operator_reference(operator_path)
         components = build_runtime_components(self.client, config)
@@ -177,7 +193,11 @@ class Agent:
         # In-process accounting hook for the long-running factory.  It lets
         # the session release candidates rejected by preflight without a
         # second validation path or a second ledger.
-        self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}
+        self.last_run_stats = {
+            "accepted": 0, "rejected": 0, "skipped": 0,
+            "status": "NOT_STARTED",
+        }
+        self.daily_cache = DailyResearchCache()
 
     # ------------------------------------------------------------ running
 
@@ -190,6 +210,10 @@ class Agent:
         """Continue from the last completed round (never restart from zero)."""
         self._ensure_loaded()
         rounds = [e.round for e in self.trajectory.experiments]
+        rounds.extend(
+            record["round_no"] for record in self.checkpoints.scan()
+            if not record["malformed"]
+        )
         return (max(rounds) + 1) if rounds else 1
 
     EPOCH_START = 619  # r619 起启用新纪元标签（用户 2026-08-22 政策）
@@ -268,8 +292,13 @@ class Agent:
                     "coverage": f.get("coverage"),
                     "frequency": f.get("frequency"),
                     "alpha_count": f.get("alpha_count"),
+                    "platform_dedupe": f.get("platform_dedupe"),
                     "semantic_status": f.get("semantic_status", "UNKNOWN"),
                     "field_source": f.get("field_source") or self.discovery.source_provenance(),
+                    "field_ref": {
+                        "dataset": f.get("dataset"),
+                        "id": f.get("id"),
+                    },
                 }
                 for f in fields
             ],
@@ -283,10 +312,21 @@ class Agent:
             "operator_reference": self.operator_reference,
             "alpha_templates": self.alpha_factory.catalog(),
             "research_guard": ResearchLoopGuard(self.trajectory.experiments).snapshot(),
+            # This is an auditable gate view, not a second result store.  The
+            # active Agent can use its in-memory trajectory for optimization;
+            # the exported bundle only explains why a CHILD path is or is not
+            # currently available.
+            "optimizer_context": self.optimizer_gate_report(),
             "field_selection": {
                 "max_alpha_count": self.max_field_alpha_count,
                 "excluded_high_usage": self.discovery.last_excluded_high_usage,
+                "excluded_unknown_usage": self.discovery.last_excluded_unknown_usage,
+                "platform_dedupe": self.discovery.platform_dedupe_view(),
+                "dataset_selection": self.discovery.last_dataset_selection,
+                "catalog_provenance": self.discovery.source_provenance(),
             },
+            "dataset_selection": self.discovery.last_dataset_selection,
+            "catalog_provenance": self.discovery.source_provenance(),
         }
         os.makedirs(self.state_dir, exist_ok=True)
         path = os.path.join(self.state_dir, "suggestions.json")
@@ -311,6 +351,88 @@ class Agent:
                 continue
             records.append(exp.to_dict())
         return records
+
+    @staticmethod
+    def _optimizer_value(parent, key, default=None):
+        if isinstance(parent, dict):
+            return parent.get(key, default)
+        return getattr(parent, key, default)
+
+    def optimizer_gate_report(self, parents=None):
+        """Explain the evidence gate that controls autonomous CHILD proposals.
+
+        The report is intentionally derived from the active in-memory
+        trajectory and contains no metrics or Alpha identifiers.  It makes a
+        previously silent no-op observable while leaving economic hypothesis
+        generation with the research Agent.
+        """
+        if parents is None:
+            parents = [
+                experiment.to_dict()
+                for experiment in self.trajectory.recent(128)
+            ]
+        report = {
+            "parent_count": 0,
+            "done_parent_count": 0,
+            "ready_parent_count": 0,
+            "blocked_reasons": {},
+        }
+
+        def block(reason):
+            blocked = report["blocked_reasons"]
+            blocked[reason] = blocked.get(reason, 0) + 1
+
+        for parent in parents or []:
+            report["parent_count"] += 1
+            if not isinstance(parent, (dict, Experiment)):
+                block("invalid_parent")
+                continue
+            if str(self._optimizer_value(parent, "status", "")).upper() != "DONE":
+                block("parent_not_done")
+                continue
+            report["done_parent_count"] += 1
+            missing = []
+            metrics = self._optimizer_value(parent, "metrics")
+            if not isinstance(metrics, dict) or not metrics:
+                missing.append("metrics")
+            if not self._optimizer_value(parent, "fields_used"):
+                missing.append("fields_used")
+            if not self._optimizer_value(parent, "datasets"):
+                missing.append("datasets")
+            if not isinstance(self._optimizer_value(parent, "field_understanding"), dict):
+                missing.append("field_understanding")
+            if not isinstance(self._optimizer_value(parent, "field_analysis"), dict):
+                missing.append("field_analysis")
+            if not isinstance(
+                self._optimizer_value(parent, "child_economic_hypothesis"), dict
+            ):
+                missing.append("child_economic_hypothesis")
+            if missing:
+                for reason in missing:
+                    block(f"missing_{reason}")
+                continue
+            report["ready_parent_count"] += 1
+        return report
+
+    def generate_optimized_proposals(self, parents=None, *, max_candidates=4):
+        """Return only evidence-backed Agent optimization candidates.
+
+        Breadth belongs to ``AlphaFactory.generate_factory_batch``.  This
+        method is intentionally bounded and never invents a baseline batch.
+        """
+        self._ensure_loaded()
+        parents = self.optimizable_signal_records() if parents is None else parents
+        quality = self.quality_policy or {}
+        return self.alpha_factory.optimize_signal_proposals(
+            parents,
+            self.operator_reference,
+            max_candidates=max_candidates,
+            excluded_expressions=self._terminal_expressions(),
+            min_sharpe=quality.get("promising_sharpe", 0.9),
+            min_fitness=quality.get("promising_fitness", 0.6),
+            min_turnover=quality.get("min_turnover", 0.01),
+            max_turnover=quality.get("max_turnover", 0.7),
+        )
 
     def _rotate_stalled_research_space(self, research_space, round_no,
                                        window=40, concentration=0.8):
@@ -440,6 +562,19 @@ class Agent:
         if not proposal_list:
             print("No proposals in file; nothing to run.")
             return None
+        factory_batch = payload.get("batch_type") == "factory_100"
+        if factory_batch:
+            batch_ok, batch_errors = validate_factory_batch(
+                proposal_list,
+                target=self.factory_batch_size,
+                min_datasets=self.min_factory_datasets,
+                require_cross_dataset_pairs=self.min_cross_dataset_pairs > 0,
+            )
+            if not batch_ok:
+                print("[FACTORY BATCH BLOCKED] 整批不满足 100 题案契约：")
+                for problem in batch_errors:
+                    print(f"  - {problem}")
+                return None
 
         hypothesis = payload.get("hypothesis")
         if hypothesis is None:
@@ -479,6 +614,7 @@ class Agent:
         diversity_rejected = []
         settings_rejected = []
         loop_guard = ResearchLoopGuard(self.trajectory.experiments)
+        platform_usage = self._refresh_platform_field_usage(payload, proposal_list)
         cached_field_types, cached_profiles = self._read_field_cache()
         field_types = self._known_field_types(
             payload, cached_field_types=cached_field_types
@@ -490,9 +626,38 @@ class Agent:
         discovered_profiles = {}
         for field in (payload.get("suggestion_fields") or payload.get("fields") or []):
             if isinstance(field, dict) and field.get("id"):
-                discovered_profiles[str(field["id"])] = field
+                normalized_field = dict(field)
+                dataset = self._field_dataset_id(field)
+                if dataset is not None:
+                    normalized_field["dataset"] = dataset
+                key = (
+                    f"{dataset}::{field['id']}" if dataset is not None
+                    else str(field["id"])
+                )
+                discovered_profiles[key] = normalized_field
         for field_id, field in cached_profiles.items():
-            discovered_profiles.setdefault(field_id, field)
+            dataset = self._field_dataset_id(field) if isinstance(field, dict) else None
+            key = (
+                f"{dataset}::{field.get('id')}" if dataset is not None and field.get("id")
+                else field_id
+            )
+            discovered_profiles.setdefault(key, field)
+        # A field cache is discovery metadata, not Simulation history.  If a
+        # live platform usage refresh was available, overlay only alphaCount
+        # and provenance onto the current bundle profiles.
+        for profile_key, profile in list(discovered_profiles.items()):
+            if not isinstance(profile, dict):
+                continue
+            field_id = profile.get("id")
+            dataset_id = profile.get("dataset")
+            dataset_usage = platform_usage.get(str(dataset_id), {})
+            usage = dataset_usage.get(str(field_id))
+            if usage is None:
+                continue
+            profile = dict(profile)
+            profile["alpha_count"] = usage.get("alpha_count")
+            profile["platform_dedupe"] = usage
+            discovered_profiles[profile_key] = profile
         proposal_field_profiles = list(discovered_profiles.values())
         completed_parent_index = self.trajectory.find_completed_expressions(
             [item.get("parent_expression") for item in proposal_list
@@ -568,6 +733,7 @@ class Agent:
                 require_research_evidence=bool(self.research_allocation),
                 require_economic_integrity=self.research_integrity,
                 max_alpha_count=self.max_field_alpha_count,
+                require_platform_alpha_count=self.require_platform_alpha_count,
             )
             type_ok, type_problems = validate_vector_inputs(p, field_types)
             if not type_ok:
@@ -685,20 +851,48 @@ class Agent:
             if not isinstance(family, (str, int)) or not str(family).strip():
                 family = structural_family_key(p["expression"], p.get("fields") or fields)
             family = str(family)
-            if family_counts.get(family, 0) >= 2:
-                self._record_candidate_rejection(p, "diversity", "DIVERSITY_FAMILY_CAP", f"signal family {family!r} 已有两个实验")
+            if factory_batch:
+                # Applying one catalog mechanism to independently verified
+                # fields is breadth, not a numeric parameter sweep.  Scope
+                # the admission cap to the actual field set so a popular
+                # mechanism family cannot starve the 100-slot cross-field
+                # factory batch.
+                field_scope = ",".join(sorted(set(fields)))
+                family = f"{family}:{field_scope}"
+            family_cap = 4 if factory_batch else 2
+            if family_counts.get(family, 0) >= family_cap:
+                self._record_candidate_rejection(p, "diversity", "DIVERSITY_FAMILY_CAP", f"signal family {family!r} 已达本批上限 {family_cap}")
                 diversity_rejected.append((
                     p["expression"],
-                    [f"signal family {family!r} 已有两个实验，拒绝参数挖掘"],
+                    [f"signal family {family!r} 已达本批上限 {family_cap}，拒绝参数挖掘"],
                 ))
                 continue
-            record = {"expression": p["expression"], "fields_used": fields}
+            record = {
+                "expression": p["expression"],
+                "fields_used": fields,
+                "template_id": p.get("template_id"),
+            }
             # Keep the exact same simple redundancy rule, but retain the
             # already-extracted records instead of rebuilding/parsing the
             # entire accepted prefix for every candidate; pairwise similarity
             # checks remain necessary, but repeated field parsing is removed.
-            redundant, _ = is_redundant(record, diverse_records)
-            if redundant:
+            redundant, keeper = is_redundant(record, diverse_records)
+            distinct_factory_templates = (
+                factory_batch
+                and record.get("template_id")
+                and isinstance(keeper, dict)
+                and keeper.get("template_id")
+                and record["template_id"] != keeper["template_id"]
+            )
+            distinct_factory_field_scope = (
+                factory_batch
+                and isinstance(keeper, dict)
+                and set(record.get("fields_used") or [])
+                != set(keeper.get("fields_used") or [])
+            )
+            if redundant and not (
+                distinct_factory_templates or distinct_factory_field_scope
+            ):
                 self._record_candidate_rejection(p, "diversity", "DIVERSITY_REDUNDANT", "与本轮更高优先级候选近重复")
                 diversity_rejected.append((p["expression"], ["与本轮更高优先级候选近重复"]))
                 continue
@@ -722,15 +916,24 @@ class Agent:
                 allocation_counts[role] += 1
             diverse.append(p)
             diverse_records.append(record)
-        try:
-            allocation_cap = int(
-                self.research_allocation.get("max_simulations", self.candidates_per_round)
-            )
-        except (TypeError, ValueError):
-            allocation_cap = self.candidates_per_round
+        if factory_batch:
+            # A factory batch is an atomic 100-proposal unit.  Ordinary
+            # per-round defaults must not silently trim it to six (or another
+            # agent-sized cap); an undersized factory budget blocks the whole
+            # batch before any POST instead.
+            allocation_cap = self.factory_batch_size
+        else:
+            try:
+                allocation_cap = int(
+                    self.research_allocation.get("max_simulations", self.candidates_per_round)
+                )
+            except (TypeError, ValueError):
+                allocation_cap = self.candidates_per_round
+        candidates_cap = self.factory_batch_size if factory_batch else self.candidates_per_round
+        hard_cap = self.factory_batch_size if factory_batch else self.max_proposals_per_round
         budget_cap = proposal_budget_cap(
-            self.candidates_per_round, allocation_cap,
-            hard_cap=self.max_proposals_per_round,
+            candidates_cap, allocation_cap,
+            hard_cap=hard_cap,
         )
         budget_rejected = diverse[budget_cap:]
         fresh = diverse[:budget_cap]
@@ -762,6 +965,30 @@ class Agent:
                 + ", ".join(f"{role}={role_counts.get(role, 0)}"
                              for role in sorted(RESEARCH_ROLES))
             )
+        if factory_batch and (
+            len(fresh) != self.factory_batch_size
+            or rejected or skipped or diversity_rejected
+            or settings_rejected or budget_rejected
+        ):
+            problems = (
+                f"factory batch 需要 {self.factory_batch_size} 个全部预检通过的题案，"
+                f"当前可执行 {len(fresh)} 个；不允许部分提交"
+            )
+            print(f"[FACTORY BATCH BLOCKED] {problems}")
+            self.last_run_stats = {
+                "accepted": 0,
+                "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
+                "skipped": len(skipped),
+                "status": "FACTORY_BATCH_BLOCKED",
+                "rejection_counts": {
+                    "preflight": len(rejected),
+                    "duplicate": len(skipped),
+                    "diversity": len(diversity_rejected),
+                    "settings": len(settings_rejected),
+                    "budget": len(budget_rejected),
+                },
+            }
+            return None
         committed = []
         for p in fresh:
             if self.search_policy.commit(p):
@@ -802,6 +1029,17 @@ class Agent:
                 "accepted": 0,
                 "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
                 "skipped": len(skipped),
+                "status": (
+                    "PREFLIGHT_BLOCKED" if rejected or settings_rejected or diversity_rejected
+                    else "ALREADY_SIMULATED"
+                ),
+                "rejection_counts": {
+                    "preflight": len(rejected),
+                    "duplicate": len(skipped),
+                    "diversity": len(diversity_rejected),
+                    "settings": len(settings_rejected),
+                    "budget": len(budget_rejected),
+                },
             }
             if rejected and not skipped:
                 print("所有提案均未通过生产预检；请补齐字段、字段画像、"
@@ -820,6 +1058,7 @@ class Agent:
             "accepted": len(fresh),
             "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
             "skipped": len(skipped),
+            "status": "READY_TO_SIMULATE",
         }
 
         experiments = []
@@ -862,12 +1101,19 @@ class Agent:
             exp.allocation_arm = self.search_policy.allocator.arm_key(p)
             exp.allocation_key = self.search_policy.allocator.proposal_key(p)
             exp.factory_session_id = p.get("factory_session_id")
+            exp.proposal_origin = p.get("proposal_origin") or (
+                "factory" if factory_batch else "agent"
+            )
             exp.mutation = p.get("mutation") or "agent-proposed"
             exp.lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis["id"]
             exp.experiment_stage = p.get("experiment_stage")
             exp.research_role = p.get("research_role")
             exp.change_type = p.get("change_type") or "baseline"
             exp.parent_expression = p.get("parent_expression")
+            # Preserve an explicitly Agent-authored next-child hypothesis in
+            # the active trajectory so the next factory pass can evaluate it;
+            # CheckpointStore intentionally strips result-side/extra payloads.
+            exp.child_economic_hypothesis = p.get("child_economic_hypothesis")
             exp.changed_variable = p.get("changed_variable")
             exp.expected_failure_modes = list(p.get("expected_failure_modes") or [])
             exp.tuning_risk = p.get("tuning_risk")
@@ -1210,7 +1456,7 @@ class Agent:
             datasets = self.discovery.cached_datasets()
         cache_path = os.path.join(self.state_dir, "fields_cache.json")
         field_types = {}
-        profiles = {}
+        profiles_by_id = {}
         if datasets is None:
             try:
                 with open(cache_path, encoding="utf-8") as f:
@@ -1226,16 +1472,58 @@ class Agent:
                     field_id = field.get("id")
                     field_type = field.get("type")
                     if field_id and field_type:
-                        field_types[str(field_id)] = str(field_type)
+                        field_types.setdefault(str(field_id), set()).add(str(field_type))
                     if not field_id or not field_type or not field.get("description"):
                         continue
                     profile = dict(field)
-                    profile.setdefault("dataset", dataset_id)
+                    profile["dataset"] = self._field_dataset_id(field, dataset_id)
                     profile.setdefault("semantic_status", "KNOWN")
-                    profiles[str(field_id)] = profile
+                    profiles_by_id.setdefault(str(field_id), []).append(profile)
         except (AttributeError, TypeError):
             return {}, {}
+        for field_id, types in field_types.items():
+            field_types[field_id] = (
+                next(iter(types)) if len(types) == 1 else "AMBIGUOUS"
+            )
+        profiles = {}
+        for field_id, items in profiles_by_id.items():
+            if len(items) == 1:
+                profiles[field_id] = items[0]
+                continue
+            for profile in items:
+                dataset = profile.get("dataset")
+                key = f"{dataset}::{field_id}" if dataset is not None else field_id
+                profiles[key] = profile
         return field_types, profiles
+
+    @staticmethod
+    def _field_dataset_id(field, fallback=None):
+        """Normalize BRAIN's string-or-object dataset field to a stable id."""
+        raw = field.get("dataset") if isinstance(field, dict) else None
+        if isinstance(raw, dict):
+            raw = raw.get("id") or raw.get("name")
+        if raw is None:
+            raw = fallback
+            if isinstance(raw, dict):
+                raw = raw.get("id") or raw.get("name")
+        return str(raw) if isinstance(raw, (str, int)) and str(raw).strip() else None
+
+    def _refresh_platform_field_usage(self, payload, proposal_list):
+        """Recheck field usage on BRAIN without retaining result payloads."""
+        discovery = self.discovery
+        if not getattr(discovery, "platform_usage_refresh", False):
+            return {}
+        dataset_ids = []
+        research_space = payload.get("research_space") or {}
+        dataset_ids.extend(research_space.get("datasets") or [])
+        for field in payload.get("fields") or payload.get("suggestion_fields") or []:
+            if isinstance(field, dict) and field.get("dataset"):
+                dataset_ids.append(field["dataset"])
+        for proposal in proposal_list:
+            if isinstance(proposal, dict):
+                dataset_ids.extend(proposal.get("datasets") or [])
+        discovery.refresh_platform_usage(dataset_ids)
+        return discovery.platform_usage_by_field(dataset_ids)
 
     def _known_field_types(self, payload, cached_field_types=None):
         """Build a field-id -> type map from real discovery artifacts."""
@@ -1320,11 +1608,20 @@ class Agent:
         selected field descriptions and must cite them verbatim.
         """
         seed = self._form_hypothesis(round_no)
+        datasets = list(seed.get("datasets") or seed.get("dataset_hints") or [])
+        # The configured pool is a real sampling scope, not merely a hint in
+        # the prompt.  Include the complete pool while preserving the seed's
+        # research direction; discovery will stratify it and record failures.
+        for dataset_id in self.dataset_pool:
+            if dataset_id not in datasets:
+                datasets.append(dataset_id)
+        if not datasets:
+            datasets = list(self.dataset_pool)
         return {
             "id": seed.get("id", f"space-r{round_no}"),
             "statement": "Which low-usage, semantically documented fields can test a new mechanism?",
             "tags": list(seed.get("tags") or []),
-            "datasets": list(seed.get("datasets") or seed.get("dataset_hints") or []),
+            "datasets": datasets,
             "parent_best": seed.get("parent_best"),
         }
 
@@ -1527,13 +1824,26 @@ class Agent:
         # work keeps the returned sets bounded by this proposal batch while
         # preserving the one streaming pass over the append-only source.
         trajectory_path = getattr(self.trajectory, "path", None)
-        if trajectory_path and os.path.exists(trajectory_path):
+        if (
+            getattr(self.trajectory, "persist", True)
+            and trajectory_path
+            and os.path.exists(trajectory_path)
+        ):
             for row in self.trajectory.iter_rows() or ():
                 apply(row)
         else:
             terminal.update(memory_terminal)
             for e in self.trajectory.experiments:
                 apply(e.to_dict())
+        # Completed checkpoints are the only cross-process research identity
+        # retained by the new runtime.  Their compact rows are sufficient for
+        # exactly-once and expression/fingerprint dedupe without restoring
+        # local metrics or Alpha payloads.
+        for record in self.checkpoints.scan():
+            if record["malformed"] or not record["checkpoint"].get("complete"):
+                continue
+            for row in record["checkpoint"].get("experiments") or []:
+                apply(row)
         return terminal, fingerprints
 
     def _terminal_expressions(self):
@@ -1680,6 +1990,9 @@ class Agent:
                          else ("RESEARCH" if exp.status == "FAILED" else None)),
         )
         self.trajectory.add(exp)
+        # Classify at settlement time so a mixed batch or an interrupted
+        # factory cannot hide completed color transitions until batch close.
+        self._cache_color_result(exp)
         self._print_experiment(exp)
         metrics = exp.metrics or {}
         failed_checks = []
@@ -1712,6 +2025,20 @@ class Agent:
                 f"[FALSIFICATION] alpha={exp.alpha_id or '-'} "
                 f"criterion={exp.falsification}"
             )
+
+    def _cache_color_result(self, experiment):
+        """Refresh the active day's color view for one settled experiment."""
+        alpha_id = (
+            experiment.get("alpha_id")
+            if isinstance(experiment, dict)
+            else getattr(experiment, "alpha_id", None)
+        )
+        if not alpha_id:
+            return
+        self.daily_cache.put_colors([{
+            "alpha_id": str(alpha_id),
+            "classification": classify_alpha_color(experiment),
+        }])
 
     def _settled_self_correlation(self, exp):
         """Return the SELF_CORRELATION evidence for a DONE experiment, with the
@@ -1768,13 +2095,16 @@ class Agent:
         # session; leave their synthetic metrics untouched.
         if not alpha_ids or not hasattr(self.client, "_session"):
             return
+        ephemeral_evidence = {}
         refreshed = refresh_self_correlation_cache(
             self.client, self.state_dir, alpha_ids,
             correlation_limit=(self.quality_policy or {}).get(
                 "max_self_correlation", 0.5
             ),
+            persist=False,
+            cache=ephemeral_evidence,
         )
-        self.reflector.evidence_cache = load_evidence_cache(self.state_dir)
+        self.reflector.evidence_cache.update(ephemeral_evidence)
         print(f"[EVIDENCE] SELF_CORRELATION refreshed {refreshed}/{len(alpha_ids)}")
 
     @staticmethod
@@ -1857,12 +2187,32 @@ class Agent:
                 eligible_records.append((
                     exp, rating, exp.self_correlation, active_snapshot
                 ))
-        if eligible_records:
-            self.submission_pool.upsert_many(eligible_records)
+        color_records = [
+            {
+                "alpha_id": exp.alpha_id,
+                "classification": classify_alpha_color(exp),
+            }
+            for exp in candidates if exp.alpha_id
+        ]
+        if color_records:
+            self.daily_cache.put_colors(color_records)
+        cached_records = [
+            {
+                "alpha_id": exp.alpha_id,
+                "expression": exp.expression,
+                "rating": rating,
+                "self_correlation": correlation,
+                "submission": "MANUAL_REQUIRED",
+            }
+            for exp, rating, correlation, _active_snapshot in eligible_records
+        ]
+        if cached_records:
+            self.daily_cache.put_submitted_alphas(cached_records)
         added = len(eligible_records)
         if added:
             print(
-                f"[SUBMISSION_POOL] {added} 个候选已进入 {self.submission_pool.path}；"
+                f"[SUBMISSION CACHE] {added} 个候选进入 "
+                f"America/New_York:{self.daily_cache.local_date}（仅内存）；"
                 "仅供人工提交，程序不会 POST Alpha。"
             )
 
@@ -1928,20 +2278,6 @@ class Agent:
                 yearly_evidence=parent.yearly_evidence,
                 trial_summary=trial_summary,
                 platform_evidence=platform_evidence,
-            )
-            append_jsonl_if_unique(
-                os.path.join(self.state_dir, "validation_reports.jsonl"),
-                {
-                    "schema_version": VALIDATION_VERSION,
-                    "created_by_version": "alpha-factory",
-                    "parent_id": parent.id,
-                    "parent_expression": parent.expression,
-                    "plan_id": report.get("plan_id"),
-                    "status": report.get("status"),
-                    "report": dict(report),
-                    "recorded_at": time.time(),
-                },
-                ("parent_id", "plan_id", "status"),
             )
             parent.validation_report = report
             for child in children:
@@ -2118,10 +2454,18 @@ class Agent:
         """Return a read-only historical Search Calibration report."""
         from .search_calibration import build_search_calibration
 
-        events = list(iter_jsonl_objects(self.trial_ledger.path))
+        events = (
+            list(iter_jsonl_objects(self.trial_ledger.path))
+            if getattr(self.trial_ledger, "persist", True)
+            else list(getattr(self.trial_ledger, "_events", []))
+        )
         outcomes = []
         trajectory_path = getattr(self.trajectory, "path", None)
-        if trajectory_path and os.path.exists(trajectory_path):
+        if (
+            getattr(self.trajectory, "persist", True)
+            and trajectory_path
+            and os.path.exists(trajectory_path)
+        ):
             for row in iter_jsonl_objects(trajectory_path):
                 stored = row.get("search_outcome")
                 if isinstance(stored, dict):
@@ -2162,12 +2506,7 @@ class Agent:
             self._loaded = True
 
     def _write_sims_results(self, round_no, experiments, total_elapsed_sec=None):
-        """自动输出本轮模拟结果（含平台真实 alpha_id + 每模拟真实耗时）到
-        .wqb_state/sims_results.json，供外部循环/用户直接读取。
-
-        耗时由程序自身真实计时（Simulator._simulate_one 记录 submit 到定论，
-        含替换重试退避），非外部检测估算。
-        """
+        """Put today's result view in the New York-day memory cache only."""
         results = []
         for e in experiments:
             m = e.metrics or {}
@@ -2192,35 +2531,16 @@ class Agent:
                     "yearly_evidence": e.yearly_evidence,
                 }
             )
-        path = os.path.join(self.state_dir, "sims_results.json")
-        atomic_write_json_if_changed(
-            path,
-            {
-                "schema_version": SIMULATION_RESULTS_VERSION,
-                "created_by_version": CREATED_BY_VERSION,
-                "round_no": round_no,
-                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "total_elapsed_sec": total_elapsed_sec,
-                "results": results,
-            },
-            ignored_keys=("updated_at",),
+        self.daily_cache.put_simulations(results)
+        print(
+            f"[RESULTS CACHE] {len(results)} 个模拟结果 -> "
+            f"America/New_York:{self.daily_cache.local_date}（仅内存）"
         )
-        print(f"[RESULTS] {len(results)} 个模拟结果 -> {path}")
 
     def _save_state(self, state):
-        os.makedirs(self.state_dir, exist_ok=True)
-        if state is not None:
-            state_path = os.path.join(self.state_dir, f"round_{state.round_no}.json")
-            atomic_write_json_if_changed(state_path, state.to_dict())
+        """Compatibility hook; completed round summaries are not persisted."""
+        return None
 
     def _write_context(self):
-        """Write the compressed research context (shared implementation)."""
-        write_context(
-            self.state_dir,
-            self.memory,
-            self.trajectory.recent(self.context_experiments * 2),
-            context_experiments=self.context_experiments,
-        )
-        print(
-            f"[CONTEXT] compressed -> {os.path.join(self.state_dir, 'context.md')}"
-        )
+        """Keep compressed context in memory; do not create a result file."""
+        return None

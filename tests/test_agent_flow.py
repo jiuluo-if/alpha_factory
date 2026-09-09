@@ -326,6 +326,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertIn("current_best", bundle["context"])
         self.assertGreaterEqual(len(bundle["alpha_templates"]), 6)
         self.assertIn("research_guard", bundle)
+        self.assertIn("optimizer_context", bundle)
         self.assertEqual(bundle["research_guard"]["policy"], "same_change_type_no_gain_guard")
 
     def test_stalled_dataset_rotates_to_an_unseen_family(self):

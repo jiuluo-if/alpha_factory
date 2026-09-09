@@ -3,23 +3,21 @@
 Colors are a thin view over existing evidence.  This module does not score
 alphas, submit alphas, or change Simulation state.  It only decides whether
 an already-evaluated experiment has enough evidence for one research-state
-color and, separately, applies an explicitly owned metadata update.
+color and, separately, applies an explicitly requested metadata update. Color
+evidence is not persisted locally.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import time
 
-from .artifacts import atomic_write_json_if_changed, iter_jsonl_objects
+from .artifacts import iter_jsonl_objects
 from .metrics import check_pass, num
 from .state import Experiment
 
 
 ALPHA_COLORS = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
 PROJECT_COLOR_OWNER = "wqb_alpha_factory"
-COLOR_EVIDENCE_FILE = "alpha_color_evidence.json"
 _POSITIVE_QUALITY = frozenset({
     "PROMISING", "SUCCESS", "SUSPICIOUS_HIGH_SIGNAL", "STABLE",
     "PORTFOLIO_CANDIDATE",
@@ -272,29 +270,17 @@ def _evidence_summary(experiment, classification):
     }
 
 
-def _color_evidence_path(state_dir):
-    return os.path.join(state_dir, COLOR_EVIDENCE_FILE)
-
-
-def _load_color_evidence(state_dir):
-    try:
-        with open(_color_evidence_path(state_dir), encoding="utf-8") as handle:
-            value = json.load(handle)
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return {}
-
-
-def _save_color_evidence(state_dir, evidence):
-    atomic_write_json_if_changed(_color_evidence_path(state_dir), evidence, sort_keys=True)
-
-
 def sync_alpha_colors(experiments, client, state_dir, *, dry_run=False):
-    """Plan or apply owned color metadata updates; never submits an Alpha."""
-    local = _load_color_evidence(state_dir)
+    """Plan or apply color metadata updates; never submits an Alpha.
+
+    Color evidence is intentionally process-local now.  The state directory
+    argument remains for compatibility with the CLI, but this function never
+    writes an Alpha result or color sidecar to it.
+    """
+    del state_dir
+    local = {}
     results = []
     seen = set()
-    dirty = False
     for experiment in experiments or ():
         alpha_id = _value(experiment, "alpha_id")
         if not alpha_id or str(alpha_id) in seen:
@@ -325,13 +311,8 @@ def sync_alpha_colors(experiments, client, state_dir, *, dry_run=False):
                     f"Alpha {alpha_id} color readback mismatch: {new_color!r} != {desired!r}"
                 )
             action = "PATCHED"
-            local[str(alpha_id)] = {
-                "color_managed_by": PROJECT_COLOR_OWNER,
-                "desired_color": desired,
-                "classification": classification,
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            }
-            dirty = True
+            # Ownership is deliberately not persisted.  A later process must
+            # re-read the remote color and fail closed if ownership is unclear.
         results.append({
             "alpha_id": str(alpha_id),
             "old_color": old_color,
@@ -340,8 +321,6 @@ def sync_alpha_colors(experiments, client, state_dir, *, dry_run=False):
             "evidence": _evidence_summary(experiment, classification),
             "action": action,
         })
-    if dirty and not dry_run:
-        _save_color_evidence(state_dir, local)
     return results
 
 

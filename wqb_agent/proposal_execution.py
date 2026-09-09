@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from .artifacts import append_jsonl_if_unique, iter_jsonl_objects
+from .artifacts import append_jsonl_best_effort, iter_jsonl_objects
 from .diversity import extract_fields, is_redundant
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
@@ -831,7 +831,7 @@ class ProposalExecutionWorkflow:
         )
         self._ctx.trajectory.add(exp)
         audit_path = os.path.join(self._ctx.state_dir, "stale_skip_log.jsonl")
-        append_jsonl_if_unique(
+        append_jsonl_best_effort(
             audit_path,
             {"round_no": int(round_no), "experiment_id": exp.id,
              "expression": exp.expression, "progress_url": exp.progress_url,
@@ -870,7 +870,7 @@ class ProposalExecutionWorkflow:
         )
         self._ctx.trajectory.add(exp)
         audit_path = os.path.join(self._ctx.state_dir, "stale_skip_log.jsonl")
-        append_jsonl_if_unique(
+        append_jsonl_best_effort(
             audit_path,
             {"round_no": int(round_no), "experiment_id": exp.id,
              "expression": exp.expression, "progress_url": exp.progress_url,
@@ -914,7 +914,7 @@ class ProposalExecutionWorkflow:
         self._ctx.hooks.save_state(state)
         self._ctx.hooks.write_context()
         audit_path = os.path.join(self._ctx.state_dir, "round_finalization_log.jsonl")
-        append_jsonl_if_unique(
+        append_jsonl_best_effort(
             audit_path,
             {"round_no": int(round_no), "selected": len(experiments),
              "finalized_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

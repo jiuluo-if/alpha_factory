@@ -30,7 +30,13 @@ class OptimizerGateReport(TypedDict):
 
 
 class OptimizerWorkflow:
-    """编排证据驱动的 CHILD 候选，不决定经济含义。"""
+    """编排证据驱动的 CHILD 候选，不决定经济含义。
+
+    Optimization evidence is process-local to the supplied trajectory
+    object.  The persisted Alpha Feed contains only remote ID/status/time
+    metadata and can change priority for an already-present trajectory row;
+    it can never reconstruct a DONE parent or its metrics.
+    """
 
     def __init__(
         self,
@@ -50,7 +56,7 @@ class OptimizerWorkflow:
         self.hooks = hooks
 
     def optimizable_signal_records(self, limit=128):
-        """返回已有 DONE 证据，并按 cloud 轻量索引提示排序。"""
+        """返回 trajectory 中已有 DONE 证据，并按 cloud metadata 排序。"""
         records = []
         cloud_ids = self._cloud_alpha_ids()
         for position, exp in enumerate(reversed(self.trajectory.recent(limit))):
@@ -59,6 +65,14 @@ class OptimizerWorkflow:
             if not exp.field_analysis or not exp.field_understanding:
                 continue
             record = exp.to_dict()
+            # Keep evidence ownership separate from the compatibility source
+            # label consumed by existing proposal/batch statistics.
+            record["evidence_source"] = "local_trajectory"
+            record["priority_source"] = (
+                "cloud_metadata"
+                if str(exp.alpha_id or "") in cloud_ids
+                else "trajectory_recency"
+            )
             record["optimization_source"] = (
                 "cloud" if str(exp.alpha_id or "") in cloud_ids else "current_run"
             )
@@ -73,7 +87,11 @@ class OptimizerWorkflow:
         return records
 
     def _cloud_alpha_ids(self):
-        """读取 weekly cache 中的 Alpha ID，仅作为优先级提示。"""
+        """读取 weekly cache 中的 Alpha ID，仅作为优先级提示。
+
+        This method intentionally returns IDs only; it never creates a local
+        Experiment, imports remote metrics, or changes the trajectory.
+        """
         payload = self.alpha_feed_cache.load()
         if not isinstance(payload, dict):
             return set()

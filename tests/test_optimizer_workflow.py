@@ -119,6 +119,27 @@ class TestOptimizerWorkflow(unittest.TestCase):
         self.assertEqual(records[0]["optimization_recency"], 2)
         self.assertEqual(records[1]["optimization_recency"], 1)
 
+    def test_cloud_metadata_never_restores_evidence_and_source_is_explicit(self):
+        cache = FakeCache({
+            "days": {"2026-09-09": {"simulations": [
+                {"alpha_id": "remote-only"},
+            ], "submitted_alphas": []}},
+        })
+        workflow = self.workflow(FakeTrajectory([]), cache=cache)
+
+        self.assertEqual(workflow.optimizable_signal_records(), [])
+
+        local = SimpleNamespace(
+            status="DONE", metrics={"sharpe": 1.0},
+            field_analysis={"field": {}}, field_understanding={"field": "ok"},
+            alpha_id="remote-only",
+            to_dict=lambda: _parent("rank(local)", alpha_id="remote-only"),
+        )
+        records = self.workflow(FakeTrajectory([local]), cache=cache).optimizable_signal_records()
+
+        self.assertEqual(records[0]["evidence_source"], "local_trajectory")
+        self.assertEqual(records[0]["priority_source"], "cloud_metadata")
+
     def test_gate_report_preserves_blocked_reasons_and_does_not_leak_evidence(self):
         complete = _parent(child={
             "expression": "rank(group_neutralize(field, SUBINDUSTRY))",

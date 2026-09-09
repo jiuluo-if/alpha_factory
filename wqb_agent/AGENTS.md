@@ -4,7 +4,7 @@
 
 ## Architecture Freeze（2026-09-09）
 
-当前 package 边界已冻结：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。后续只因具体 feature/bug 或新的证据触碰边界，并同步测试、架构文档和完整质量门；不要新增 workflow/state/config abstraction 或继续拆 Agent 私有层。
+当前 package 边界已冻结：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。Optimizer 只消费 local `Trajectory` evidence，cloud cache 只能提供 metadata priority；审计 JSONL 无 owner lock 时明确为 best-effort。后续只因具体 feature/bug 或新的证据触碰边界，并同步测试、架构文档和完整质量门；不要新增 workflow/state/config abstraction 或继续拆 Agent 私有层。
 
 ## 职责
 

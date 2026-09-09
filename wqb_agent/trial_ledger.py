@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from collections import Counter, defaultdict
 
@@ -61,6 +62,7 @@ class TrialLedger:
         self.path = path
         self.persist = bool(persist)
         self._events = []
+        self._append_lock = threading.Lock()
 
     @staticmethod
     def _trial_id(trial):
@@ -134,7 +136,9 @@ class TrialLedger:
                 return False
             self._events.append(row)
             return True
-        return append_jsonl_if_unique(self.path, row, ("event_id",))
+        return append_jsonl_if_unique(
+            self.path, row, ("event_id",), lock=self._append_lock
+        )
 
     def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
                                base_quality=None, robustness=None,

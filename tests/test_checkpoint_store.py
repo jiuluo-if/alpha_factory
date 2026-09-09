@@ -22,6 +22,25 @@ class TestCheckpointStore(unittest.TestCase):
             self.assertFalse(loaded["complete"])
             self.assertEqual(loaded["experiments"][0]["status"], "SUBMIT_UNKNOWN")
 
+    def test_checkpoint_excludes_result_evidence_for_restart_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            experiment = SimpleNamespace(to_dict=lambda: {
+                "id": "e1", "round": 4, "hypothesis_id": "h1",
+                "expression": "rank(close)", "settings": {},
+                "fields_used": ["close"], "status": "RUNNING",
+                "progress_url": "/simulations/s1", "alpha_id": "alpha-1",
+                "metrics": {"sharpe": 2.0}, "checks": [{"name": "SELF_CORRELATION"}],
+                "yearly_evidence": {"status": "VERIFIED"},
+            })
+
+            store.write(4, {"id": "h1"}, [experiment], complete=False)
+            row = store.load(4)["experiments"][0]
+
+            self.assertEqual(row["progress_url"], "/simulations/s1")
+            for forbidden in ("alpha_id", "metrics", "checks", "yearly_evidence"):
+                self.assertNotIn(forbidden, row)
+
     def test_malformed_or_mismatched_checkpoint_is_not_treated_as_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = CheckpointStore(tmp)

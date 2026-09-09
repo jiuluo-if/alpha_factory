@@ -177,7 +177,7 @@ WQBClient.set_alpha_color(..., verify=True)
 | Suggestion/discovery orchestration | `SuggestionWorkflow` | discovery、context、research-space、suggestion bundle；无 Simulation/checkpoint/远端写入 |
 | Proposal execution/recovery | `ProposalExecutionWorkflow` | preflight、预算、checkpoint、恢复、终态结算；经 `Simulator` 执行 |
 | Alpha metadata read sync | `AlphaFeedWorkflow` | `GET /users/self/alphas`、纽约七日窗口、dedupe、bucket、cache refresh |
-| Optimization candidate orchestration | `OptimizerWorkflow` | 既有 evidence、代码初筛、Agent-authored child hypothesis、CHILD proposal |
+| Optimization candidate orchestration | `OptimizerWorkflow` | 仅消费 `Trajectory` 中已有 DONE evidence；cloud cache 只提供 metadata priority，不恢复 evidence 或 metrics |
 | Remote color sync | `AlphaColorWorkflow` | 仅显式 CLI control/write，ownership fail-closed、dry-run、verified PATCH |
 | Simulation transport | `Simulator` → `WQBClient` | 唯一生产 `submit_simulation` owner chain |
 | Credentials discovery | `credentials.py` | deterministic local-only source resolution |
@@ -188,12 +188,16 @@ WQBClient.set_alpha_color(..., verify=True)
 |---|---|---|
 | Trajectory | `Trajectory` | append-only research evidence and dedupe source |
 | Trial lifecycle | `TrialLedger` | canonical lifecycle phase projection |
-| Checkpoint | `CheckpointStore` | exactly-once recovery boundary |
+| Checkpoint | `CheckpointStore` | exactly-once recovery boundary；不保存 metrics/checks/Alpha 结果 |
 | Memory | `ExperienceMemory` | lessons, hypotheses and bounded research memory |
 | Weekly Alpha metadata | `WeeklyAlphaFeedCache` | only lightweight ID/status/time metadata, New York seven-day window |
 | Daily process view | `DailyResearchCache` | in-process view; not remote ownership or evidence |
 
 Runtime identity is tested: Agent, ProposalExecutionWorkflow and OptimizerWorkflow share the same trajectory; Agent and AlphaFeedWorkflow share the daily/weekly caches; RuntimeComponents creates one Simulator, CheckpointStore and TrialLedger instance.
+
+`OptimizerWorkflow` 的 evidence 生命周期是 local-trajectory-only：同一进程内消费传入的 `Trajectory`，重启后仅由持久化 trajectory/checkpoint 的既有 owner 恢复；`.alpha_feed_cache/weekly.json` 只提供远端 Alpha ID/status/time metadata 的优先级提示，不能单独生成 DONE parent，也不保存或重建完整 Simulation metrics。
+
+审计 JSONL 使用 `append_jsonl_best_effort`；若唯一性是正确性不变量，owner 必须提供共享 lock（`TrialLedger` 已拥有 `_append_lock`）。未提供 lock 的普通审计追加不承诺并发或跨进程唯一。
 
 ### Remote write matrix
 
@@ -207,6 +211,7 @@ Runtime identity is tested: Agent, ProposalExecutionWorkflow and OptimizerWorkfl
 ### Frozen safety invariants
 
 - `SUBMIT_UNKNOWN` never triggers an automatic resend; a known progress URL may only be polled read-only.
+- Every Simulation POST checks the shared rate-limit gate before acquiring the spacing slot, again after slot contention/spacing, and once more immediately before transport (including after authentication).
 - The same complete checkpoint is never redispatched; checkpoint persistence has one owner, `CheckpointStore`.
 - `SuggestionWorkflow` and `OptimizerWorkflow` cannot submit Simulation; Optimizer cannot invent `child_economic_hypothesis`, scan parameters, refresh Alpha Feed or write trajectory.
 - `AlphaFeedWorkflow` is read-only against BRAIN and only refreshes bounded lightweight caches; submitted and unsubmitted queries remain separate (`dateSubmitted` vs `dateCreated`).

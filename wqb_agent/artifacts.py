@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+from contextlib import nullcontext
 
 
 def _without_keys(value, ignored):
@@ -96,36 +97,52 @@ def atomic_write_json_if_changed(path, payload, *, ignored_keys=(),
     return _atomic_replace(path, serialized.encode("utf-8"))
 
 
-def append_jsonl_if_unique(path, payload, identity_keys):
-    """Append one audit record unless its stable identity already exists.
+def append_jsonl_best_effort(path, payload, identity_keys, *, lock=None):
+    """Append an audit record with optional caller-owned uniqueness locking.
 
-    This is intentionally limited to small audit logs.  Append-only research
-    evidence such as ``trajectory.jsonl`` must use its own state API instead.
+    With a lock shared by all callers of the owning component, the identity
+    check and append are atomic for those callers.  Without a lock this is
+    explicitly best-effort and provides no concurrent or cross-process
+    uniqueness guarantee.  Append-only research evidence such as
+    ``trajectory.jsonl`` must use its own state API instead.
     """
     if not isinstance(payload, dict) or not identity_keys:
         raise ValueError("payload 必须是对象且 identity_keys 不得为空")
     identity = tuple(payload.get(key) for key in identity_keys)
     if all(value is None for value in identity):
         raise ValueError("审计记录必须至少包含一个身份字段")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except (ValueError, TypeError, json.JSONDecodeError):
-                    continue
-                if isinstance(row, dict) and tuple(row.get(key) for key in identity_keys) == identity:
-                    return False
-    except OSError:
-        pass
-    parent = os.path.dirname(os.path.abspath(path))
-    os.makedirs(parent, exist_ok=True)
-    line = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    with open(path, "ab") as handle:
-        handle.write(line)
-        handle.flush()
-        os.fsync(handle.fileno())
-    return True
+    guard = lock if lock is not None else nullcontext()
+    with guard:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        continue
+                    if isinstance(row, dict) and tuple(row.get(key) for key in identity_keys) == identity:
+                        return False
+        except OSError:
+            pass
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+        line = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        with open(path, "ab") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return True
+
+
+def append_jsonl_if_unique(path, payload, identity_keys, *, lock=None):
+    """Compatibility name for :func:`append_jsonl_best_effort`.
+
+    The old name does not imply global uniqueness: callers must provide their
+    owning lock when duplicate prevention is a correctness invariant.
+    """
+    return append_jsonl_best_effort(
+        path, payload, identity_keys, lock=lock
+    )
 
 
 def atomic_write_jsonl_if_changed(path, rows):

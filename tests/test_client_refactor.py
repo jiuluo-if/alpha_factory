@@ -417,6 +417,64 @@ class TestSharedRateLimitGate(unittest.TestCase):
             c.submit_simulation("rank(b)", {})
         self.assertGreaterEqual(times[1] - times[0], 0.04)
 
+    def test_submission_slot_rechecks_gate_after_concurrent_429(self):
+        """A 429 arriving while waiting for the slot must be observed."""
+        c = make_client()
+        c.submit_spacing_sec = 0.0
+        c._rate_limit_lock = threading.Lock()
+        c._rate_limit_until = 0.0
+        c._submit_lock = threading.Lock()
+        c._next_submit_at = 0.0
+        c._submit_lock.acquire()
+        first_gate_check = threading.Event()
+        second_gate_check = threading.Event()
+        gate_checks = []
+
+        def wait_gate():
+            gate_checks.append(c._rate_limit_until > time.monotonic())
+            if len(gate_checks) == 1:
+                first_gate_check.set()
+            else:
+                second_gate_check.set()
+                # A real wait would return only after the gate opens.  Clearing
+                # the synthetic gate lets the assertion inspect the POST edge.
+                with c._rate_limit_lock:
+                    c._rate_limit_until = 0.0
+            return True
+
+        post_gate_state = []
+
+        def fake_request(*args, **kwargs):
+            post_gate_state.append(c._rate_limit_until > time.monotonic())
+            return FakeResponse(201, headers={"Location": "/sim/1"})
+
+        import time
+        with mock.patch.object(c, "_wait_rate_limit_gate", side_effect=wait_gate), \
+             mock.patch.object(c, "_request", side_effect=fake_request):
+            worker = threading.Thread(
+                target=lambda: c.submit_simulation("rank(a)", {})
+            )
+            worker.start()
+            self.assertTrue(first_gate_check.wait(1.0))
+            c._register_rate_limit(FakeResponse(429, headers={"Retry-After": "60"}))
+            c._submit_lock.release()
+            worker.join(1.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(gate_checks, [False, True])
+        self.assertEqual(post_gate_state, [False])
+        self.assertTrue(second_gate_check.is_set())
+
+    def test_request_rechecks_gate_after_auth_before_transport(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, payload={"ok": True}),
+        ])
+        with mock.patch.object(c, "_wait_rate_limit_gate", side_effect=[True, False]), \
+             mock.patch.object(c, "_ensure_auth"):
+            with self.assertRaises(WQBRateLimitError):
+                c._request("POST", "/simulations", context="submit", rate_limit_budget_sec=5)
+
 
 class TestTrajectoryTail(unittest.TestCase):
     def test_non_positive_window_stays_bounded(self):

@@ -312,7 +312,13 @@ class WQBClient:
         self._rate_limit_until = 0.0
 
     def _wait_submission_slot(self):
-        """Stagger simulation POSTs while keeping polling concurrent."""
+        """Stagger simulation POSTs while keeping polling concurrent.
+
+        The first gate check may be separated from the POST by contention on
+        the submission-spacing lock.  Recheck after that wait so a concurrent
+        429 cannot be missed in the TOCTOU window; ``_request`` also checks
+        immediately before the transport call.
+        """
         if not hasattr(self, "_submit_lock"):
             self._submit_lock = threading.Lock()
             self._next_submit_at = 0.0
@@ -322,6 +328,7 @@ class WQBClient:
             remaining = self._next_submit_at - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
+            self._wait_rate_limit_gate()
             self._next_submit_at = time.monotonic() + self.submit_spacing_sec
 
     def _classified_exception(self, status_code, text, context):
@@ -364,6 +371,14 @@ class WQBClient:
                     f"{context} rate-limit budget exhausted while waiting for shared gate."
                 )
             self._ensure_auth()
+            # Authentication may itself encounter a 429 and extend the
+            # client-wide gate.  Confirm again immediately before transport;
+            # Simulation POSTs must not cross that second TOCTOU window.
+            remaining = max(0.0, rate_limit_budget_sec - (time.monotonic() - start))
+            if not self._wait_rate_limit_gate(max_wait=remaining):
+                raise WQBRateLimitError(
+                    f"{context} rate-limit budget exhausted before transport."
+                )
             try:
                 resp = self._session().request(
                     method, url, params=params, json=json, headers=headers, timeout=timeout

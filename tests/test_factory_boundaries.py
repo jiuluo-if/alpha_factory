@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from wqb_agent.daily_cache import DailyResearchCache
+from wqb_agent.alpha_feed_cache import WeeklyAlphaFeedCache
 from wqb_agent.alpha_factory import (
     AlphaFactory,
     AlphaTemplate,
@@ -19,6 +20,7 @@ from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
+from wqb_agent.client import WQBQueryTooBroadError
 
 
 def _utc_timestamp(value):
@@ -64,6 +66,63 @@ class TestDailyResearchCache(unittest.TestCase):
             {"alpha_id": "a1", "sharpe": 1.1},
             {"alpha_id": "a2", "sharpe": 0.8},
         ])
+
+
+class TestWeeklyAlphaFeedCache(unittest.TestCase):
+    def test_persists_time_buckets_and_prunes_oldest_simulations(self):
+        now = [_utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "weekly.json")
+            cache = WeeklyAlphaFeedCache(
+                path, clock=lambda: now[0], weekly_simulation_cap=3
+            )
+            result = cache.refresh({
+                "2026-09-07": {
+                    "simulations": [{"alpha_id": "old-1"}],
+                    "submitted_alphas": [],
+                },
+                "2026-09-08": {
+                    "simulations": [{"alpha_id": "old-2"}],
+                    "submitted_alphas": [{"alpha_id": "submitted-1"}],
+                },
+                "2026-09-09": {
+                    "simulations": [
+                        {"alpha_id": "today-1"},
+                        {"alpha_id": "today-2"},
+                    ],
+                    "submitted_alphas": [],
+                },
+            })
+
+            self.assertEqual(result["simulation_count"], 3)
+            self.assertEqual(result["pruned_simulation_count"], 1)
+            self.assertEqual(result["local_date"], "2026-09-09")
+            self.assertTrue(result["updated_at"])
+            self.assertTrue(result["expires_at"])
+            payload = cache.load()
+            self.assertEqual(
+                set(payload["days"]), {"2026-09-08", "2026-09-09"}
+            )
+            self.assertEqual(
+                [row["alpha_id"] for row in payload["days"]["2026-09-09"]["simulations"]],
+                ["today-1", "today-2"],
+            )
+
+    def test_cross_week_load_removes_expired_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "weekly.json")
+            first = WeeklyAlphaFeedCache(
+                path,
+                clock=lambda: _utc_timestamp(dt.datetime(2026, 9, 9, 12, 0)),
+            )
+            first.refresh({"2026-09-09": {"simulations": [], "submitted_alphas": []}})
+            next_week = WeeklyAlphaFeedCache(
+                path,
+                clock=lambda: _utc_timestamp(dt.datetime(2026, 9, 14, 12, 0)),
+            )
+
+            self.assertIsNone(next_week.load())
+            self.assertFalse(os.path.exists(path))
 
 
 class TestWeeklySimulationQuota(unittest.TestCase):
@@ -114,20 +173,22 @@ class TestWeeklySimulationQuota(unittest.TestCase):
 
 
 class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
-    def test_remote_alpha_feed_refreshes_submitted_and_today_simulations_together(self):
+    def test_remote_alpha_feed_refreshes_week_buckets_and_today_count_together(self):
         class FeedClient:
             def __init__(self):
                 self.calls = []
 
-            def get_user_alphas(self, *, status, limit, offset):
-                self.calls.append((status, limit, offset))
+            def get_all_user_alphas(
+                self, *, status, limit, max_pages=None, max_results=1000, **kwargs
+            ):
+                self.calls.append((status, limit, max_pages))
                 if status == "SUBMITTED":
-                    return {"results": [{
+                    return [{
                         "id": "submitted-1",
                         "status": "SUBMITTED",
                         "dateSubmitted": "2026-09-08T20:00:00-04:00",
-                    }]}
-                return {"results": [
+                    }]
+                return [
                     {
                         "id": "today-1",
                         "status": "UNSUBMITTED",
@@ -138,22 +199,76 @@ class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
                         "status": "UNSUBMITTED",
                         "dateCreated": "2026-09-08T08:00:00-04:00",
                     },
-                ]}
+                ]
 
-        agent = Agent.__new__(Agent)
-        agent.client = FeedClient()
-        agent.daily_cache = DailyResearchCache(clock=lambda: _utc_timestamp(
-            dt.datetime(2026, 9, 9, 12, 0)
-        ))
-        snapshot = agent.refresh_remote_alpha_feed(limit=20)
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent.__new__(Agent)
+            agent.client = FeedClient()
+            agent.daily_cache = DailyResearchCache(clock=lambda: _utc_timestamp(
+                dt.datetime(2026, 9, 9, 12, 0)
+            ))
+            agent.alpha_feed_cache = WeeklyAlphaFeedCache(
+                os.path.join(tmp, "weekly.json"),
+                clock=lambda: _utc_timestamp(dt.datetime(2026, 9, 9, 12, 0)),
+            )
+            snapshot = agent.refresh_remote_alpha_feed(limit=20)
 
-        self.assertEqual(snapshot["submitted_count"], 1)
-        self.assertEqual(snapshot["today_simulated_count"], 1)
-        self.assertEqual(agent.daily_cache.submitted_alphas()[0]["alpha_id"], "submitted-1")
-        self.assertEqual(agent.daily_cache.simulations()[0]["alpha_id"], "today-1")
-        self.assertEqual(agent.client.calls, [
-            ("SUBMITTED", 20, 0), ("UNSUBMITTED", 20, 0),
-        ])
+            self.assertEqual(snapshot["submitted_count"], 1)
+            self.assertEqual(snapshot["today_simulated_count"], 1)
+            self.assertEqual(snapshot["weekly_simulated_count"], 2)
+            self.assertEqual(
+                agent.daily_cache.submitted_alphas()[0]["alpha_id"],
+                "submitted-1",
+            )
+            self.assertEqual(agent.daily_cache.simulations()[0]["alpha_id"], "today-1")
+            self.assertEqual(agent.client.calls, [
+                ("SUBMITTED", 20, None), ("UNSUBMITTED", 20, None),
+            ])
+            self.assertEqual(
+                agent.alpha_feed_cache.load()["days"]["2026-09-09"]["simulations"][0]["alpha_id"],
+                "today-1",
+            )
+
+    def test_remote_alpha_feed_splits_a_platform_broad_window(self):
+        class BroadClient:
+            def __init__(self):
+                self.calls = []
+                self.broad = {"SUBMITTED": True, "UNSUBMITTED": True}
+
+            def get_all_user_alphas(self, **kwargs):
+                self.calls.append(kwargs)
+                status = kwargs["status"]
+                if self.broad[status]:
+                    self.broad[status] = False
+                    raise WQBQueryTooBroadError("too broad")
+                if status == "SUBMITTED":
+                    return [{
+                        "id": "submitted-1",
+                        "status": status,
+                        "dateSubmitted": "2026-09-09T08:00:00-04:00",
+                    }]
+                return [{
+                    "id": "today-1",
+                    "status": status,
+                    "dateCreated": "2026-09-09T08:00:00-04:00",
+                }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent.__new__(Agent)
+            agent.client = BroadClient()
+            agent.daily_cache = DailyResearchCache(clock=lambda: _utc_timestamp(
+                dt.datetime(2026, 9, 9, 12, 0)
+            ))
+            agent.alpha_feed_cache = WeeklyAlphaFeedCache(
+                os.path.join(tmp, "weekly.json"),
+                clock=lambda: _utc_timestamp(dt.datetime(2026, 9, 9, 12, 0)),
+            )
+
+            snapshot = agent.refresh_remote_alpha_feed(limit=100)
+
+            self.assertEqual(snapshot["today_simulated_count"], 1)
+            self.assertEqual(len(agent.client.calls), 6)
+            self.assertTrue(all(call["max_results"] == 1000 for call in agent.client.calls))
 
     def test_settled_result_updates_color_cache_immediately(self):
         agent = Agent.__new__(Agent)

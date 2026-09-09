@@ -10,7 +10,7 @@ DO NOT USE FOR: choosing economic hypotheses or bypassing `research_api`.
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .artifacts import (
     atomic_write_json_if_changed,
@@ -65,6 +65,8 @@ from .validation_report import (
 from .config import normalize_config
 from .research_evidence import ResearchEvidenceBundle
 from .daily_cache import DailyResearchCache, NEW_YORK
+from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
+from .client import WQBQueryTooBroadError
 
 SEED_HYPOTHESES = [
     {
@@ -199,6 +201,15 @@ class Agent:
             "status": "NOT_STARTED",
         }
         self.daily_cache = DailyResearchCache()
+        feed_cache_path = os.path.join(
+            os.path.dirname(os.path.abspath(self.state_dir)),
+            ".alpha_feed_cache",
+            "weekly.json",
+        )
+        self.alpha_feed_cache = WeeklyAlphaFeedCache(
+            feed_cache_path,
+            weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
+        )
 
     # ------------------------------------------------------------ running
 
@@ -428,57 +439,142 @@ class Agent:
         return parsed.astimezone(NEW_YORK).date().isoformat()
 
     def refresh_remote_alpha_feed(self, *, limit=100):
-        """Pull submitted and current-day simulated Alpha views together.
+        """Pull the rolling seven-day submitted/simulated Alpha views together.
 
-        This is a read-only, bounded refresh.  Only lightweight IDs, status,
-        and timestamps enter the process-local daily cache; result metrics and
+        This is a read-only refresh.  Only lightweight IDs, status, local day,
+        and timestamps enter the rebuildable weekly cache; result metrics and
         Alpha evidence remain owned by the live API/checkpoint boundaries.
         """
         refreshed_at = time.time()
-        submitted_page = self.client.get_user_alphas(
-            status="SUBMITTED", limit=limit, offset=0
-        )
-        simulated_page = self.client.get_user_alphas(
-            status="UNSUBMITTED", limit=limit, offset=0
-        )
         local_date = self.daily_cache.local_date
+        current_day = date.fromisoformat(local_date)
+        week_start = current_day - timedelta(days=6)
+        days = {}
+
+        def fetch_window(status, field):
+            start = datetime.combine(
+                week_start, datetime.min.time(), tzinfo=NEW_YORK
+            ) - timedelta(seconds=1)
+            end = datetime.combine(
+                current_day + timedelta(days=1), datetime.min.time(),
+                tzinfo=NEW_YORK,
+            )
+
+            def fetch(start_at, end_at, depth):
+                kwargs = {
+                    "status": status,
+                    "limit": limit,
+                    "max_results": 1000,
+                }
+                if field == "created":
+                    kwargs.update({
+                        "date_created_after": start_at.isoformat(),
+                        "date_created_before": end_at.isoformat(),
+                    })
+                else:
+                    kwargs.update({
+                        "date_submitted_after": start_at.isoformat(),
+                        "date_submitted_before": end_at.isoformat(),
+                    })
+                try:
+                    return self.client.get_all_user_alphas(**kwargs)
+                except WQBQueryTooBroadError:
+                    if depth >= 12 or end_at - start_at <= timedelta(minutes=1):
+                        raise
+                    midpoint = start_at + (end_at - start_at) / 2
+                    return (
+                        fetch(start_at, midpoint + timedelta(seconds=1), depth + 1)
+                        + fetch(midpoint - timedelta(seconds=1), end_at, depth + 1)
+                    )
+
+            return fetch(start, end, 0)
+
+        def unique_rows(rows):
+            result = []
+            seen = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                identity = row.get("id")
+                if identity is None or str(identity) in seen:
+                    continue
+                seen.add(str(identity))
+                result.append(row)
+            return result
+
+        submitted_rows = unique_rows(fetch_window("SUBMITTED", "submitted"))
+        simulated_rows = unique_rows(fetch_window("UNSUBMITTED", "created"))
+
+        def bucket_for(value):
+            local_value = self._remote_local_date(value)
+            if local_value is None:
+                return None
+            try:
+                parsed = date.fromisoformat(local_value)
+            except ValueError:
+                return None
+            if not (week_start <= parsed <= current_day):
+                return None
+            key = parsed.isoformat()
+            return days.setdefault(key, {"simulations": [], "submitted_alphas": []})
+
         submitted = []
-        for row in submitted_page.get("results") or []:
+        for row in submitted_rows:
             if not isinstance(row, dict) or not row.get("id"):
                 continue
-            submitted.append({
+            record = {
                 "alpha_id": str(row["id"]),
                 "status": row.get("status"),
                 "date_submitted": row.get("dateSubmitted"),
+                "local_date": self._remote_local_date(row.get("dateSubmitted")),
                 "source": "/users/self/alphas",
-            })
+            }
+            bucket = bucket_for(row.get("dateSubmitted"))
+            if bucket is not None:
+                bucket["submitted_alphas"].append(record)
+                submitted.append(record)
         submitted.sort(
             key=lambda item: str(item.get("date_submitted") or ""),
             reverse=True,
         )
         today_simulated = []
-        for row in simulated_page.get("results") or []:
+        weekly_simulated = []
+        for row in simulated_rows:
             if not isinstance(row, dict) or not row.get("id"):
                 continue
-            if self._remote_local_date(row.get("dateCreated")) != local_date:
+            row_local_date = self._remote_local_date(row.get("dateCreated"))
+            bucket = bucket_for(row.get("dateCreated"))
+            if bucket is None:
                 continue
-            today_simulated.append({
+            record = {
                 "alpha_id": str(row["id"]),
                 "status": row.get("status"),
                 "date_created": row.get("dateCreated"),
+                "local_date": row_local_date,
                 "source": "/users/self/alphas",
-            })
+            }
+            bucket["simulations"].append(record)
+            weekly_simulated.append(record)
+            if row_local_date == local_date:
+                today_simulated.append(record)
         today_simulated.sort(
+            key=lambda item: str(item.get("date_created") or ""),
+            reverse=True,
+        )
+        weekly_simulated.sort(
             key=lambda item: str(item.get("date_created") or ""),
             reverse=True,
         )
         self.daily_cache.put_submitted_alphas(submitted)
         self.daily_cache.put_simulations(today_simulated)
+        cache_result = self.alpha_feed_cache.refresh(days)
         return {
             "local_date": local_date,
             "refreshed_at": refreshed_at,
             "submitted_count": len(submitted),
             "today_simulated_count": len(today_simulated),
+            "weekly_simulated_count": len(weekly_simulated),
+            **cache_result,
             "source": "/users/self/alphas",
         }
 

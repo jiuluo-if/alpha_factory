@@ -25,6 +25,7 @@ from wqb_agent.client import (
     WQBNotFoundError,
     WQBRateLimitError,
     WQBRejectedError,
+    WQBQueryTooBroadError,
     WQBSimulationError,
     WQBTimeoutError,
     WQBClient,
@@ -269,6 +270,57 @@ class TestPublicReadAdapters(unittest.TestCase):
         page = c.get_user_alphas(status="UNSUBMITTED", limit=5, offset=10)
         self.assertEqual(page["count"], 1)
         self.assertEqual(page["results"][0]["id"], "alpha-1")
+
+    def test_get_all_user_alphas_follows_pages_without_duplicate_ids(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, payload={
+                "count": 3,
+                "next": "page-2",
+                "previous": None,
+                "results": [
+                    {"id": "alpha-1", "status": "UNSUBMITTED"},
+                    {"id": "alpha-2", "status": "UNSUBMITTED"},
+                ],
+            }),
+            FakeResponse(200, payload={
+                "count": 3,
+                "next": None,
+                "previous": "page-1",
+                "results": [
+                    {"id": "alpha-2", "status": "UNSUBMITTED"},
+                    {"id": "alpha-3", "status": "UNSUBMITTED"},
+                ],
+            }),
+        ])
+
+        rows = c.get_all_user_alphas(status="UNSUBMITTED", limit=2)
+
+        self.assertEqual([row["id"] for row in rows], [
+            "alpha-1", "alpha-2", "alpha-3",
+        ])
+
+    def test_get_all_user_alphas_fails_closed_on_incomplete_last_page(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, payload={
+                "count": 3,
+                "next": None,
+                "previous": None,
+                "results": [{"id": "alpha-1"}],
+            }),
+        ])
+
+        with self.assertRaises(WQBSimulationError):
+            c.get_all_user_alphas(limit=2)
+
+    def test_get_all_user_alphas_rejects_a_window_over_platform_page_limit(self):
+        c = make_client()
+        with mock.patch.object(c, "get_user_alphas", return_value={
+            "count": 1001, "next": "page-2", "results": [{"id": "alpha-1"}],
+        }):
+            with self.assertRaises(WQBQueryTooBroadError):
+                c.get_all_user_alphas(limit=100, max_results=1000)
 
 
 class TestClassifiedExceptions(unittest.TestCase):

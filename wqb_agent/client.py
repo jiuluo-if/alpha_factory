@@ -86,6 +86,10 @@ class WQBSimulationError(WQBError):
     kind = FailureKind.INFRA
 
 
+class WQBQueryTooBroadError(WQBSimulationError):
+    """The platform requires a narrower date/filter window."""
+
+
 class WQBSubmitUnknownError(WQBSimulationError):
     """The POST may have reached BRAIN but its outcome is unknowable.
 
@@ -469,7 +473,11 @@ class WQBClient:
         )
         return resp.json().get("results", [])
 
-    def get_user_alphas(self, *, status=None, limit=100, offset=0):
+    def get_user_alphas(
+        self, *, status=None, limit=100, offset=0,
+        date_created_after=None, date_created_before=None,
+        date_submitted_after=None, date_submitted_before=None,
+    ):
         """Read one bounded page of the authenticated user's Alpha library."""
         try:
             page_limit = max(1, min(100, int(limit)))
@@ -481,6 +489,17 @@ class WQBClient:
             if not isinstance(status, str) or not status.strip():
                 raise ValueError("Alpha status 必须是非空字符串")
             params["status"] = status.strip().upper()
+        date_filters = {
+            "dateCreated>": date_created_after,
+            "dateCreated<": date_created_before,
+            "dateSubmitted>": date_submitted_after,
+            "dateSubmitted<": date_submitted_before,
+        }
+        for key, value in date_filters.items():
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"{key} 的日期过滤值必须是非空字符串")
+                params[key] = value.strip()
         resp = self._request(
             "GET",
             f"{self.base_url}/users/self/alphas",
@@ -493,6 +512,62 @@ class WQBClient:
                 "GET /users/self/alphas returned an invalid paginated payload."
             )
         return payload
+
+    def get_all_user_alphas(
+        self, *, status=None, limit=100, max_pages=1000, max_results=1000,
+        date_created_after=None, date_created_before=None,
+        date_submitted_after=None, date_submitted_before=None,
+    ):
+        """Read all pages of the authenticated user's Alpha library.
+
+        The endpoint is paginated and the caller still gets a hard page cap so
+        a malformed ``next``/``count`` response cannot create an endless loop.
+        """
+        try:
+            page_limit = max(1, min(100, int(limit)))
+            page_cap = max(1, int(max_pages))
+            result_cap = max(1, int(max_results))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Alpha pagination limit/max_pages 必须是整数") from exc
+        rows = []
+        seen_ids = set()
+        offset = 0
+        expected_count = None
+        for _ in range(page_cap):
+            page = self.get_user_alphas(
+                status=status, limit=page_limit, offset=offset,
+                date_created_after=date_created_after,
+                date_created_before=date_created_before,
+                date_submitted_after=date_submitted_after,
+                date_submitted_before=date_submitted_before,
+            )
+            if expected_count is None and isinstance(page.get("count"), int):
+                expected_count = max(0, page["count"])
+                if expected_count > result_cap:
+                    raise WQBQueryTooBroadError(
+                        "GET /users/self/alphas query window exceeds the result cap."
+                    )
+            page_rows = page.get("results") or []
+            for row in page_rows:
+                if not isinstance(row, dict):
+                    continue
+                identity = row.get("id")
+                if identity is None or str(identity) in seen_ids:
+                    continue
+                seen_ids.add(str(identity))
+                rows.append(row)
+            if expected_count is not None and len(rows) >= expected_count:
+                return rows
+            if not page_rows or page.get("next") is None:
+                if expected_count is not None and len(rows) < expected_count:
+                    raise WQBSimulationError(
+                        "GET /users/self/alphas returned incomplete pagination."
+                    )
+                return rows
+            offset += page_limit
+        raise WQBSimulationError(
+            "GET /users/self/alphas exceeded the bounded pagination limit."
+        )
 
     def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
         """Fetch datafields of a dataset. ``field_type`` optionally filters by

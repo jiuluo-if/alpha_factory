@@ -107,7 +107,7 @@ def main():
     )
     parser.add_argument(
         "--sync-alpha-feed", action="store_true",
-        help="只读拉取最新提交 Alpha 与本日模拟 Alpha到当日内存缓存",
+        help="只读拉取当周提交/模拟 Alpha 元数据并清理过期缓存",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -323,7 +323,6 @@ def main():
             print(json.dumps({
                 **snapshot,
                 "network_write": False,
-                "cache": agent.daily_cache.snapshot(),
             }, ensure_ascii=False, indent=2))
             return
         lock_path = acquire_single_instance_lock(

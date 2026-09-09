@@ -7,6 +7,7 @@
 - 先读：`AGENTS.md` → `wqb_agent/research_api.py` → 当前任务目标 → 一个直接依赖和一个测试；不要递归扫描仓库。
 - 只读上下文：`python main.py context --compact`；机器读取加 `--json`。它复用 takeover preflight/audit/doctor，`BLOCKED` 时只做对账/恢复，不启动 Simulation。
 - 唯一执行入口：`python main.py suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py run-proposals`；不得绕过 `Agent.run_proposals()`。
+- 提案执行编排归 `wqb_agent/proposal_execution.py` 的 `ProposalExecutionWorkflow` 所有；`Agent.run_proposals()` 只作兼容 facade。Workflow 不导入 `Agent`、不直接调用 Client POST；Simulation 提交由 `Simulator`、checkpoint 持久化由 `CheckpointStore` 负责。
 - 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 的远端轻量元数据只按美国东部本地滚动 7 日窗口缓存，指标、轨迹、checkpoint 和证据不进入该缓存。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
 - 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。

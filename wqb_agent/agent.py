@@ -14,20 +14,17 @@ from datetime import date, datetime, timedelta, timezone
 
 from .artifacts import (
     atomic_write_json_if_changed,
-    append_jsonl_if_unique,
     iter_jsonl_objects,
 )
 from .research_guard import (
     ResearchLoopGuard,
     overfit_expression_reason,
     parameter_only_change_reason,
-    structural_family_key,
 )
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
 from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
 from .context import key_experiments
-from .diversity import extract_fields, is_redundant
 from .evidence import overlay_cached_checks, refresh_self_correlation_cache
 from .alpha_colors import classify_alpha_color
 from .expression import canonical_expression, submission_fingerprint
@@ -39,26 +36,21 @@ from .metrics import (
     num,
 )
 from .proposal_contract import (
-    RESEARCH_ROLES,
     SETTING_OVERRIDES,
     FACTORY_BATCH_SIZE,
     _operator_reference,
-    proposal_budget_cap,
-    proposal_priority,
-    validate_proposal,
-    validate_factory_batch,
-    validate_vector_inputs,
+    validate_proposal,  # noqa: F401 - compatibility export for legacy callers/tests
+    validate_vector_inputs,  # noqa: F401 - compatibility export for legacy callers/tests
 )
 from .state import (
     Experiment,
-    RECOVERABLE_STATUSES,
-    ResearchState,
-    UNKNOWN_STATUSES,
+    RECOVERABLE_STATUSES,  # noqa: F401 - compatibility export and architecture guard
     UNRESOLVED_STATUSES,
 )
 from .submission import latest_active_snapshot, self_correlation_evidence
 from .submission import submission_eligibility
 from .runtime_components import build_runtime_components
+from .proposal_execution import ProposalExecutionContext, ProposalExecutionHooks, ProposalExecutionWorkflow
 from .behavior import extract_behavior_series
 from .alpha_pool import build_pool_snapshot
 from .incremental_policy import IncrementalValuePolicy
@@ -214,6 +206,58 @@ class Agent:
         self.alpha_feed_cache = WeeklyAlphaFeedCache(
             feed_cache_path,
             weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
+        )
+        self.proposal_execution = ProposalExecutionWorkflow(
+            ProposalExecutionContext(
+                state_dir=self.state_dir,
+                simulator=self.simulator,
+                trajectory=self.trajectory,
+                trial_ledger=self.trial_ledger,
+                checkpoints=self.checkpoints,
+                memory=self.memory,
+                search_policy=self.search_policy,
+                reflector=self.reflector,
+                hooks=ProposalExecutionHooks(
+                    ensure_loaded=self._ensure_loaded,
+                    next_round_no=self.next_round_no,
+                    terminal_identities=self._terminal_identities,
+                    refresh_platform_field_usage=self._refresh_platform_field_usage,
+                    read_field_cache=self._read_field_cache,
+                    known_field_types=self._known_field_types,
+                    proposal_settings=self._proposal_settings,
+                    completed_parent=self._completed_parent,
+                    record_trial_phase=self._record_trial_phase,
+                    record_candidate_rejection=self._record_candidate_rejection,
+                    on_simulation_update=self._on_simulation_update,
+                    record_live_result=self._record_live_result,
+                    refresh_self_correlation_evidence=self._refresh_self_correlation_evidence,
+                    mark_robustness_stability=self._mark_robustness_stability,
+                    sync_submission_pool=self._sync_submission_pool,
+                    save_state=self._save_state,
+                    write_context=self._write_context,
+                    print_summary=self._print_summary,
+                    write_sims_results=self._write_sims_results,
+                    validation_candidates=lambda: getattr(
+                        self, "_validation_candidates", None
+                    ),
+                    set_last_round_skipped=lambda value: setattr(
+                        self, "_last_round_skipped", value
+                    ),
+                    reset_best_exhausted=lambda: setattr(
+                        self.memory, "best_exhausted", False
+                    ),
+                ),
+                operator_reference=self.operator_reference,
+                factory_batch_size=self.factory_batch_size,
+                min_factory_datasets=self.min_factory_datasets,
+                min_cross_dataset_pairs=self.min_cross_dataset_pairs,
+                candidates_per_round=self.candidates_per_round,
+                max_proposals_per_round=self.max_proposals_per_round,
+                research_allocation=self.research_allocation,
+                research_integrity=self.research_integrity,
+                max_field_alpha_count=self.max_field_alpha_count,
+                require_platform_alpha_count=self.require_platform_alpha_count,
+            )
         )
 
     # ------------------------------------------------------------ running
@@ -725,968 +769,58 @@ class Agent:
         return research_space
 
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):
-        # MECHANISM_INVARIANT:
-        # This is the guarded execution boundary. Keep preflight, dedup,
-        # checkpoint, and unknown-write handling fail-closed.
-        """Phase 2 of LLM-driven research: execute the agent's proposals
-        through real BRAIN simulation, then reflect and update memory."""
-        self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}
-        self._ensure_loaded()
-        path = path or os.path.join(self.state_dir, "proposals.json")
-        if not os.path.exists(path):
-            print(f"No proposals file at {path}.")
-            return None
-        try:
-            with open(path, encoding="utf-8") as f:
-                payload = json.load(f)
-        except (OSError, ValueError) as exc:
-            print(f"[PROPOSALS ERROR] {path} 无法读取或不是有效 JSON：{exc}")
-            return None
-        if not isinstance(payload, dict):
-            print(f"[PROPOSALS ERROR] {path} 顶层必须是对象（含 round_no/proposals）。")
-            return None
-
-        raw_round_no = payload.get("round_no")
-        if raw_round_no is None:
-            round_no = self.next_round_no()
-        elif isinstance(raw_round_no, bool):
-            print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
-            return None
-        else:
-            try:
-                round_no = int(raw_round_no)
-            except (TypeError, ValueError):
-                print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
-                return None
-            if round_no <= 0:
-                print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
-                return None
-        foreign_checkpoint = self._unfinished_checkpoint_except(round_no)
-        if foreign_checkpoint and not allow_unresolved_checkpoint:
-            print(
-                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign_checkpoint)}；"
-                "必须先以原 proposals.json 恢复，禁止开启新轮。"
-            )
-            return None
-        if foreign_checkpoint and allow_unresolved_checkpoint:
-            print(
-                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_checkpoint)} "
-                "及其原 progress_url；按用户明确授权开启新轮。"
-            )
-        checkpoint_path = self._proposal_checkpoint_path(round_no)
-        checkpoint = self._load_proposal_checkpoint(round_no)
-        if os.path.exists(checkpoint_path) and checkpoint is None:
-            # A malformed or mismatched checkpoint is still a recovery
-            # boundary. Never treat it as an absent checkpoint and issue a
-            # fresh POST for the same round.
-            print(
-                f"[CHECKPOINT ERROR] {checkpoint_path} 无法解析或轮次不匹配；"
-                "保留原文件，需先人工对账。"
-            )
-            return None
-        if checkpoint and not checkpoint.get("complete"):
-            return self._resume_proposal_checkpoint(checkpoint)
-        if checkpoint and checkpoint.get("complete"):
-            print(f"[CHECKPOINT COMPLETE] round {round_no} 已完成；不重新派发其中的 proposals。")
-            return None
-        proposal_list = payload.get("proposals") or []
-        if not isinstance(proposal_list, list):
-            print("[PROPOSALS ERROR] proposals 必须是数组；未执行任何提案。")
-            return None
-        if not proposal_list:
-            print("No proposals in file; nothing to run.")
-            return None
-        factory_batch = payload.get("batch_type") == "factory_100"
-        if factory_batch:
-            batch_ok, batch_errors = validate_factory_batch(
-                proposal_list,
-                target=self.factory_batch_size,
-                min_datasets=self.min_factory_datasets,
-                require_cross_dataset_pairs=self.min_cross_dataset_pairs > 0,
-            )
-            if not batch_ok:
-                print("[FACTORY BATCH BLOCKED] 整批不满足 100 题案契约：")
-                for problem in batch_errors:
-                    print(f"  - {problem}")
-                return None
-
-        hypothesis = payload.get("hypothesis")
-        if hypothesis is None:
-            hypothesis = {
-                "id": f"h-llm-r{round_no}",
-                "statement": payload.get("statement", "LLM-proposed research direction"),
-                "tags": ["llm", "proposal"],
-                "direction": "long",
-                "datasets": [],
-            }
-        elif not isinstance(hypothesis, dict):
-            print("[PROPOSALS ERROR] hypothesis 必须是对象；未执行任何提案。")
-            return None
-        else:
-            hypothesis = dict(hypothesis)
-        hypothesis["_round"] = round_no
-
-        terminal_expressions, terminal_fingerprints = self._terminal_identities(
-            [item.get("expression") for item in proposal_list
-             if isinstance(item, dict)]
+        """Compatibility facade for the guarded proposal workflow."""
+        self.proposal_execution.update_agent_config(
+            factory_batch_size=self.factory_batch_size,
+            min_factory_datasets=self.min_factory_datasets,
+            min_cross_dataset_pairs=self.min_cross_dataset_pairs,
+            candidates_per_round=self.candidates_per_round,
+            max_proposals_per_round=self.max_proposals_per_round,
+            research_allocation=self.research_allocation,
+            research_integrity=self.research_integrity,
+            max_field_alpha_count=self.max_field_alpha_count,
+            require_platform_alpha_count=self.require_platform_alpha_count,
         )
-        local_seen = set(terminal_expressions)
-        local_seen.update(terminal_fingerprints)
-        # 文件内部重复也要跳过；settings 变体仍保留为独立、可审计实验。
-        pending = [
-            e for e in self.trajectory.experiments
-            if e.status in ("UNKNOWN", "PENDING")
-        ]
-        if pending:
-            print(
-                f"[NOTE] {len(pending)} 个历史实验未完成（UNKNOWN/PENDING），"
-                f"其表达式已豁免去重，可在本轮重新提交。"
-            )
-        fresh = []
-        skipped = []
-        rejected = []
-        diversity_rejected = []
-        settings_rejected = []
-        loop_guard = ResearchLoopGuard(self.trajectory.experiments)
-        platform_usage = self._refresh_platform_field_usage(payload, proposal_list)
-        cached_field_types, cached_profiles = self._read_field_cache()
-        field_types = self._known_field_types(
-            payload, cached_field_types=cached_field_types
+        result = self.proposal_execution.run(
+            path=path,
+            allow_unresolved_checkpoint=allow_unresolved_checkpoint,
         )
-        # AGENTS.md permits fields from the current discovery bundle or the
-        # verified on-disk field library.  Keep current discovery authoritative
-        # while supplementing it with cache profiles for manually reviewed
-        # proposals from an unselected dataset.
-        discovered_profiles = {}
-        for field in (payload.get("suggestion_fields") or payload.get("fields") or []):
-            if isinstance(field, dict) and field.get("id"):
-                normalized_field = dict(field)
-                dataset = self._field_dataset_id(field)
-                if dataset is not None:
-                    normalized_field["dataset"] = dataset
-                key = (
-                    f"{dataset}::{field['id']}" if dataset is not None
-                    else str(field["id"])
-                )
-                discovered_profiles[key] = normalized_field
-        for field_id, field in cached_profiles.items():
-            dataset = self._field_dataset_id(field) if isinstance(field, dict) else None
-            key = (
-                f"{dataset}::{field.get('id')}" if dataset is not None and field.get("id")
-                else field_id
-            )
-            discovered_profiles.setdefault(key, field)
-        # A field cache is discovery metadata, not Simulation history.  If a
-        # live platform usage refresh was available, overlay only alphaCount
-        # and provenance onto the current bundle profiles.
-        for profile_key, profile in list(discovered_profiles.items()):
-            if not isinstance(profile, dict):
-                continue
-            field_id = profile.get("id")
-            dataset_id = profile.get("dataset")
-            dataset_usage = platform_usage.get(str(dataset_id), {})
-            usage = dataset_usage.get(str(field_id))
-            if usage is None:
-                continue
-            profile = dict(profile)
-            profile["alpha_count"] = usage.get("alpha_count")
-            profile["platform_dedupe"] = usage
-            discovered_profiles[profile_key] = profile
-        proposal_field_profiles = list(discovered_profiles.values())
-        completed_parent_index = self.trajectory.find_completed_expressions(
-            [item.get("parent_expression") for item in proposal_list
-             if isinstance(item, dict)]
-        )
-        candidate_event_records = []
-        for raw_proposal in proposal_list:
-            if not isinstance(raw_proposal, dict):
-                malformed = {"round": round_no, "expression": str(raw_proposal or "")}
-                malformed["candidate_id"] = candidate_identity(malformed, round_no=round_no)
-                candidate_event_records.append(malformed)
-                self._record_trial_phase(malformed, "candidate_generated", outcome="CONSIDERED")
-                self._record_candidate_rejection(malformed, "schema", "NOT_OBJECT", "proposal 必须是对象")
-                rejected.append((str(raw_proposal), ["proposal 必须是对象"]))
-                continue
-            # Keep input immutable on disk, but carry suggestion provenance
-            # into the durable experiment/checkpoint record.
-            p = dict(raw_proposal)
-            p["round"] = round_no
-            p["candidate_id"] = candidate_identity(p, round_no=round_no)
-            candidate_event_records.append(p)
-            self._record_trial_phase(p, "candidate_generated", outcome="CONSIDERED")
-            source = p.get("field_source") or payload.get("field_source")
-            if source is None:
-                for profile in discovered_profiles.values():
-                    if profile.get("field_source"):
-                        source = profile["field_source"]
-                        break
-            if source is not None:
-                p["field_source"] = source
-            expression = (p.get("expression") or "").strip()
-            if not expression:
-                self._record_candidate_rejection(p, "schema", "MISSING_EXPRESSION", "expression 不能为空")
-                continue
-            # 2026-08-22 用户政策（F>=10% 冲刺）：携带授权 settings 覆盖
-            # （universe/truncation/decay）的提案按「settings+表达式」组合键
-            # 去重——同一表达式在不同授权设置下是新实验；无 settings 的提案
-            # 维持裸表达式去重不变。
-            settings_override = p.get("settings")
-            if settings_override:
-                try:
-                    effective_settings = self._proposal_settings(settings_override)
-                except ValueError:
-                    # Preserve the later settings-specific diagnostic; this
-                    # fallback only prevents duplicate malformed rows within
-                    # the same inbox from multiplying work.
-                    effective_settings = settings_override
-                if isinstance(effective_settings, dict):
-                    dedup_key = "settings::" + submission_fingerprint(
-                        expression, effective_settings
-                    )
-                else:
-                    dedup_key = (
-                        "settings::" + json.dumps(settings_override, sort_keys=True)
-                        + "::" + canonical_expression(expression)
-                    )
-                if dedup_key in local_seen:
-                    self._record_candidate_rejection(p, "duplicate", "DUPLICATE_LOCAL", "同一表达式与设置已在本批出现")
-                    skipped.append(expression)
-                    continue
-                local_seen.add(dedup_key)
-            elif canonical_expression(expression) in local_seen:
-                self._record_candidate_rejection(p, "duplicate", "DUPLICATE_LOCAL", "同一规范化表达式已在本批出现")
-                skipped.append(expression)
-                continue
-            else:
-                local_seen.add(canonical_expression(expression))
-            ok, problems = validate_proposal(
-                p,
-                discovered_fields=proposal_field_profiles,
-                strict_experiment=True,
-                operator_reference=self.operator_reference,
-                require_research_evidence=bool(self.research_allocation),
-                require_economic_integrity=self.research_integrity,
-                max_alpha_count=self.max_field_alpha_count,
-                require_platform_alpha_count=self.require_platform_alpha_count,
-            )
-            type_ok, type_problems = validate_vector_inputs(p, field_types)
-            if not type_ok:
-                problems.extend(type_problems)
-                ok = False
-            if not ok:
-                self._record_candidate_rejection(p, "schema", "PREFLIGHT_REJECTED", "; ".join(problems))
-                rejected.append((expression, problems))
-                continue
-            if self.research_allocation:
-                if not (
-                    isinstance(source, dict)
-                    and source.get("kind") in {"local_catalog", "brain_api"}
-                    and "snapshot_date" in source
-                ):
-                    self._record_candidate_rejection(p, "field_source", "INVALID_FIELD_SOURCE", "field_source 必须声明 local_catalog/brain_api 及 snapshot_date")
-                    rejected.append((expression, [
-                        "field_source 必须声明 local_catalog/brain_api 及 snapshot_date"
-                    ]))
-                    continue
-                role = p.get("research_role")
-                if role not in RESEARCH_ROLES:
-                    self._record_candidate_rejection(p, "research_guard", "INVALID_RESEARCH_ROLE", "research_role 必须是 EXPLORE/EXPLOIT/VALIDATION")
-                    rejected.append((expression, [
-                        "research_role 必须是 EXPLORE/EXPLOIT/VALIDATION；FINAL_CHECK 是结果后的检查动作"
-                    ]))
-                    continue
-                parent = self._completed_parent(
-                    p.get("parent_expression"), completed_parent_index
-                )
-                if role == "EXPLORE" and p.get("experiment_stage") != "BASELINE":
-                    self._record_candidate_rejection(p, "research_guard", "EXPLORE_STAGE_MISMATCH", "EXPLORE 必须是新的 BASELINE")
-                    rejected.append((expression, ["EXPLORE 必须是新的 BASELINE"]))
-                    continue
-                if role in {"EXPLOIT", "VALIDATION"} and parent is None:
-                    self._record_candidate_rejection(p, "research_guard", "PARENT_NOT_DONE", f"{role} 缺少已完成 parent_expression")
-                    rejected.append((expression, [
-                        f"{role} 只能引用已完成的 parent_expression，不能在同一批提案中预支结果"
-                    ]))
-                    continue
-                if role == "VALIDATION":
-                    parent_verdict = self.reflector._classify(parent).get("label")
-                    if parent_verdict not in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}:
-                        self._record_candidate_rejection(p, "research_guard", "PARENT_QUALITY_FAIL", "VALIDATION 的 parent 未通过质量门")
-                        rejected.append((expression, [
-                            "VALIDATION 的 parent 必须已通过质量门或为需审计的高信号"
-                        ]))
-                        continue
-            lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis.get("id")
-            lineage_decision = self.memory.lineage_decision(lineage_id)
-            # STOP ends further exploration.  It permits only one explicitly
-            # labelled robustness check to distinguish a knife-edge result
-            # from a durable mechanism; KILL blocks every further spend.
-            blocked = (
-                lineage_decision == "KILL"
-                or (lineage_decision == "STOP" and p.get("experiment_stage") != "ROBUSTNESS")
-            )
-            if blocked:
-                self._record_candidate_rejection(p, "lineage", f"LINEAGE_{lineage_decision}", f"lineage {lineage_id!r} 已标记 {lineage_decision}")
-                diversity_rejected.append((
-                    expression,
-                    [f"lineage {lineage_id!r} 已标记 {lineage_decision}，不再消耗探索预算"],
-                ))
-                continue
-            guard_ok, guard_reason = loop_guard.check(
-                p, default_lineage=p.get("lineage_id") or hypothesis.get("id")
-            )
-            if not guard_ok:
-                self._record_candidate_rejection(p, "research_guard", "LOOP_GUARD", guard_reason)
-                diversity_rejected.append((expression, [guard_reason]))
-                continue
-            try:
-                effective_settings = self._proposal_settings(p.get("settings"))
-            except ValueError as exc:
-                self._record_candidate_rejection(p, "settings", "INVALID_SETTINGS", str(exc))
-                settings_rejected.append((expression, [str(exc)]))
-                continue
-            p.setdefault(
-                "proposal_id",
-                "p-" + submission_fingerprint(expression, effective_settings)[:16],
-            )
-            fresh.append(p)
-        # Each field family gets a core candidate plus at most one explicit
-        # perturbation.  This blocks window sweeps while still permitting a
-        # falsification test.  Remaining candidates are ordered by a small,
-        # declared information-value heuristic and capped by the config.
-        diverse = []
-        diverse_records = []
-        family_counts = {}
-        allocation_counts = {role: 0 for role in RESEARCH_ROLES}
-        historical_pool = list(self.trajectory.experiments)
-        role_max = (self.research_allocation.get("maximum", {})
-                    if self.research_allocation else {})
-        for p in fresh:
-            self.search_policy.annotate(p, historical_pool + diverse_records)
-        for p in sorted(
-            fresh,
-            key=lambda item: (self.search_policy.priority(item), proposal_priority(item)),
-            reverse=True,
-        ):
-            role = p.get("research_role")
-            if role in role_max and allocation_counts.get(role, 0) >= int(role_max[role]):
-                self._record_candidate_rejection(p, "diversity", "ARM_ROLE_CAP", f"{role} 已达到本轮动态上限 {role_max[role]}")
-                diversity_rejected.append((
-                    p["expression"], [f"{role} 已达到本轮动态上限 {role_max[role]}"]
-                ))
-                continue
-            fields = extract_fields(p["expression"], p.get("fields") or [])
-            # External adapters are allowed to omit template metadata.  Do
-            # not let a different sibling field turn an identical operator /
-            # window skeleton into a new family and consume the whole batch.
-            # Prefer the explicit template family when present; otherwise
-            # use the field-independent structural key.
-            family = p.get("template_family")
-            if not isinstance(family, (str, int)) or not str(family).strip():
-                family = structural_family_key(p["expression"], p.get("fields") or fields)
-            family = str(family)
-            if factory_batch:
-                # Applying one catalog mechanism to independently verified
-                # fields is breadth, not a numeric parameter sweep.  Scope
-                # the admission cap to the actual field set so a popular
-                # mechanism family cannot starve the 100-slot cross-field
-                # factory batch.
-                field_scope = ",".join(sorted(set(fields)))
-                family = f"{family}:{field_scope}"
-            family_cap = 4 if factory_batch else 2
-            if family_counts.get(family, 0) >= family_cap:
-                self._record_candidate_rejection(p, "diversity", "DIVERSITY_FAMILY_CAP", f"signal family {family!r} 已达本批上限 {family_cap}")
-                diversity_rejected.append((
-                    p["expression"],
-                    [f"signal family {family!r} 已达本批上限 {family_cap}，拒绝参数挖掘"],
-                ))
-                continue
-            record = {
-                "expression": p["expression"],
-                "fields_used": fields,
-                "template_id": p.get("template_id"),
-            }
-            # Keep the exact same simple redundancy rule, but retain the
-            # already-extracted records instead of rebuilding/parsing the
-            # entire accepted prefix for every candidate; pairwise similarity
-            # checks remain necessary, but repeated field parsing is removed.
-            redundant, keeper = is_redundant(record, diverse_records)
-            distinct_factory_templates = (
-                factory_batch
-                and record.get("template_id")
-                and isinstance(keeper, dict)
-                and keeper.get("template_id")
-                and record["template_id"] != keeper["template_id"]
-            )
-            distinct_factory_field_scope = (
-                factory_batch
-                and isinstance(keeper, dict)
-                and set(record.get("fields_used") or [])
-                != set(keeper.get("fields_used") or [])
-            )
-            if redundant and not (
-                distinct_factory_templates or distinct_factory_field_scope
-            ):
-                self._record_candidate_rejection(p, "diversity", "DIVERSITY_REDUNDANT", "与本轮更高优先级候选近重复")
-                diversity_rejected.append((p["expression"], ["与本轮更高优先级候选近重复"]))
-                continue
-            if not self.search_policy.accept(p):
-                allocator = self.search_policy.allocator
-                budget_exhausted = allocator.consumed_budget >= allocator.total_budget
-                self._record_candidate_rejection(
-                    p,
-                    "simulation_budget" if budget_exhausted else "arm",
-                    "SIMULATION_BUDGET" if budget_exhausted else "ARM_ADMISSION",
-                    "Simulation budget 已耗尽" if budget_exhausted else "同一 dataset/mechanism research arm 已有待定或预留预算",
-                )
-                diversity_rejected.append((
-                    p["expression"],
-                    ["同一 dataset/mechanism research arm 已有待定或预留预算"],
-                ))
-                continue
-            self._record_trial_phase(p, "candidate_admitted", outcome="ADMITTED")
-            family_counts[family] = family_counts.get(family, 0) + 1
-            if role in allocation_counts:
-                allocation_counts[role] += 1
-            diverse.append(p)
-            diverse_records.append(record)
-        if factory_batch:
-            # A factory batch is an atomic 100-proposal unit.  Ordinary
-            # per-round defaults must not silently trim it to six (or another
-            # agent-sized cap); an undersized factory budget blocks the whole
-            # batch before any POST instead.
-            allocation_cap = self.factory_batch_size
-        else:
-            try:
-                allocation_cap = int(
-                    self.research_allocation.get("max_simulations", self.candidates_per_round)
-                )
-            except (TypeError, ValueError):
-                allocation_cap = self.candidates_per_round
-        candidates_cap = self.factory_batch_size if factory_batch else self.candidates_per_round
-        hard_cap = self.factory_batch_size if factory_batch else self.max_proposals_per_round
-        budget_cap = proposal_budget_cap(
-            candidates_cap, allocation_cap,
-            hard_cap=hard_cap,
-        )
-        budget_rejected = diverse[budget_cap:]
-        fresh = diverse[:budget_cap]
-        # Local batch trimming releases admission only; it must not consume
-        # Simulation budget or enter UCB's evaluated denominator.
-        for p in budget_rejected:
-            self._record_candidate_rejection(p, "batch_budget", "BATCH_CAP", "本地 batch cap 淘汰，未承诺 Simulation")
-            self.search_policy.release(p, status="SKIPPED_LOCAL")
-        if self.research_allocation:
-            role_max = self.research_allocation.get("maximum", {})
-            role_counts = {role: 0 for role in RESEARCH_ROLES}
-            for p in fresh:
-                role = p.get("research_role")
-                if role in role_counts:
-                    role_counts[role] += 1
-            role_errors = []
-            for role, maximum in role_max.items():
-                if role_counts.get(role, 0) > int(maximum):
-                    role_errors.append(
-                        f"{role} 有 {role_counts.get(role, 0)}，超过动态上限 {maximum}"
-                    )
-            if role_errors:
-                print("[ALLOCATION BLOCKED] 本轮不提交 Simulation：")
-                for problem in role_errors:
-                    print(f"  - {problem}")
-                return None
-            print(
-                "[ALLOCATION] 动态分配 "
-                + ", ".join(f"{role}={role_counts.get(role, 0)}"
-                             for role in sorted(RESEARCH_ROLES))
-            )
-        if factory_batch and (
-            len(fresh) != self.factory_batch_size
-            or rejected or skipped or diversity_rejected
-            or settings_rejected or budget_rejected
-        ):
-            problems = (
-                f"factory batch 需要 {self.factory_batch_size} 个全部预检通过的题案，"
-                f"当前可执行 {len(fresh)} 个；不允许部分提交"
-            )
-            print(f"[FACTORY BATCH BLOCKED] {problems}")
-            self.last_run_stats = {
-                "accepted": 0,
-                "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
-                "skipped": len(skipped),
-                "status": "FACTORY_BATCH_BLOCKED",
-                "rejection_counts": {
-                    "preflight": len(rejected),
-                    "duplicate": len(skipped),
-                    "diversity": len(diversity_rejected),
-                    "settings": len(settings_rejected),
-                    "budget": len(budget_rejected),
-                },
-            }
-            return None
-        committed = []
-        for p in fresh:
-            if self.search_policy.commit(p):
-                committed.append(p)
-                self._record_trial_phase(p, "simulation_committed", outcome="COMMITTED")
-            else:
-                self._record_candidate_rejection(p, "simulation_budget", "BUDGET_COMMIT_FAILED", "最终执行集合无法承诺 Simulation budget")
-                # A failed final commit is a local admission failure.  Close
-                # the provisional reservation immediately so it cannot
-                # occupy an arm slot until process restart.
-                self.search_policy.release(p, status="SKIPPED_LOCAL")
-        if len(committed) != len(fresh):
-            fresh = committed
-        if diversity_rejected:
-            print(f"[DIVERSITY BLOCKED] {len(diversity_rejected)} 个提案未进入模拟：")
-            for expr, problems in diversity_rejected:
-                print(f"  - {expr[:70]} -> {'; '.join(problems)}")
-        if budget_rejected:
-            print(
-                f"[BUDGET BLOCKED] 仅执行优先级最高的 {budget_cap} 个提案；"
-                f"{len(budget_rejected)} 个未消耗 simulation。"
-            )
-        print(f"\n=== Round {round_no} (LLM proposals) ===")
-        print(f"Hypothesis: {hypothesis['statement']}")
-        if skipped:
-            print(f"skipped already-simulated: {len(skipped)}")
-        if rejected:
-            print(f"[PREFLIGHT BLOCKED] {len(rejected)} 提案未通过生产预检：")
-            for expr, problems in rejected:
-                print(f"  - {expr[:70]} -> {'; '.join(problems)}")
-        if settings_rejected:
-            print(f"[SETTINGS BLOCKED] {len(settings_rejected)} 提案设置不合法，拒绝模拟：")
-            for expr, problems in settings_rejected:
-                print(f"  - {expr[:70]} -> {'; '.join(problems)}")
-
-        if not fresh:
-            self.last_run_stats = {
-                "accepted": 0,
-                "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
-                "skipped": len(skipped),
-                "status": (
-                    "PREFLIGHT_BLOCKED" if rejected or settings_rejected or diversity_rejected
-                    else "ALREADY_SIMULATED"
-                ),
-                "rejection_counts": {
-                    "preflight": len(rejected),
-                    "duplicate": len(skipped),
-                    "diversity": len(diversity_rejected),
-                    "settings": len(settings_rejected),
-                    "budget": len(budget_rejected),
-                },
-            }
-            if rejected and not skipped:
-                print("所有提案均未通过生产预检；请补齐字段、字段画像、"
-                      "算子证据、实验阶段和谱系元数据后重试。")
-            else:
-                print("All proposals already simulated before; nothing to run.")
-            self.memory.register_hypothesis(hypothesis)
-            self.memory.save()
-            self._last_round_skipped = True
-            self._save_state(None)
-            self._write_context()
-            return None
-        self._last_round_skipped = False
-        self.memory.best_exhausted = False
-        self.last_run_stats = {
-            "accepted": len(fresh),
-            "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
-            "skipped": len(skipped),
-            "status": "READY_TO_SIMULATE",
-        }
-
-        experiments = []
-        # suggestions bundle 顶层字段键是 "fields"；兼容旧约定 "suggestion_fields"。
-        known_ids = list(discovered_profiles)
-        for p in fresh:
-            fields = p.get("fields") or known_ids
-            # 只保留提案声明字段里表达式实际用到的（含辅助腿），
-            # 避免把未使用的 discovery 字段记进 fields_used 造成信号族误判。
-            if fields:
-                fields = extract_fields(p["expression"], fields)
-            datasets = p.get("datasets") or []
-            exp = Experiment(
-                round_no,
-                hypothesis["id"],
-                p["expression"],
-                self._proposal_settings(p.get("settings")),
-                fields,
-                datasets=datasets,
-            )
-            exp.candidate_id = p.get("candidate_id") or candidate_identity(p, round_no=round_no)
-            exp.submission_fingerprint = submission_fingerprint(
-                exp.expression, exp.settings
-            )
-            exp.proposal_id = p.get("proposal_id") or (
-                "p-" + exp.submission_fingerprint[:16]
-            )
-            exp.field_source = p.get("field_source")
-            exp.field_understanding = p.get("field_understanding")
-            exp.field_analysis = p.get("field_analysis")
-            exp.field_hypothesis_basis = p.get("field_hypothesis_basis")
-            exp.operator_evidence = p.get("operator_evidence")
-            exp.template_id = p.get("template_id")
-            exp.template_family = p.get("template_family")
-            exp.template_stage_path = p.get("template_stage_path")
-            exp.template_ref = p.get("template_ref")
-            exp.template_slots = p.get("template_slots")
-            exp.search_evidence = p.get("search_evidence")
-            exp.novelty_score = p.get("novelty_score")
-            exp.allocation_arm = self.search_policy.allocator.arm_key(p)
-            exp.allocation_key = self.search_policy.allocator.proposal_key(p)
-            exp.factory_session_id = p.get("factory_session_id")
-            exp.proposal_origin = p.get("proposal_origin") or (
-                "factory" if factory_batch else "agent"
-            )
-            exp.research_layer = p.get("research_layer") or {
-                "EXPLOIT": "optimization",
-                "EXPLORE": "exploration",
-            }.get(p.get("research_role"))
-            exp.mutation = p.get("mutation") or "agent-proposed"
-            exp.lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis["id"]
-            exp.experiment_stage = p.get("experiment_stage")
-            exp.research_role = p.get("research_role")
-            exp.change_type = p.get("change_type") or "baseline"
-            exp.parent_expression = p.get("parent_expression")
-            # Preserve an explicitly Agent-authored next-child hypothesis in
-            # the active trajectory so the next factory pass can evaluate it;
-            # CheckpointStore intentionally strips result-side/extra payloads.
-            exp.child_economic_hypothesis = p.get("child_economic_hypothesis")
-            exp.changed_variable = p.get("changed_variable")
-            exp.expected_failure_modes = list(p.get("expected_failure_modes") or [])
-            exp.tuning_risk = p.get("tuning_risk")
-            exp.rationale = p.get("rationale") or p.get("hypothesis") or ""
-            exp.direction = p.get("direction")
-            exp.expected_horizon = p.get("expected_horizon")
-            exp.falsification = p.get("falsification")
-            exp.economic_mechanism = p.get("economic_mechanism")
-            exp.direction_transform = p.get("direction_transform")
-            exp.self_correlation_impact = p.get("self_correlation_impact")
-            exp.validation_plan = p.get("validation_plan")
-            if exp.experiment_stage == "ROBUSTNESS" and exp.validation_plan is None:
-                # The proposal contract normally rejects this earlier.  Keep
-                # the construction boundary fail-closed for direct callers.
-                raise ValueError("ROBUSTNESS 缺少预注册 validation_plan")
-            experiments.append(exp)
-            self._record_trial_phase(exp, "generated", outcome="PENDING")
-            self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
-            self._record_trial_phase(exp, "preflight_accepted", outcome="ACCEPTED")
-            self.memory.remember_expression(exp.expression)
-
-        self.memory.register_hypothesis(hypothesis)
-        checkpoint_path = self._proposal_checkpoint_path(round_no)
-        self._write_proposal_checkpoint(
-            round_no, hypothesis, experiments, complete=False
-        )
-        _round_t0 = time.time()
-        self.trajectory.begin_append_batch(experiments)
-        try:
-            self.simulator.run(
-                experiments,
-                on_complete=self._record_live_result,
-                on_update=lambda exp: self._on_simulation_update(
-                    exp, round_no, hypothesis, experiments
-                ),
-            )
-        finally:
-            self.trajectory.end_append_batch()
-        _round_elapsed = time.time() - _round_t0
-        unresolved = [
-            exp for exp in experiments
-            if exp.status in UNRESOLVED_STATUSES
-        ]
-        if unresolved:
-            for exp in experiments:
-                self.search_policy.release(
-                    {"proposal_id": exp.allocation_key, "expression": exp.expression,
-                     "dataset_family": exp.datasets, "template_family": exp.template_family},
-                    status="UNKNOWN" if exp.status in UNKNOWN_STATUSES else "PENDING",
-                )
-            self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
-            self._write_sims_results(round_no, experiments, total_elapsed_sec=_round_elapsed)
-            print(
-                f"[CHECKPOINT] {len(unresolved)} 个任务未定论，已保留 {checkpoint_path}；"
-                "下次运行同一 proposals.json 只会恢复轮询，绝不重复 POST。"
-            )
-            return None
-        # Preserve undispatched PENDING jobs too: terminal-expression recovery
-        # uses them to avoid permanently deduping work paused by a local fault.
-        self.trajectory.add_many(experiments)
-        for exp in experiments:
-            self.search_policy.release(
-                {"proposal_id": exp.allocation_key, "expression": exp.expression,
-                 "dataset_family": exp.datasets, "template_family": exp.template_family},
-                status="DONE" if exp.status == "DONE" else exp.status,
-                reward=(exp.metrics or {}).get("fitness", 0.0) if isinstance(exp.metrics, dict) else 0.0,
-            )
-
-        self._refresh_self_correlation_evidence(experiments)
-        self._mark_robustness_stability(experiments)
-        summary = self.reflector.reflect(
-            round_no, hypothesis, experiments,
-            validation_candidates=getattr(self, "_validation_candidates", None),
-        )
-        self._sync_submission_pool(experiments)
-        state = ResearchState(
-            round_no=round_no,
-            hypothesis=hypothesis,
-            dataset=sorted({d for e in experiments for d in e.datasets}),
-            fields_used=[f for e in experiments for f in e.fields_used],
-        )
-        self._save_state(state)
-        self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=True)
-        self._write_context()
-        self._print_summary(summary)
-        self._write_sims_results(round_no, experiments, total_elapsed_sec=_round_elapsed)
-        print(
-            f"[ELAPSED] Round {round_no} 模拟总耗时 {_round_elapsed/60:.1f} 分钟"
-            f"（{len(experiments)} 个模拟，3 并发真实计时）"
-        )
-        return summary
+        self.last_run_stats = dict(self.proposal_execution.last_run_stats)
+        return result
 
     # ----------------------------------------------------- crash recovery
 
     def _proposal_checkpoint_path(self, round_no):
-        return self.checkpoints.path(round_no)
+        """Compatibility wrapper; checkpoint ownership is the workflow's."""
+        return self.proposal_execution._proposal_checkpoint_path(round_no)
 
     def skip_stale_reconciled(self, round_no, simulation_id, min_attempts=3):
-        """Close one known remote job after repeated read-only STALE results.
-
-        This is an execution-state maintenance action, not a research
-        verdict.  The exact remote id is required, the evidence is read from
-        the append-only reconciliation history, and no POST is possible here.
-        """
-        checkpoint = self._load_proposal_checkpoint(int(round_no))
-        if not checkpoint or checkpoint.get("complete"):
-            raise ValueError(f"round {round_no} has no unfinished checkpoint")
-        history_path = os.path.join(self.state_dir, "reconcile_history.jsonl")
-        attempts = []
-        for row in iter_jsonl_objects(history_path):
-            if (row.get("simulation_id") == simulation_id
-                    and row.get("outcome") in {"STALE", "UNKNOWN"}):
-                attempts.append(row)
-        if len(attempts) < int(min_attempts):
-            raise ValueError(
-                f"only {len(attempts)} read-only STALE/UNKNOWN reconciliations; "
-                f"need {min_attempts}"
-            )
-        experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
-        matches = [
-            exp for exp in experiments
-            if (exp.progress_url or "").rstrip("/").split("/")[-1] == simulation_id
-        ]
-        if len(matches) != 1:
-            raise ValueError(f"expected one checkpoint experiment for {simulation_id}, found {len(matches)}")
-        exp = matches[0]
-        if exp.status not in RECOVERABLE_STATUSES:
-            raise ValueError(f"simulation {simulation_id} is already {exp.status}")
-        last = attempts[-1]
-        exp.status = "SKIPPED_STALE"
-        exp.skip_record = {
-            "reason": "repeated_read_only_reconciliation_stale_or_unknown",
-            "simulation_id": simulation_id,
-            "attempts": len(attempts),
-            "outcomes": [a.get("outcome") for a in attempts],
-            "last_reconciled_at": last.get("reconciled_at"),
-            "skipped_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "research_decision": "N/A",
-        }
-        exp.error = "SKIPPED_AFTER_REPEATED_STALE_RECONCILIATION"
-        unresolved = [
-            e for e in experiments
-            if e.status in UNRESOLVED_STATUSES
-        ]
-        self._write_proposal_checkpoint(
-            int(round_no), checkpoint.get("hypothesis") or {}, experiments,
-            complete=not unresolved,
+        return self.proposal_execution.skip_stale_reconciled(
+            round_no, simulation_id, min_attempts=min_attempts
         )
-        self.trajectory.add(exp)
-        audit_path = os.path.join(self.state_dir, "stale_skip_log.jsonl")
-        append_jsonl_if_unique(
-            audit_path,
-            {
-                "round_no": int(round_no),
-                "experiment_id": exp.id,
-                "expression": exp.expression,
-                "progress_url": exp.progress_url,
-                **exp.skip_record,
-            },
-            ("round_no", "experiment_id", "reason"),
-        )
-        print(f"[SKIP] r{round_no} {simulation_id} -> SKIPPED_STALE; attempts={len(attempts)}")
-        print(f"[SKIP] audit -> {audit_path}")
-        return exp
 
     def skip_submit_unknown_authorized(self, round_no, proposal_id):
-        """Record an explicitly authorized skip for an unresolved POST.
-
-        This is only for a user-directed terminal transport action when no
-        remote simulation id/progress URL exists.  It never retries the POST;
-        the proposal id and fingerprint remain in the audit record.
-        """
-        checkpoint = self._load_proposal_checkpoint(int(round_no))
-        if not checkpoint or checkpoint.get("complete"):
-            raise ValueError(f"round {round_no} has no unfinished checkpoint")
-        experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
-        matches = [e for e in experiments if e.proposal_id == proposal_id]
-        if len(matches) != 1:
-            raise ValueError(f"expected one checkpoint experiment for {proposal_id}, found {len(matches)}")
-        exp = matches[0]
-        if exp.status != "SUBMIT_UNKNOWN":
-            raise ValueError(f"proposal {proposal_id} is {exp.status}, not SUBMIT_UNKNOWN")
-        exp.status = "SKIPPED_UNKNOWN"
-        exp.skip_record = {
-            "reason": "user_authorized_skip_after_repeated_read_only_reconciliation",
-            "proposal_id": proposal_id,
-            "submission_fingerprint": exp.submission_fingerprint,
-            "remote_id": None,
-            "read_only_reconciliation": "no_unique_remote_record",
-            "skipped_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "research_decision": "N/A",
-        }
-        exp.error = "SKIPPED_AFTER_USER_AUTHORIZED_SUBMIT_UNKNOWN"
-        unresolved = [e for e in experiments if e.status in UNRESOLVED_STATUSES]
-        self._write_proposal_checkpoint(int(round_no), checkpoint.get("hypothesis") or {}, experiments, complete=not unresolved)
-        self.trajectory.add(exp)
-        audit_path = os.path.join(self.state_dir, "stale_skip_log.jsonl")
-        append_jsonl_if_unique(
-            audit_path,
-            {"round_no": int(round_no), "experiment_id": exp.id,
-             "expression": exp.expression, "progress_url": exp.progress_url,
-             **exp.skip_record},
-            ("round_no", "experiment_id", "reason"),
+        return self.proposal_execution.skip_submit_unknown_authorized(
+            round_no, proposal_id
         )
-        print(f"[SKIP] r{round_no} {proposal_id} -> SKIPPED_UNKNOWN; user-authorized")
-        print(f"[SKIP] audit -> {audit_path}")
-        return exp
 
     def finalize_recorded_round(self, round_no):
-        """Diagnose a completed round from append-only trajectory evidence.
-
-        Used only when a transport-recovery action completed a checkpoint but
-        interrupted the round-level reflection.  It never submits or rewrites
-        trajectory records; DONE evidence wins over a transport-only skipped
-        duplicate for the same expression.
-        """
-        self._ensure_loaded()
-        rows = [e for e in self.trajectory.experiments if e.round == int(round_no)]
-        if not rows:
-            raise ValueError(f"no trajectory evidence for round {round_no}")
-        selected = {}
-        for exp in rows:
-            old = selected.get(exp.expression)
-            rank = {"UNKNOWN": 0, "PENDING": 0, "SUBMITTING": 0, "RUNNING": 0,
-                    "SKIPPED_STALE": 1, "SKIPPED_UNKNOWN": 1, "FAILED": 1, "DONE": 2}
-            if old is None or rank.get(exp.status, 0) > rank.get(old.status, 0):
-                selected[exp.expression] = exp
-        experiments = list(selected.values())
-        active = [e for e in experiments if e.status in UNRESOLVED_STATUSES]
-        if active:
-            raise ValueError(f"round {round_no} still has unresolved experiments")
-        checkpoint = self._load_proposal_checkpoint(int(round_no)) or {}
-        hypothesis = checkpoint.get("hypothesis") or {"id": f"h-llm-r{round_no}", "_round": int(round_no)}
-        self._refresh_self_correlation_evidence(experiments)
-        self._mark_robustness_stability(experiments)
-        summary = self.reflector.reflect(
-            int(round_no), hypothesis, experiments,
-            validation_candidates=getattr(self, "_validation_candidates", None),
-        )
-        self._sync_submission_pool(experiments)
-        state = ResearchState(
-            round_no=int(round_no), hypothesis=hypothesis,
-            dataset=sorted({d for e in experiments for d in e.datasets}),
-            fields_used=[f for e in experiments for f in e.fields_used],
-        )
-        self._save_state(state)
-        self._write_context()
-        audit_path = os.path.join(self.state_dir, "round_finalization_log.jsonl")
-        append_jsonl_if_unique(
-            audit_path,
-            {"round_no": int(round_no), "selected": len(experiments),
-             "finalized_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-             "source": "trajectory_append_only"},
-            ("round_no", "source"),
-        )
-        print(f"[FINALIZE] r{round_no} diagnosed {len(experiments)} recorded terminal experiments")
-        print(f"[FINALIZE] audit -> {audit_path}")
-        return summary
+        return self.proposal_execution.finalize_recorded_round(round_no)
 
     def _unfinished_checkpoint_except(self, round_no):
-        """Return another unfinished checkpoint, if any.
-
-        A different round with pending work is an exactly-once boundary, not
-        stale housekeeping: starting a new proposal file could otherwise
-        consume slots while a previous POST is still ambiguous.
-        """
-        return self.checkpoints.unfinished_except(round_no)
+        return self.proposal_execution._unfinished_checkpoint_except(round_no)
 
     def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete):
-        """Atomically persist execution state around every POST/poll update."""
-        return self.checkpoints.write(round_no, hypothesis, experiments, complete)
+        return self.proposal_execution._write_proposal_checkpoint(
+            round_no, hypothesis, experiments, complete
+        )
 
     def _load_proposal_checkpoint(self, round_no):
-        return self.checkpoints.load(round_no)
+        return self.proposal_execution._load_proposal_checkpoint(round_no)
 
     def _resume_proposal_checkpoint(self, checkpoint):
-        """Resume only known BRAIN jobs; unknown submits remain budget-held."""
-        round_no = checkpoint["round_no"]
-        hypothesis = checkpoint.get("hypothesis") or {"id": f"h-llm-r{round_no}"}
-        experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
-        runnable = [
-            exp for exp in experiments
-            if exp.status in RECOVERABLE_STATUSES
-        ]
-        unresolved = [exp for exp in experiments if exp.status == "SUBMIT_UNKNOWN"]
-        print(f"\n=== Round {round_no} checkpoint resume ===")
-        if unresolved:
-            print(
-                f"[SUBMIT_UNKNOWN] {len(unresolved)} 个 POST 结果不明，已保留预算槽，"
-                "不会重发；需先做平台侧只读对账。"
-            )
-            # An ambiguous POST blocks every new submission in this batch.
-            # Known progress URLs remain safe to poll read-only so already
-            # submitted jobs can settle without growing the batch.
-            runnable = [exp for exp in runnable if exp.progress_url]
-        if runnable:
-            self.trajectory.begin_append_batch(runnable)
-            try:
-                self.simulator.run(
-                    runnable,
-                    on_complete=self._record_live_result,
-                    on_update=lambda exp: self._on_simulation_update(
-                        exp, round_no, hypothesis, experiments
-                    ),
-                )
-            finally:
-                self.trajectory.end_append_batch()
-        unresolved = [
-            exp for exp in experiments
-            if exp.status in UNRESOLVED_STATUSES
-        ]
-        if unresolved:
-            self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
-            self._write_sims_results(round_no, experiments)
-            return None
-        self.trajectory.add_many(experiments)
-        self._refresh_self_correlation_evidence(experiments)
-        self._mark_robustness_stability(experiments)
-        summary = self.reflector.reflect(
-            round_no, hypothesis, experiments,
-            validation_candidates=getattr(self, "_validation_candidates", None),
-        )
-        self._sync_submission_pool(experiments)
-        state = ResearchState(
-            round_no=round_no,
-            hypothesis=hypothesis,
-            dataset=sorted({d for exp in experiments for d in exp.datasets}),
-            fields_used=[f for exp in experiments for f in exp.fields_used],
-        )
-        self._save_state(state)
-        self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=True)
-        self._write_context()
-        self._print_summary(summary)
-        self._write_sims_results(round_no, experiments)
-        return summary
+        return self.proposal_execution.resume_checkpoint(checkpoint)
+
 
     def _read_field_cache(self):
         """Read the on-disk field cache once for types and verified profiles."""

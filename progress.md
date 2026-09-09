@@ -114,3 +114,20 @@
 - fresh review 返回 2 个 Critical 与 3 个 Suggestions：已修复 inline legacy 参数、smoke runtime exit code、README/prompt/Agent 用户提示和对应测试覆盖；中途引入的 docstring 缩进错误已即时修复。
 - 最终验证：`python -m unittest discover -s tests` 为 508 tests OK；compileall、Ruff、`git diff --check` 均通过；canonical help、doctor、audit、preflight 均已执行。
 - 完成审计中曾发现 `proposal_contract.py` 提示字符串更新造成的缩进回归（一次 compileall/test 失败）；已恢复合法缩进，py_compile、Ruff 和随后全量 508 tests 均重新通过。
+
+## 2026-09-09 第三阶段：提案执行工作流抽离
+
+- 已读取本阶段附件要求；阶段目标是 Extract Method / Extract Class，不是改写 execution engine。
+- 已重新 `git fetch origin main`，确认开始 SHA 为 `1b87ce007133010d91cf6ab8e4be8b7423c85295`，远端与本地一致，工作树干净。
+- 已读取项目根/包级规则、规划技能、TDD、系统化调试、代码审查和完成前验证要求。
+- 已记录待迁移调用图入口与关键安全关键词；下一步先完成执行相关源码/测试读取和 characterization red tests。
+- 已完成 required execution source/test 阅读与调用图记录；新增 `tests/test_proposal_execution.py`，先红后绿锁定缺失/损坏 proposals、非法 round、foreign checkpoint、complete checkpoint、facade delegation 和 workflow 依赖方向。
+- 已新增 `wqb_agent/proposal_execution.py` 的 `ProposalExecutionContext`、`ProposalExecutionHooks`、`ProposalExecutionWorkflow`，并将 Agent 的 proposal run/recovery/maintenance 方法改为 facade/wrapper。
+- 定向回归 `tests.test_agent_flow tests.test_recovery tests.test_factory_boundaries tests.test_runtime_safety tests.test_architecture tests.test_agent_evaluation tests.test_proposal_safety tests.test_robustness_audit`：205 tests OK。
+- 全量回归首次为 515 tests、1 个测试夹具错误（facade mock Agent 未提供动态配置属性）；该错误不属于生产路径，已补齐夹具，准备重新运行全量。
+- 兼容性修复：保留 `wqb_agent.agent` 对 `validate_proposal`、`validate_vector_inputs`、`RECOVERABLE_STATUSES` 的历史 re-export，并删除抽离后确认未使用的内部 import；Ruff 恢复为 0 errors。
+- 第二次全量验证为 516 tests OK；focused proposal execution 为 8 tests OK；compileall、Ruff、`git diff --check` 均通过。
+- fixtures 验证：`state doctor` exit 0、`config_valid=true`、`checkpoint_consistency=PASS`；`state audit` exit 0、`ok=true`、`blocking=false`。未触碰真实 `.wqb_state` 或远程 Simulation。
+- 已更新根/包级 AGENTS 与 `docs/ARCHITECTURE_AGENT.md`，明确 Workflow/Agent facade/Simulator/Client/CheckpointStore owner boundary；独立架构审查已完成。
+- fresh architecture review 发现 1 个 Important：抽离遗漏 `_last_round_skipped` 与 `memory.best_exhausted` 的 Agent-owned iteration state 更新；已增加显式 hooks、回归测试，并保留旧分支的更新顺序/语义。
+- 修复后 focused proposal execution 为 10 tests OK，Ruff 通过；新增直接 Workflow checkpoint recovery 与 Agent facade 等价性断言，确认 SUBMIT_UNKNOWN 无 URL 不产生 POST 且 checkpoint 仍未完成。

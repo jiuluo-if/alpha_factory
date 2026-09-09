@@ -13,7 +13,7 @@
 
 ## 不变量
 
-- `Agent.run_proposals()` 仍是受保护的 Simulation 路径。
+- `ProposalExecutionWorkflow` 是 proposal 预检、checkpoint 恢复、Simulation 调度前后编排和终态结算的唯一工作流；`Agent.run_proposals()` 仅保留兼容 facade。工作流不得导入 `Agent` 或直接调用 `client.submit_simulation`，真实提交仍由 `Simulator` 持有，checkpoint 持久化仍由 `CheckpointStore` 持有。
 - POST 前持久化 identity/checkpoint；写结果含糊时只轮询或对账同一 job，绝不重复 POST。Simulation 结果与 Alpha 证据不落盘；远端 Alpha 仅以轻量 ID/状态/时间戳按滚动 7 日写入 `.alpha_feed_cache/weekly.json`。
 - 保留 Retry-After、锁、预算、schema、expression dedup 和 `UNKNOWN` / `UNAVAILABLE`。
 - 远端 Alpha 轻量元数据写入 `.alpha_feed_cache/weekly.json`：每 3 小时与提交 Alpha 同批刷新，按纽约本地日分桶，仅保留当前工作日前推 7 个自然日和 `11200（7*1600）` 条模拟元数据上限；每次刷新清理滚动窗口外和超时临时资源，并保留 `updated_at`/`expires_at`。不得写入指标、表达式、trajectory 或证据。

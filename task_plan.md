@@ -103,3 +103,20 @@
 ## 当前下一步
 
 阶段实现与验证已完成；未触碰 Client、Simulator、checkpoint、quota、研究状态或远程 Simulation，Agent 仅更新了面向用户的 CLI 提示文字。
+
+## 2026-09-09 第三阶段：抽离提案执行与恢复工作流
+
+目标：将 proposal execution / checkpoint recovery orchestration 从 `Agent` 抽出为独立的 `ProposalExecutionWorkflow`，保持输入、checkpoint、Simulation POST 次数、顺序、状态、输出和失败语义完全不变。
+
+- [x] 重新读取并记录执行调用图，区分执行专属 helper、Agent 共享 workflow、纯领域函数和 state owner
+- [x] 新增 characterization tests，锁定缺失/损坏 proposals、非法 round、foreign checkpoint、`SUBMIT_UNKNOWN` exactly-once、complete checkpoint 和 stats contract
+- [x] 建立窄依赖 `ProposalExecutionContext` / `ProposalExecutionWorkflow`，不反向导入 `Agent`，不新增第二条 Simulation POST 路径
+- [x] 分批迁移入口、checkpoint recovery、payload/round validation、dispatch/settlement orchestration；让 `Agent.run_proposals()` 成为兼容 facade
+- [x] 增加 facade delegation、直接 workflow 等价性、依赖方向、POST 次数和 `last_run_stats` 回归测试
+- [x] 更新 AGENTS/architecture 文档，明确 Agent、Workflow、Simulator、Client、CheckpointStore owner
+- [x] 完成定向测试、全量 unittest、compileall、Ruff、doctor/audit、diff check、fresh architecture review
+- [ ] 使用 `fix：`/`refactor：` 英文前缀加中文内容提交，并自动推送到 `origin/main`，重新确认远端 SHA
+
+## 本阶段当前下一步
+
+已完成调用图、红绿 characterization 测试、workflow 迁移、兼容边界复核、文档更新和独立审查；全量门已通过，下一步提交并推送后核对远端 SHA。

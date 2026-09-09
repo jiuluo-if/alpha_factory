@@ -82,6 +82,12 @@
 - 修复后的实际策略进一步细化为：`SUBMIT_UNKNOWN` 阻断无 URL 的 `PENDING`/未知任务，但允许仅带已知 `progress_url` 的任务进入只读轮询；真实 round 11 轮询证明 3 个已知任务均可安全收敛。
 - 3 个真实完成结果均为负向/需对账证据，不构成可用 Alpha：Sharpe `0.17、0.24、-0.35`，Fitness `0.04、0.05、-0.13`；分别出现 `LOW_SUB_UNIVERSE_SHARPE` 或 `CONCENTRATED_WEIGHT` 等失败检查，`SELF_CORRELATION` 均仍为 `PENDING`。
 
+## 第三阶段 fresh review 收敛（2026-09-09）
+
+- 独立架构审查无 Critical；发现 1 个 Important：抽离后的 Workflow 漏掉原 Agent 对 `_last_round_skipped` 与 `memory.best_exhausted` 的更新，可能改变后续 suggestion round 的方向耗尽判断。
+- 修复方式是向 `ProposalExecutionHooks` 增加两个 operation-shaped hook；拒绝/全跳过分支设置 `_last_round_skipped=True`，产生可执行提案分支设置为 `False` 并重置 `best_exhausted=False`，保持旧顺序和 fail-closed 语义。
+- 修复后新增直接 Workflow checkpoint recovery 与 facade 等价性测试；全量 518 tests、compileall、Ruff、doctor/audit、diff check 均通过。
+
 ## 配置边界收敛第一阶段发现（2026-09-09）
 
 - 唯一 CLI raw mutation 位于 `main.py:202-203`；normalize 调用在其后，故缺少 `agent` 的配置会以 `KeyError` 泄漏，而不是 `config.agent` 的统一 `ValueError`。
@@ -106,3 +112,18 @@
 - 活动 README、research prompt、Agent/proposal 用户提示和 CI 已切换到 canonical commands；测试/历史记录中的旧形式仅用于兼容验证或历史事实。
 - 最终证据：508 tests OK、compileall 0、Ruff 0、diff check 0；fixtures 上 state doctor/audit/preflight 均返回 0，分别为 `config_valid=true`、`ok=true`、`status=READY`。
 - review 未发现 Simulation POST、`SUBMIT_UNKNOWN`、checkpoint recovery、quota、research policy 或 typed config boundary 被触碰；这些路径仍由原有模块和安全测试覆盖。
+
+## 2026-09-09 第三阶段：提案执行工作流抽离基线
+
+- 远端重新确认：`HEAD=origin/main=1b87ce007133010d91cf6ab8e4be8b7423c85295`，提交为 `fix：收敛结构化 CLI 并保留兼容安全边界`，工作树干净。
+- 必读执行相关文件的规模已记录：`wqb_agent/agent.py` 2667 行/128083 字符；`simulator.py` 317 行；`checkpoints.py` 140 行；`state.py` 417 行；`trial_ledger.py` 437 行；`proposal_contract.py` 443 行；`research_guard.py` 194 行；`evidence.py` 268 行；`submission.py` 178 行；`runtime_components.py` 131 行。
+- `Agent.run_proposals()` 位于 `agent.py:727`；当前直接恢复边界包括 `_load_proposal_checkpoint()`、`_resume_proposal_checkpoint()`、`_write_proposal_checkpoint()`、`_proposal_checkpoint_path()`，并由恢复/维护入口继续调用这些 Agent private methods。
+- 当前安全边界：`_resume_proposal_checkpoint()` 对同 checkpoint 的 `SUBMIT_UNKNOWN` 只允许已有 `progress_url` 的任务只读轮询，过滤无 URL 的新 dispatch；`SUBMIT_UNKNOWN` 本身不自动 resend。
+- 当前架构边界待验证：新增 workflow 不得 import `Agent`，不得直接调用 `client.submit_simulation`，不得复制 checkpoint store、trajectory 或 trial ledger；远程 POST 继续由 `Simulator`/现有 transport owner 承担。
+- 当前不应触碰：`SuggestionWorkflow`、optimizer、CLI、Client、credential/config raw compatibility、state schema、Simulation settings、factory quota 和研究策略。
+
+## 第三阶段实现过程发现
+
+- TDD 红灯为 `ModuleNotFoundError: wqb_agent.proposal_execution`，确认新增 architecture/facade 测试不是误测；实现窄依赖 workflow 后 focused characterization 为 7 tests OK。
+- 第一轮定向回归暴露配置快照差异：旧测试在 Agent 构造后修改 `candidates_per_round`，workflow 若只保存初始化值会额外 POST；已增加 `update_agent_config()` 并在 facade 每次运行前同步兼容配置属性，定向 205 tests OK。
+- 新 workflow 的 remote execution 仍只调用注入的 `simulator.run()`；源码不 import Agent，也不包含 `submit_simulation(`，checkpoint 仍由注入的现有 `CheckpointStore` 负责。

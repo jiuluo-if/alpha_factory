@@ -68,3 +68,10 @@
 - 已核查颜色分类、自主优化和工厂预算调用链；未修改代码，未启动 Simulation。
 - 设计建议：settle 后即时颜色视图、整批收尾重算；Agent 只在有合格 DONE parent 和 `child_economic_hypothesis` 时生成 CHILD；新增按纽约本地日刷新的周预算控制。
 - 用户已确认当前阶段周上限按 `7*1600=11200`，每日上限 `1600`，按 `America/New_York` 本地日刷新；进入实现与分批上传阶段。
+
+## 2026-09-09 自主模拟双层实现
+
+- 已新增优化层代码初筛、Agent 经济机制/反过拟合二筛；云端轻量 Alpha 元数据仅提升已有本地完成证据的优先级。
+- 已新增探索层稳定种子随机化字段/经济模板组合，并标记 `signal_discovery`；未引入参数、窗口、权重或符号扫描。
+- 已将双层来源、目标和策略写入 `factory_batch_stats`/当前 proposals 审计视图，仍复用 `Agent.run_proposals()`。
+- 新增回归后全量测试为 477 tests OK；待完成 fresh review、compileall、Ruff、diff 检查和分批推送。

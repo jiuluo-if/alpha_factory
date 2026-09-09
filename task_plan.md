@@ -57,3 +57,11 @@
 ## 当前下一步
 
 等待当前 `python main.py --factory-run --factory-hours 0.5` 自然返回；只读核对 round 3 checkpoint、session、锁和进程，随后清理本轮构建缓存并完成最终验证记录。
+
+## 2026-09-09 自主模拟双层改造
+
+- [x] 经用户确认双层设计：优化层云端优先/本轮其次，代码初筛后 Agent 二筛；探索层大批量随机定位信号
+- [x] 用失败测试锁定稳定随机种子、层级标记、代码筛选和云端轻量元数据优先级
+- [x] 实现现有 AlphaFactory/Agent/FactoryRunner 双层边界，不新增状态机或执行入口
+- [x] 补充 batch stats、AGENTS/README/STATE_LAYOUT 约束
+- [ ] fresh code review、全量验证、分批提交并推送 main

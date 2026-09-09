@@ -73,3 +73,5 @@ python -m compileall -q wqb_agent scripts tests
 - `suggestions.json` 的 `optimizer_context` 是优化门禁的可审计摘要。只有 DONE、指标、字段审计元数据齐全，并由 Agent 明确提供 `child_economic_hypothesis` 时，才允许生成 `CHILD`/`agent_optimizer` 候选；参数、窗口、符号扫描不构成自主优化。
 - 当前阶段工厂本地配额为每周 `11200` 次（`7*1600`），每日 `1600` 次，按 `America/New_York` 本地日刷新。`factory_session.json` 只保存配额控制元数据；未完成 checkpoint 的恢复预留优先，不能通过新轮绕过。
 - `python main.py --sync-alpha-feed` 每次只读分页拉取当前工作日前推 7 个自然日的用户 Alpha：提交 Alpha 与模拟 Alpha 在同一刷新批次按纽约本地日分桶，写入 `.alpha_feed_cache/weekly.json`，保留 `updated_at`/`expires_at`，并按 `11200（7*1600）` 模拟元数据上限清理窗口外数据。
+
+自主 factory round 分成两个研究层：优化层优先使用云端轻量 Alpha 元数据命中的本地完成证据，再使用本轮完成证据；代码先做证据和反过拟合初筛，Agent 再确认新的经济机制。探索层由工厂使用稳定轮次种子进行大批量随机字段/模板组合，目标是定位信号而非扫描参数。两层共享 100 题案原子 gate、预算和 `Agent.run_proposals()`，`factory_batch_stats` 会记录层级与来源。

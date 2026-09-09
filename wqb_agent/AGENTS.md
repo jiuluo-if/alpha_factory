@@ -14,8 +14,9 @@
 ## 不变量
 
 - `Agent.run_proposals()` 仍是受保护的 Simulation 路径。
-- POST 前持久化 identity/checkpoint；写结果含糊时只轮询或对账同一 job，绝不重复 POST。模拟与 Alpha 结果不落盘，按 America/New_York 本地日只保留进程内缓存。
+- POST 前持久化 identity/checkpoint；写结果含糊时只轮询或对账同一 job，绝不重复 POST。Simulation 结果与 Alpha 证据不落盘；远端 Alpha 仅以轻量 ID/状态/时间戳按滚动 7 日写入 `.alpha_feed_cache/weekly.json`。
 - 保留 Retry-After、锁、预算、schema、expression dedup 和 `UNKNOWN` / `UNAVAILABLE`。
+- 远端 Alpha 轻量元数据写入 `.alpha_feed_cache/weekly.json`：每 3 小时与提交 Alpha 同批刷新，按纽约本地日分桶，仅保留当前工作日前推 7 个自然日和 `11200（7*1600）` 条模拟元数据上限；每次刷新清理滚动窗口外和超时临时资源，并保留 `updated_at`/`expires_at`。不得写入指标、表达式、trajectory 或证据。
 - Alpha submission 始终手工完成。
 
 研究空间轮换、搜索分配和候选优先级属于 `RESEARCH_POLICY`，不是 BRAIN 机制。

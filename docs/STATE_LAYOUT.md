@@ -11,8 +11,9 @@
 | 执行恢复 | `round_*.checkpoint.json`、`run.lock`（POSIX 另有 OS guard） | 提交状态、progress URL、锁和崩溃恢复依据 | OS owner 存活或存在未完成 checkpoint 时禁止新轮和移动 |
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写 |
 | 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、最近动作、`stop_requested` 和本地配额控制元数据 | 固定单文件；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`--factory-status` 只读，`--factory-stop` 原子请求安全停止；不按轮次复制 session/log |
-| 当日内存缓存 | 进程内 `DailyResearchCache` | 以 `America/New_York` 本地日分桶的模拟、Alpha 和颜色视图 | 跨纽约本地日自动清空；不写文件 |
-| 结果/提交侧车 | 不再生成 `sims_results.json`、`submission_pool.json`、`evidence_cache.json`、颜色 evidence | 模拟结果、已提交 Alpha 和颜色判定的临时视图 | 只在当日内存缓存中存在 |
+| 当日结果视图 | 进程内 `DailyResearchCache` | 当前进程内的模拟结果、Alpha 和颜色视图 | 跨纽约本地日自动清空；不写研究状态 |
+| 滚动 7 日 Alpha 元数据缓存 | `.alpha_feed_cache/weekly.json` | 远端提交/模拟 Alpha 的轻量 ID、状态、时间戳，按纽约本地日分桶 | 保留当前工作日前推 7 个自然日；`updated_at`/`expires_at`；模拟元数据上限 `11200（7*1600）`；每次同步清理窗口外和过期资源 |
+| 结果/提交侧车 | 不再生成 `sims_results.json`、`submission_pool.json`、`evidence_cache.json`、颜色 evidence | 模拟结果、提交证据和颜色判定的临时视图 | 只在当日进程内存中存在；远端 Alpha 轻量元数据另按滚动 7 日缓存保存 |
 | 发现缓存 | `fields_cache.json`、`platform_field_catalog_YYYYMMDD/` | 按纽约本地日固化的多数据集字段目录与字段快照；生产发现会只读刷新平台 `alphaCount` 做字段查重 | 只保存字段元数据、查询范围、哈希和平台使用量状态，不保存模拟/Alpha 结果；缺失平台计数在严格模式下不准入 |
 | 平台审计快照 | `active_alphas_YYYYMMDD.json`、`new_active_details_YYYYMMDD.json` | ACTIVE Alpha 辅助 provenance | 只作审计背景；平台当前响应优先 |
 | 隔离区 | `quarantine/` | 明确隔离的异常、备份或不可直接使用材料；例如 `quarantine/submission_pool_history/`、`quarantine/duplicate_round_summaries/` | 不得自动回流生产链 |
@@ -26,7 +27,7 @@
 
 ## 冲突仲裁与整理边界
 
-- 未完成传输状态以 checkpoint 为准；已确认实验事实以 BRAIN live response 为准；本地结果只存在当日内存缓存。
+- 未完成传输状态以 checkpoint 为准；已确认实验事实以 BRAIN live response 为准；研究结果仍只存在进程内视图，当周 Alpha 元数据仅按本表缓存规则落盘。
 - `context.md` 与 `experience.json` 是压缩决策视图，不得反向覆盖原始证据。
 - Experiment 的 `yearly_evidence` 是由已知 Alpha 的 aggregates 派生的年度稳定性证据；缺失或 `UNKNOWN` 不得解释为稳定通过。
 - Experiment 的 `validation_plan`/`validation_report` 记录预注册 robustness 变量与聚合判定；只有 report `PASS` 的 parent 才能为 `STABLE`、进入 `current_best` 或提交池。

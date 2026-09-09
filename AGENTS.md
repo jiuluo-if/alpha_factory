@@ -7,7 +7,7 @@
 - 先读：`AGENTS.md` → `wqb_agent/research_api.py` → 当前任务目标 → 一个直接依赖和一个测试；不要递归扫描仓库。
 - 只读上下文：`python main.py --agent-context --compact`；机器读取加 `--json`。它复用 takeover preflight/audit/doctor，`BLOCKED` 时只做对账/恢复，不启动 Simulation。
 - 唯一执行入口：`python main.py --suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py --run-proposals`；不得绕过 `Agent.run_proposals()`。
-- 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 结果按美国东部本地日仅作内存缓存，不在本地留存历史结果。
+- 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 的远端轻量元数据只按美国东部本地滚动 7 日窗口缓存，指标、轨迹、checkpoint 和证据不进入该缓存。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
 - 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。
 
@@ -23,7 +23,7 @@
 
 ### Research State
 
-checkpoint 保存未完成实验的恢复边界；trajectory、ledger、压缩上下文和结果视图只在当前进程内使用，不作为本地历史事实源。模拟/Alpha/颜色结果按 America/New_York 本地日做内存缓存，BRAIN live response 才是平台事实。
+checkpoint 保存未完成实验的恢复边界；trajectory、ledger、压缩上下文和结果视图仍是研究状态来源。远端 Alpha 仅额外生成 `.alpha_feed_cache/weekly.json` 轻量元数据视图：按 `America/New_York` 本地日分桶，只保留当前周，指标/表达式/证据不落入该缓存，BRAIN live response 才是平台事实。
 
 ### Evaluation
 
@@ -76,6 +76,13 @@ python main.py --run-proposals
 ```
 
 特殊诊断、reconciliation 和兼容 factory 命令不属于默认 mental model。任何远程 Simulation 操作必须沿现有安全路径，任何状态事实以 BRAIN live response 和 append-only 证据为准。
+
+## Alpha feed 定时约束
+
+- 每 3 小时工作周期执行一次 `python main.py --sync-alpha-feed`，再执行只读接管预检；提交 Alpha 与模拟 Alpha 必须同批次刷新。该约束由 Agent/代码遵守，不创建独立调度任务。
+- 同步必须分页拉取“当前工作日往前 7 个自然日”的数据，并按 `America/New_York` 本地日分桶；本地只保留轻量 ID、状态和时间戳，缓存更新时间写入 `updated_at`，过期时间写入 `expires_at`。
+- 周模拟元数据上限固定为 `11200（7*1600）`；超限时优先清理更早本地日，当前日优先保留。每次同步清理跨周缓存和超时临时资源。
+- 只有预检 `READY` 才能继续 `python main.py --factory-run --factory-hours 3`；`BLOCKED`、未完成 checkpoint、`SUBMIT_UNKNOWN` 或 stop 请求时只读对账并保持暂停。
 
 ## 修改与验证
 

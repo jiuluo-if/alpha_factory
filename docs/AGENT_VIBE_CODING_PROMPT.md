@@ -8,7 +8,7 @@
 
 ## 不可违反的边界
 
-1. Simulation 结果、已提交 Alpha、颜色判定、trajectory、trial ledger、experience、context 和 submission pool 只能存在于当前进程内的按 `America/New_York` 本地日分桶缓存；跨纽约午夜丢弃，禁止写结果侧车。
+1. Simulation 结果、Alpha 证据、颜色判定、trajectory、trial ledger、experience、context 和 submission pool 只能存在于当前进程内的按 `America/New_York` 本地日分桶缓存；远端 Alpha 的轻量 ID/状态/时间戳例外写入 `.alpha_feed_cache/weekly.json`，按当前工作日前推 7 个自然日保留并定期清理，禁止写结果侧车。
 2. 允许持久化的只有当前提案/发现输入、运行锁、单个工厂会话控制面和用于恢复远程任务的最小检查点。检查点只保留 proposal identity、表达式/设置指纹、状态、已知 progress URL、错误与恢复元数据；不得写 metrics、checks、Alpha payload 或结果副本。
 3. `SUBMIT_UNKNOWN` 不得重发；已知 progress URL 只能只读轮询/对账。未完成检查点优先恢复，禁止静默开新轮。
 4. Alpha 提交始终由用户手工完成。颜色分组只读真实 Alpha 证据，不触发提交。

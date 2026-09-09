@@ -14,7 +14,7 @@
 
 当前官方接口登记：`authentication`、`data_sets`、`data_fields`、`simulations`、已知 progress URL、`users/self/alphas`、`alphas`、`aggregates`、`self_correlation`、`prod_correlation`。
 
-`GET /users/self/alphas` 仅用于有界只读同步，按分页读取用户 Alpha 的 `id`、`status`、`dateCreated` 和 `dateSubmitted`；提交 Alpha 与本日模拟 Alpha 使用同一次刷新触发，按 `America/New_York` 本地日筛选，不写入结果侧车。
+`GET /users/self/alphas` 仅用于有界只读同步，按日期窗口分页读取用户 Alpha 的 `id`、`status`、`dateCreated` 和 `dateSubmitted`；提交 Alpha 与模拟 Alpha 使用同一次刷新触发，按当前工作日前推 7 个自然日及 `America/New_York` 本地日分桶。平台单窗口超过 1000 条时自动切分时间窗口；只写入轻量元数据缓存，不写入结果侧车。
 
 字段查重使用 `data_fields` 响应中的平台 `alphaCount`（兼容内部标准化键
 `alpha_count`）。查重键必须是 `(dataset_id, field_id)`，不能只用字段名；它表示字段在平台现有 Alpha 中的使用量，是本地不保留

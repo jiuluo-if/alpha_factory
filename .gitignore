@@ -30,6 +30,7 @@ local.*
 
 # Canonical research state and runtime evidence
 .wqb_state/
+.alpha_feed_cache/
 run.lock
 factory_session.json
 trajectory.jsonl

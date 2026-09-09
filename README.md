@@ -45,11 +45,36 @@ python main.py run-proposals
 
 ```text
 wqb_agent/research_api.py  # Agent-facing facade
+wqb_agent/runtime_policy.py       # AppConfig 到 Agent 运行时投影
+wqb_agent/runtime_components.py   # 唯一的基础领域组件
+wqb_agent/runtime_composition.py  # 两个 workflow 的显式组合边界
 wqb_agent/                 # BRAIN、执行、状态和评估实现
 main.py                    # 兼容 CLI 与安全入口
 docs/                      # 当前协议、研究政策与少量参考
 tests/                     # 核心安全不变量和可观察行为
 ```
+
+## Agent 运行时装配
+
+运行时配置和对象装配保持单向、分层：
+
+```text
+AppConfig
+  ↓ build_agent_runtime_policy()
+AgentRuntimePolicy
+  ↓ build_runtime_components()
+RuntimeComponents
+  ↓ Agent 提供显式 hooks
+AgentWorkflows
+  ├── SuggestionWorkflow（只读建议）
+  └── ProposalExecutionWorkflow（提案执行与恢复）
+```
+
+`AgentRuntimePolicy` 只保存 Agent 实际消费的已解析值，不复制完整
+`AppConfig`。`RuntimeComponents` 只拥有 memory、trajectory、ledger、discovery、
+simulator、checkpoint 等基础对象，不承担 workflow 编排；两个 workflow 共享这套对象，
+不会自行创建第二个 `Simulator`、`Trajectory` 或 `CheckpointStore`。Agent 仍投影旧的
+public attributes，以保持兼容 facade 和现有研究方法不变。
 
 ## 文档入口
 

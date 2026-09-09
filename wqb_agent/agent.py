@@ -29,7 +29,6 @@ from .metrics import (
 )
 from .proposal_contract import (
     SETTING_OVERRIDES,
-    FACTORY_BATCH_SIZE,
     _operator_reference,
     validate_proposal,  # noqa: F401 - compatibility export for legacy callers/tests
     validate_vector_inputs,  # noqa: F401 - compatibility export for legacy callers/tests
@@ -42,11 +41,12 @@ from .state import (
 from .submission import latest_active_snapshot, self_correlation_evidence
 from .submission import submission_eligibility
 from .runtime_components import build_runtime_components
-from .proposal_execution import ProposalExecutionContext, ProposalExecutionHooks, ProposalExecutionWorkflow
-from .suggestion_workflow import SuggestionHooks, SuggestionWorkflow
+from .proposal_execution import ProposalExecutionHooks
+from .suggestion_workflow import SuggestionHooks
+from .runtime_composition import AgentWorkflowHooks, build_agent_workflows
+from .runtime_policy import build_agent_runtime_policy
 from .behavior import extract_behavior_series
 from .alpha_pool import build_pool_snapshot
-from .incremental_policy import IncrementalValuePolicy
 from .incremental_value import build_incremental_value
 from .validation_report import (
     build_validation_report,
@@ -118,99 +118,90 @@ EXPLORATION_HYPOTHESES = [
 class Agent:
     def __init__(self, client, config):
         self.client = client
-        config = normalize_config(config)
-        runtime = config.runtime
-        self.simulation_settings = config.simulation_config.settings
-        self.factory_config = {
-            **runtime.factory,
-            "max_simulations": config.factory.max_simulations,
-            "max_runtime_sec": config.factory.max_runtime_sec,
-            "daily_simulation_cap": config.factory.daily_simulation_cap,
-            "weekly_simulation_cap": config.factory.weekly_simulation_cap,
-        }
-        self.state_dir = runtime.state_dir
-        self.max_rounds = runtime.max_rounds
-        self.candidates_per_round = runtime.candidates_per_round
-        # Keep ordinary runs at the historical 18 cap, while allowing the
-        # unattended factory to opt into a bounded 100-proposal batch.
-        self.max_proposals_per_round = runtime.max_proposals_per_round
-        # The factory batch size is a user-level invariant, not a tuning
-        # knob. Keep it fixed so a config cannot silently reintroduce small
-        # partial rounds.
-        self.factory_batch_size = FACTORY_BATCH_SIZE
-        self.research_allocation = dict(runtime.research_allocation)
-        self.research_integrity = runtime.research_integrity
-        self.fields_per_discovery = runtime.fields_per_discovery
-        self.pagination_limit = runtime.pagination_limit
-        self.max_pagination_pages = runtime.max_pagination_pages
-        self.poll_timeout_sec = runtime.poll_timeout_sec
-        self.context_experiments = runtime.context_experiments
-        self.correlation_refresh_window = runtime.correlation_refresh_window
-        self.quality_policy = runtime.quality
-        self.statistical_policy = dict(runtime.statistical_policy)
-        self.robustness_policy = dict(runtime.robustness_policy)
-        self.incremental_policy = IncrementalValuePolicy(
-            config.incremental_value.mode,
-            config.incremental_value.max_abs_correlation,
-            config.incremental_value.min_overlap,
+        app_config = normalize_config(config)
+        policy = build_agent_runtime_policy(app_config)
+        components = build_runtime_components(self.client, app_config)
+        self.runtime_policy = policy
+        self.runtime_components = components
+        self._install_policy(policy)
+        self._install_components(components)
+        self._init_iteration_state()
+        self._init_caches()
+        operator_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "..", "docs", "reference",
+                "OPERATORS_CHEATSHEET.md",
+            )
         )
-        self.max_field_alpha_count = runtime.max_field_alpha_count
-        self.require_platform_alpha_count = bool(
-            runtime.field_selection.get("require_platform_alpha_count", False)
-        )
-        self.min_factory_datasets = int(
-            runtime.field_selection.get("min_datasets", 1)
-        )
-        self.min_cross_dataset_pairs = int(
-            runtime.field_selection.get("min_cross_dataset_pairs", 0)
-        )
-        self.dataset_pool = list(
-            runtime.field_selection.get("dataset_pool") or []
-        )
-        operator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "docs", "reference", "OPERATORS_CHEATSHEET.md"))
         self.operator_reference = _operator_reference(operator_path)
-        components = build_runtime_components(self.client, config)
+        self._init_workflows()
+
+    def _install_policy(self, policy):
+        """将 resolved policy 集中投影为旧 Agent 兼容属性。"""
+        self.simulation_settings = policy.simulation_settings
+        self.factory_config = policy.factory_config
+        self.state_dir = policy.state_dir
+        self.max_rounds = policy.max_rounds
+        self.candidates_per_round = policy.candidates_per_round
+        self.max_proposals_per_round = policy.max_proposals_per_round
+        self.factory_batch_size = policy.factory_batch_size
+        self.research_allocation = policy.research_allocation
+        self.research_integrity = policy.research_integrity
+        self.fields_per_discovery = policy.fields_per_discovery
+        self.pagination_limit = policy.pagination_limit
+        self.max_pagination_pages = policy.max_pagination_pages
+        self.poll_timeout_sec = policy.poll_timeout_sec
+        self.context_experiments = policy.context_experiments
+        self.correlation_refresh_window = policy.correlation_refresh_window
+        self.quality_policy = policy.quality_policy
+        self.statistical_policy = policy.statistical_policy
+        self.robustness_policy = policy.robustness_policy
+        self.incremental_policy = policy.incremental_policy
+        self.max_field_alpha_count = policy.max_field_alpha_count
+        self.require_platform_alpha_count = policy.require_platform_alpha_count
+        self.min_factory_datasets = policy.min_factory_datasets
+        self.min_cross_dataset_pairs = policy.min_cross_dataset_pairs
+        self.dataset_pool = list(policy.dataset_pool)
+
+    def _install_components(self, components):
+        """将唯一的基础组件集中投影为现有 Agent 属性。"""
         self.search_policy = components.search_policy
         self.memory = components.memory
         self.trajectory = components.trajectory
         self.trial_ledger = components.trial_ledger
         self.builder = components.builder
-        self.alpha_factory = self.builder.factory
+        self.alpha_factory = components.builder.factory
         self.discovery = components.discovery
         self.simulator = components.simulator
         self.reflector = components.reflector
         self.checkpoints = components.checkpoints
         self.submission_pool = components.submission_pool
+
+    def _init_iteration_state(self):
+        """初始化构造期状态，确保 hooks 使用前已有完整状态。"""
         self._loaded = False
         self._last_round_skipped = False
-        # In-process accounting hook for the long-running factory.  It lets
-        # the session release candidates rejected by preflight without a
-        # second validation path or a second ledger.
         self.last_run_stats = {
             "accepted": 0, "rejected": 0, "skipped": 0,
             "status": "NOT_STARTED",
         }
+
+    def _init_caches(self):
+        """创建本进程缓存；缓存不承载 trajectory、指标或证据。"""
         self.daily_cache = DailyResearchCache()
         feed_cache_path = os.path.join(
             os.path.dirname(os.path.abspath(self.state_dir)),
-            ".alpha_feed_cache",
-            "weekly.json",
+            ".alpha_feed_cache", "weekly.json",
         )
         self.alpha_feed_cache = WeeklyAlphaFeedCache(
             feed_cache_path,
             weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
         )
-        self.suggestion_workflow = SuggestionWorkflow(
-            discovery=self.discovery,
-            memory=self.memory,
-            trajectory=self.trajectory,
-            alpha_factory=self.alpha_factory,
-            state_dir=self.state_dir,
-            fields_per_discovery=self.fields_per_discovery,
-            context_experiments=self.context_experiments,
-            simulation_settings=self.simulation_settings,
-            operator_reference=self.operator_reference,
-            hooks=SuggestionHooks(
+
+    def _build_workflow_hooks(self):
+        """集中绑定 Agent-owned 操作，不把 Agent 对象泄漏给 workflow。"""
+        return AgentWorkflowHooks(
+            suggestion=SuggestionHooks(
                 ensure_loaded=self._ensure_loaded,
                 next_round_no=self.next_round_no,
                 epoch_label=self.epoch_label,
@@ -220,59 +211,48 @@ class Agent:
                 optimizer_gate_report=self.optimizer_gate_report,
                 fallback_templates=lambda: list(EXPLORATION_HYPOTHESES) + list(SEED_HYPOTHESES),
             ),
-        )
-        self.proposal_execution = ProposalExecutionWorkflow(
-            ProposalExecutionContext(
-                state_dir=self.state_dir,
-                simulator=self.simulator,
-                trajectory=self.trajectory,
-                trial_ledger=self.trial_ledger,
-                checkpoints=self.checkpoints,
-                memory=self.memory,
-                search_policy=self.search_policy,
-                reflector=self.reflector,
-                hooks=ProposalExecutionHooks(
-                    ensure_loaded=self._ensure_loaded,
-                    next_round_no=self.next_round_no,
-                    terminal_identities=self._terminal_identities,
-                    refresh_platform_field_usage=self._refresh_platform_field_usage,
-                    read_field_cache=self._read_field_cache,
-                    known_field_types=self._known_field_types,
-                    proposal_settings=self._proposal_settings,
-                    completed_parent=self._completed_parent,
-                    record_trial_phase=self._record_trial_phase,
-                    record_candidate_rejection=self._record_candidate_rejection,
-                    on_simulation_update=self._on_simulation_update,
-                    record_live_result=self._record_live_result,
-                    refresh_self_correlation_evidence=self._refresh_self_correlation_evidence,
-                    mark_robustness_stability=self._mark_robustness_stability,
-                    sync_submission_pool=self._sync_submission_pool,
-                    save_state=self._save_state,
-                    write_context=self._write_context,
-                    print_summary=self._print_summary,
-                    write_sims_results=self._write_sims_results,
-                    validation_candidates=lambda: getattr(
-                        self, "_validation_candidates", None
-                    ),
-                    set_last_round_skipped=lambda value: setattr(
-                        self, "_last_round_skipped", value
-                    ),
-                    reset_best_exhausted=lambda: setattr(
-                        self.memory, "best_exhausted", False
-                    ),
+            proposal_execution=ProposalExecutionHooks(
+                ensure_loaded=self._ensure_loaded,
+                next_round_no=self.next_round_no,
+                terminal_identities=self._terminal_identities,
+                refresh_platform_field_usage=self._refresh_platform_field_usage,
+                read_field_cache=self._read_field_cache,
+                known_field_types=self._known_field_types,
+                proposal_settings=self._proposal_settings,
+                completed_parent=self._completed_parent,
+                record_trial_phase=self._record_trial_phase,
+                record_candidate_rejection=self._record_candidate_rejection,
+                on_simulation_update=self._on_simulation_update,
+                record_live_result=self._record_live_result,
+                refresh_self_correlation_evidence=self._refresh_self_correlation_evidence,
+                mark_robustness_stability=self._mark_robustness_stability,
+                sync_submission_pool=self._sync_submission_pool,
+                save_state=self._save_state,
+                write_context=self._write_context,
+                print_summary=self._print_summary,
+                write_sims_results=self._write_sims_results,
+                validation_candidates=lambda: getattr(
+                    self, "_validation_candidates", None
                 ),
-                operator_reference=self.operator_reference,
-                factory_batch_size=self.factory_batch_size,
-                min_factory_datasets=self.min_factory_datasets,
-                min_cross_dataset_pairs=self.min_cross_dataset_pairs,
-                candidates_per_round=self.candidates_per_round,
-                max_proposals_per_round=self.max_proposals_per_round,
-                research_allocation=self.research_allocation,
-                research_integrity=self.research_integrity,
-                max_field_alpha_count=self.max_field_alpha_count,
-                require_platform_alpha_count=self.require_platform_alpha_count,
-            )
+                set_last_round_skipped=lambda value: setattr(
+                    self, "_last_round_skipped", value
+                ),
+                reset_best_exhausted=lambda: setattr(
+                    self.memory, "best_exhausted", False
+                ),
+            ),
         )
+
+    def _init_workflows(self):
+        """用已存在的组件和 hooks 完成两个 workflow 的唯一装配。"""
+        workflows = build_agent_workflows(
+            components=self.runtime_components,
+            policy=self.runtime_policy,
+            operator_reference=self.operator_reference,
+            hooks=self._build_workflow_hooks(),
+        )
+        self.suggestion_workflow = workflows.suggestion
+        self.proposal_execution = workflows.proposal_execution
 
     # ------------------------------------------------------------ running
 

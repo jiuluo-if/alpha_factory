@@ -11,6 +11,8 @@
 
 `SuggestionWorkflow` 是 suggestion round 的唯一编排 owner：它负责 discovery fallback、suggestion bundle 组装、`suggestions.json` emission 和既有控制台输出；`Agent` 只保留高层研究规划 hooks 与兼容 facade。Workflow 通过显式依赖和窄 operation-shaped hooks 工作，不反向导入 `Agent`，不直接依赖 `Client`/`Simulator`/checkpoint，也不复制 `_last_round_skipped` 或 `memory.best_exhausted`。
 
+运行时装配的 owner 关系是：`AppConfig` → `AgentRuntimePolicy` → `RuntimeComponents` → `AgentWorkflows`。`build_agent_runtime_policy()` 集中解析 Agent 实际消费的配置投影；`RuntimeComponents` 只拥有基础领域对象；`runtime_composition.py` 只用既有组件和显式 hooks 创建 `SuggestionWorkflow` 与 `ProposalExecutionWorkflow`，不得反向导入 `Agent` 或重复构造组件。Agent 的旧 public attributes 可以继续保留，但必须集中投影自这套唯一对象图。
+
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 
 ## 不变量
@@ -31,7 +33,7 @@
 
 ## 验证
 
-For code changes run:
+代码修改后运行：
 
 ```powershell
 python -m unittest discover -s tests

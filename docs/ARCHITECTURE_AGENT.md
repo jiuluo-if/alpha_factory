@@ -38,12 +38,32 @@ trajectory 侧同样以 `observed_submitted` 表示 cumulative 状态，以
 
 ## 稳定概念与运行时映射
 
+- **运行时装配**：配置先由 `runtime_policy.py` 的 `build_agent_runtime_policy()` 从 `AppConfig` 解析为 Agent 执行投影，再由 `runtime_components.py` 构造唯一的基础领域对象，最后由 `runtime_composition.py` 使用 Agent 提供的显式 hooks 组合两个 workflow。`RuntimeComponents` 不拥有 workflow，也不反向依赖 Agent。
 - **BRAIN 接口**：由 `client.py`、`discovery.py` 和 `simulator.py` 实现；负责实时事实、Simulation 安全 POST 和已知 URL 轮询。
 - **提案执行工作流**：由 `proposal_execution.py` 的 `ProposalExecutionWorkflow` 负责 proposal 文件预检、去重/预算门、checkpoint、恢复和终态结算；`Agent.run_proposals()` 仅是兼容 facade。工作流通过显式 context/hooks 使用 Agent 组合的领域服务，不反向导入 `Agent`，不直接调用 Client POST。
 - **建议生成工作流**：由 `suggestion_workflow.py` 的 `SuggestionWorkflow` 负责 suggestion round、discovery fallback、bundle assembly、`suggestions.json` emission 和 console output；`Agent.run_suggestion_round()` 仅是兼容 facade。它只接收 discovery、memory、trajectory、alpha catalog 与窄研究规划 hooks，不依赖 Agent、Client、Simulator、checkpoint 或 proposal execution。
 - **Experiment**：一次可审计尝试，包含 hypothesis、expression、settings 和 evidence/result。`ExperimentSpec` 是轻量 agent 输入；旧 proposal contract 只作为兼容适配和校验边界。
 - **Research State**：由现有 trajectory、checkpoint、`TrialLedger` 和压缩 workspace 视图承担；facade 不创建第二个 store。
 - **Evaluation**：由 metrics、checks、yearly、correlation、robustness 和 statistical diagnostics 组成，描述证据，不替 Agent 选方向。
+
+运行时对象图如下：
+
+```text
+AppConfig
+  ↓ build_agent_runtime_policy()
+AgentRuntimePolicy
+  ↓ build_runtime_components()
+RuntimeComponents
+  ├── memory / trajectory / trial_ledger
+  ├── discovery / simulator / reflector
+  └── checkpoints / submission_pool / builder
+  ↓ AgentWorkflowHooks
+AgentWorkflows
+  ├── SuggestionWorkflow
+  └── ProposalExecutionWorkflow
+```
+
+两个 workflow 使用同一套 `RuntimeComponents` 身份；组合器不创建第二套状态、执行器或 checkpoint 路径。Agent 继续提供旧属性 projection，避免为了装配重构而大范围改变研究方法和安全执行代码。
 
 ## 机制与研究策略
 

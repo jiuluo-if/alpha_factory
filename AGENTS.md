@@ -37,6 +37,27 @@ checkpoint 保存未完成实验的恢复边界；trajectory、ledger、压缩�
 inspect → discover → hypothesize → run → evaluate → record → iterate
 ```
 
+## Agent 运行时装配边界
+
+运行时装配必须保持以下单向关系：
+
+```text
+AppConfig
+  ↓
+AgentRuntimePolicy
+  ↓
+RuntimeComponents
+  ↓
+Agent 提供显式 operation hooks
+  ├── SuggestionWorkflow
+  └── ProposalExecutionWorkflow
+```
+
+- `build_agent_runtime_policy()` 是 Agent 配置投影的唯一 owner；`Agent.__init__` 不得再次逐字段解释 `config.runtime`、`config.factory` 或 `field_selection`。
+- `RuntimeComponents` 只拥有已经解析的领域对象，不放入 workflow，也不反向导入 `Agent`；workflow composition 只能接收既有组件，不能重新构造 `Trajectory`、`TrialLedger`、`Simulator`、`CheckpointStore` 或 `SubmissionPool`。
+- `Agent` 可以保留 `self.memory`、`self.trajectory` 等兼容属性，但这些属性必须集中投影自同一组组件；两个 workflow 必须通过 identity tests 证明共享对象。
+- 不引入 DI/IoC 框架，不创建 `Workflow(agent=self)` 或 `hooks.get_attr` 逃生通道；hooks 必须是窄的、按操作定义的显式回调。
+
 ## Alpha 经济含义与自相关硬约束
 
 - 不生成固定多腿 `权重 * rank(ts_decay_linear(ts_zscore(...)))` 参数堆叠，不把窗口/权重/符号扫描包装成新发现。

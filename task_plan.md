@@ -143,3 +143,11 @@
 | `pip install ".[dev]"` 的隔离构建下载 `setuptools>=68` 返回 HTTP 403 | 1 | 保留声明的 dev extra；改用当前已安装工具并单独验证 `types-requests`，CI 使用标准安装路径 |
 | PowerShell 变量插值 `"$f:$start"` 被解析为非法变量引用 | 1 | 改用 `${f}` 分隔变量后重新读取目标代码 |
 | 批量 `Remove-Item -LiteralPath` 清理多个 coverage 生成物被执行策略拒绝 | 1 | 改为逐个、已核验的明确路径清理 |
+
+## 2026-09-09 FieldDiscovery scaling
+
+- [x] 写入并审查 FieldDiscovery scaling spec/plan
+- [x] 先写 pagination completeness、malformed response、中文 token、stratified sampling 和 artifact safety 回归
+- [x] 实现 MATRIX/VECTOR 独立 completeness、动态 dataset boundary 和 bounded candidate retrieval
+- [x] 输出透明 ranking provenance，不改变 Factory template semantics
+- [x] 完成全量 unittest、compileall、Ruff、diff review、提交并推送

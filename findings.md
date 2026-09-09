@@ -149,3 +149,12 @@
 - fresh verification：compileall exit 0；mypy exit 0；Ruff exit 0；`595 tests OK`；configured coverage `76.7%` 且 report exit 0；fixture doctor `config_valid=true`/exit 0；fixture audit `ok=true`/exit 0；compact context exit 0；`git diff --check` exit 0。
 - fresh review 未发现 Critical/Important；92 个 tracked 文件中多数仅为 import/安全现代化机械修复，手工改动集中在 typed annotations、等价格式化、B007 变量命名和 `from None` 异常包装。未触碰 Client retry、Simulation、SUBMIT_UNKNOWN、checkpoint、credentials source 选择、Alpha Feed/Color 或研究政策。
 - 默认 `python main.py context --compact --json` 仍报告既有真实 `.wqb_state/round_11.checkpoint.json`、`submit_unknown=1`、`workspace_status=BLOCKED`；本阶段未修改该研究状态，也未启动 live BRAIN/Simulation。
+
+## 2026-09-09 FieldDiscovery scaling
+
+- 原分页循环在 `max_pages` 用尽后没有 provenance，可能把 `count > loaded` 的部分结果当作完整目录；当前以平台 count、稳定 count、分页进展和 max-pages 共同决定 completeness。
+- MATRIX/VECTOR 现在各自记录 contract；聚合 catalog 只有两类都完整且所有已拉取 dataset 都完整时才为 `COMPLETE`，任何一个 dataset/type 不完整都保持 `INCOMPLETE`。
+- 当前 BRAIN client 已有 read-only `get_datasets()`，因此 discovery 使用动态 universe；无能力、异常、空或 malformed listing 时明确记为 fallback，并保留 `DATASET_CATEGORIES` seed。
+- 全量 field metadata 仍受分页预算约束；排序前先按 cheap lexical/coverage 候选截到默认 100，再做 semantic/coverage/alphaCount/random ranking，active `target_count` 未扩大。
+- catalog manifest 与 field profiles 只增加 metadata/completeness/ranking provenance；测试逐文件确认不含 `metrics` 或 `results`，未触碰 Simulation、Alpha submission、trajectory、checkpoint 或 Factory template semantics。
+- 并行 Alpha Factory 对话曾使中途全量测试出现其目标文件的 tuple/semantic 失败；其后已自修并报告全量 620 tests、compileall、mypy、Ruff、coverage 通过，本任务不包含其文件。

@@ -197,6 +197,137 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
         discovery = FieldDiscovery(MalformedClient(), pagination_limit=2, max_pages=2)
         self.assertEqual(discovery._fields_for("pv1"), [])
 
+    def test_pagination_completeness_is_separate_for_large_matrix_and_vector(self):
+        class LargeClient:
+            def __init__(self):
+                self.fields = {
+                    "MATRIX": [
+                        {"id": f"m_{index}", "type": "MATRIX"}
+                        for index in range(1001)
+                    ],
+                    "VECTOR": [
+                        {"id": f"v_{index}", "type": "VECTOR"}
+                        for index in range(1002)
+                    ],
+                }
+
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                rows = self.fields[field_type]
+                return rows[offset:offset + limit], len(rows)
+
+        discovery = FieldDiscovery(LargeClient(), pagination_limit=100, max_pages=20)
+        fields = discovery._fields_for("large")
+        completeness = discovery.source_provenance()["field_completeness"]["large"]
+
+        self.assertEqual(len(fields), 2003)
+        self.assertEqual(completeness["MATRIX"], {
+            "expected_count": 1001,
+            "loaded_count": 1001,
+            "complete": True,
+            "truncation_reason": None,
+        })
+        self.assertEqual(completeness["VECTOR"], {
+            "expected_count": 1002,
+            "loaded_count": 1002,
+            "complete": True,
+            "truncation_reason": None,
+        })
+
+    def test_max_pages_marks_type_truncated_instead_of_complete(self):
+        class LargeClient:
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                rows = [
+                    {"id": f"{field_type.lower()}_{index}", "type": field_type}
+                    for index in range(1001)
+                ]
+                return rows[offset:offset + limit], len(rows)
+
+        discovery = FieldDiscovery(LargeClient(), pagination_limit=50, max_pages=20)
+        discovery._fields_for("large")
+        provenance = discovery.source_provenance()
+
+        self.assertEqual(provenance["field_completeness"]["large"]["MATRIX"]["loaded_count"], 1000)
+        self.assertFalse(provenance["field_completeness"]["large"]["MATRIX"]["complete"])
+        self.assertEqual(
+            provenance["field_completeness"]["large"]["MATRIX"]["truncation_reason"],
+            "MAX_PAGES",
+        )
+        self.assertEqual(provenance["catalog_status"], "INCOMPLETE")
+
+    def test_incomplete_catalog_reload_preserves_truncation_provenance(self):
+        class LargeClient:
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                rows = [
+                    {"id": f"{field_type.lower()}_{index}", "type": field_type}
+                    for index in range(1001)
+                ]
+                return rows[offset:offset + limit], len(rows)
+
+        discovery = FieldDiscovery(
+            LargeClient(), pagination_limit=50, max_pages=20,
+            catalog_root=self._tmp,
+            cache_path=os.path.join(self._tmp, "fields_cache.json"),
+            persist_catalog=True,
+        )
+        discovery.discover({"datasets": ["large"], "statement": "matrix"}, 1)
+        reloaded = FieldDiscovery(
+            LargeClient(),
+            catalog_root=self._tmp,
+            cache_path=os.path.join(self._tmp, "reloaded_cache.json"),
+        )
+
+        provenance = reloaded.source_provenance()
+        self.assertEqual(provenance["catalog_status"], "INCOMPLETE")
+        self.assertFalse(provenance["field_completeness"]["large"]["MATRIX"]["complete"])
+        self.assertEqual(
+            provenance["field_completeness"]["large"]["MATRIX"]["truncation_reason"],
+            "MAX_PAGES",
+        )
+
+    def test_platform_count_above_loaded_is_count_underrun(self):
+        class UnderrunClient:
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                if offset == 0:
+                    return [{"id": f"{field_type.lower()}_0", "type": field_type}], 3
+                return [], 3
+
+        discovery = FieldDiscovery(UnderrunClient(), pagination_limit=50, max_pages=2)
+        discovery._fields_for("underrun")
+        completeness = discovery.source_provenance()["field_completeness"]["underrun"]
+
+        self.assertEqual(completeness["MATRIX"]["expected_count"], 3)
+        self.assertEqual(completeness["MATRIX"]["loaded_count"], 1)
+        self.assertFalse(completeness["MATRIX"]["complete"])
+        self.assertEqual(completeness["MATRIX"]["truncation_reason"], "COUNT_UNDERRUN")
+
+    def test_any_incomplete_dataset_keeps_catalog_incomplete(self):
+        class MixedClient:
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                if dataset_id == "truncated" and offset == 0:
+                    return [{"id": f"{field_type.lower()}_0", "type": field_type}], 2
+                if dataset_id == "truncated":
+                    return [], 2
+                return [{"id": f"complete_{field_type.lower()}", "type": field_type}], 1
+
+        discovery = FieldDiscovery(MixedClient(), pagination_limit=50, max_pages=2)
+        discovery._fields_for("truncated")
+        discovery._fields_for("complete")
+
+        self.assertEqual(discovery.source_provenance()["catalog_status"], "INCOMPLETE")
+
+    def test_malformed_pagination_is_fail_closed_with_provenance(self):
+        class MalformedClient:
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                return {"results": []}, 1
+
+        discovery = FieldDiscovery(MalformedClient(), pagination_limit=50, max_pages=2)
+        self.assertEqual(discovery._fields_for("malformed"), [])
+        completeness = discovery.source_provenance()["field_completeness"]["malformed"]
+
+        self.assertFalse(completeness["MATRIX"]["complete"])
+        self.assertEqual(completeness["MATRIX"]["truncation_reason"], "MALFORMED_PAGE")
+        self.assertEqual(completeness["VECTOR"]["truncation_reason"], "MALFORMED_PAGE")
+
     def test_malformed_hypothesis_and_field_metadata_degrade_safely(self):
         class MalformedClient:
             def get_datafields(self, *args, **kwargs):
@@ -435,6 +566,19 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
             set(manifest["datasets"]), {"pv1", "pv13", "option8"}
         )
         self.assertEqual(manifest["scope"]["region"], "USA")
+        self.assertEqual(manifest["catalog_status"], "COMPLETE")
+        self.assertTrue(manifest["field_completeness"]["pv1"]["MATRIX"]["complete"])
+        catalog_text = json.dumps(manifest, ensure_ascii=False).lower()
+        self.assertNotIn("metrics", catalog_text)
+        self.assertNotIn("results", catalog_text)
+        for filename in os.listdir(os.path.join(self._tmp, catalog_dirs[0])):
+            with open(
+                os.path.join(self._tmp, catalog_dirs[0], filename),
+                encoding="utf-8",
+            ) as handle:
+                self.assertNotIn("metrics", handle.read().lower())
+                handle.seek(0)
+                self.assertNotIn("results", handle.read().lower())
 
         reloaded_client = FakeClient()
         reloaded = FieldDiscovery(
@@ -450,6 +594,7 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
             target_count=3,
         )
         self.assertEqual(reloaded_client.datafield_calls, [])
+        self.assertEqual(reloaded.source_provenance()["catalog_status"], "COMPLETE")
 
     def test_same_field_id_from_two_datasets_is_not_collapsed_by_discovery(self):
         class SharedFieldClient(FakeClient):
@@ -502,6 +647,92 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
         self.assertIsNone(discovery._catalog_provenance)
         discovery._fields_for("pv1")
         self.assertTrue(self.client.datafield_calls)
+
+    def test_dynamic_dataset_listing_is_used_without_inventing_dataset_capability(self):
+        class DynamicClient(FakeClient):
+            def get_datasets(self):
+                return [{"id": "dynamic1", "name": "Dynamic dataset"}]
+
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                if dataset_id != "dynamic1":
+                    return [], 0
+                rows = [{
+                    "id": "dynamic_volume",
+                    "description": "dynamic volume",
+                    "type": field_type,
+                }]
+                return rows[offset:offset + limit], len(rows)
+
+        discovery = FieldDiscovery(
+            DynamicClient(), pagination_limit=2, max_pages=2,
+            selection_mode="semantic_random",
+        )
+        fields = discovery.discover({"statement": "volume"}, target_count=1)
+
+        self.assertEqual(fields[0]["dataset"], "dynamic1")
+        self.assertEqual(discovery.last_dataset_selection["pool"], ["dynamic1"])
+        self.assertEqual(
+            discovery.source_provenance()["dataset_universe"]["kind"],
+            "brain_api",
+        )
+
+    def test_chinese_hypothesis_produces_stable_useful_tokens(self):
+        tokens = FieldDiscovery._keywords_from_hypothesis({
+            "statement": "高成交量预测未来收益",
+            "tags": ["价格动量"],
+        })
+
+        self.assertIn("成交量", tokens)
+        self.assertIn("价格", tokens)
+        self.assertIn("动量", tokens)
+
+    def test_ranking_provenance_explains_each_selected_field(self):
+        discovery = FieldDiscovery(
+            self.client,
+            selection_mode="semantic_random",
+            random_fraction=0.25,
+            random_seed="ranking-provenance",
+        )
+        fields = discovery.discover(
+            {"statement": "trading volume", "tags": ["volume"]},
+            target_count=2,
+        )
+
+        self.assertTrue(fields)
+        for field in fields:
+            self.assertEqual(
+                set(field["ranking_provenance"]),
+                {
+                    "keyword_contribution",
+                    "coverage_contribution",
+                    "alpha_count_penalty",
+                    "random_exploration_contribution",
+                },
+            )
+
+    def test_candidate_pool_is_bounded_before_active_target_count(self):
+        class ManyFieldClient(FakeClient):
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                rows = [
+                    {
+                        "id": f"volume_{index}",
+                        "description": "volume field" if index < 150 else "other",
+                        "type": field_type,
+                    }
+                    for index in range(400)
+                ]
+                return rows[offset:offset + limit], len(rows)
+
+        discovery = FieldDiscovery(
+            ManyFieldClient(), pagination_limit=100, max_pages=10,
+            candidate_pool_size=100,
+        )
+        fields = discovery.discover(
+            {"statement": "volume", "datasets": ["pv1"]}, target_count=6
+        )
+
+        self.assertEqual(len(fields), 6)
+        self.assertLessEqual(discovery.last_dataset_selection["candidate_counts"]["pv1"], 100)
 
     def test_no_fake_fields(self):
         hypothesis = {

@@ -152,3 +152,13 @@
 - 代码审查无 Critical/Important；已确认 `SUBMIT_UNKNOWN`、Simulation path、credentials、Alpha Feed/Color、研究策略未变化。
 - 清理了本轮明确生成的 `coverage-baseline.json`、`coverage-current.json`、`.coverage`；未触碰 `.wqb_state`。默认真实 context 仍为 `BLOCKED`（round 11 checkpoint + 1 SUBMIT_UNKNOWN），按项目规则保持暂停。
 - 当前工作树保留质量门实现、文档/计划和 Ruff 机械 diff；未 commit、未 push，待用户明确授权。
+
+## 2026-09-09 FieldDiscovery scaling
+
+- 已读取并确认并行 Alpha Factory 对话的工作范围；不覆盖其 `wqb_agent/alpha_factory.py` 与 `tests/test_factory_boundaries.py`。
+- 先写失败测试并观察到 completeness、max-page、中文 token、dynamic dataset、candidate pool 和 ranking provenance 的预期红灯。
+- 已实现按 dataset/type 的 `expected_count`、`loaded_count`、`complete`、`truncation_reason`，以及 `COMPLETE/INCOMPLETE/LEGACY_UNVERIFIED` catalog provenance。
+- 已实现 MATRIX/VECTOR 独立状态、平台 `count` 一致性校验、max-pages 安全预算、malformed pagination fail-closed、scope-safe catalog reload。
+- 已实现 read-only `get_datasets()` 动态 universe 边界、`DATASET_CATEGORIES` fallback、每 dataset 默认 100 项 bounded candidate pool、中文/英文 token 和四项 ranking provenance。
+- fresh 验证：`python -m unittest discover -s tests` 为 620 tests OK；`python -m unittest tests.test_discovery` 为 36 tests OK；compileall、targeted Ruff 和 diff-check 通过。
+- 当前仅剩：只暂存本目标文件，配置 Git 邮箱，提交并推送后核对远端 SHA；不纳入并行 Alpha Factory 未提交文件。

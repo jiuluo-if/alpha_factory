@@ -11,6 +11,7 @@ import math
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -83,7 +84,8 @@ class FieldDiscovery:
                  random_seed="newwqb", platform_usage_refresh=False,
                  require_platform_alpha_count=False,
                  dataset_sampling="stratified", min_datasets=2,
-                 dataset_pool=None, persist_catalog=False):
+                 dataset_pool=None, persist_catalog=False,
+                 candidate_pool_size=100):
         """Field discovery with a two-level cache: in-memory (per run) and
         on-disk (cross-run, keyed by dataset id, TTL-bounded). A large
         pagination walk is only re-done when the cache is missing or stale,
@@ -114,14 +116,40 @@ class FieldDiscovery:
         except (TypeError, ValueError):
             self.random_fraction = 0.35
         self.random_seed = str(random_seed or "newwqb")
+        try:
+            self.candidate_pool_size = max(1, int(candidate_pool_size))
+        except (TypeError, ValueError):
+            self.candidate_pool_size = 100
         self.last_excluded_high_usage = []
         self.last_excluded_unknown_usage = []
         self._platform_usage_provenance = None
         self._platform_usage_status = {}
         self.last_dataset_selection = {}
+        self._field_completeness = {}
+        self._catalog_status = "UNKNOWN"
+        self._catalog_has_legacy_unverified = False
+        self._dataset_universe_provenance = {
+            "kind": "seed_fallback",
+            "source": "DATASET_CATEGORIES",
+        }
+        self._candidate_counts = {}
         self._catalog_provenance, catalog = self._load_latest_catalog(
             self.catalog_root
         )
+        if self._catalog_provenance:
+            self._field_completeness = deepcopy(
+                self._catalog_provenance.get("field_completeness") or {}
+            )
+            self._catalog_status = str(
+                self._catalog_provenance.get("catalog_status") or "UNKNOWN"
+            )
+            self._catalog_has_legacy_unverified = (
+                self._catalog_status == "LEGACY_UNVERIFIED"
+            )
+            self._dataset_universe_provenance = deepcopy(
+                self._catalog_provenance.get("dataset_universe")
+                or self._dataset_universe_provenance
+            )
         # 完整的本地目录是不可变字段证据源；旧 fields_cache 只作为
         # 没有目录时的跨运行回退，避免生产运行再次复制目录内容。
         self._using_catalog = self._catalog_provenance is not None
@@ -143,7 +171,12 @@ class FieldDiscovery:
         return normalized
 
     def _load_latest_catalog(self, catalog_root=None):
-        """Load the newest complete immutable catalog snapshot, if present."""
+        """Load the newest structurally valid metadata catalog, if present.
+
+        Completeness is data carried by the manifest, never inferred from the
+        presence of dataset files.  Legacy manifests remain readable for
+        compatibility but are explicitly marked ``LEGACY_UNVERIFIED``.
+        """
         root = catalog_root or (os.path.dirname(self.cache_path) if self.cache_path else None)
         if not root:
             return None, {}
@@ -215,18 +248,61 @@ class FieldDiscovery:
         if latest is None:
             return None, {}
         _name, directory, manifest, datasets = latest
+        field_completeness = manifest.get("field_completeness")
+        if not isinstance(field_completeness, dict):
+            field_completeness = {}
+        catalog_status = manifest.get("catalog_status", "LEGACY_UNVERIFIED")
+        if catalog_status == "COMPLETE" and not self._manifest_is_complete(
+            field_completeness, datasets
+        ):
+            catalog_status = "INCOMPLETE"
         return {
             "kind": "local_catalog",
             "path": os.path.abspath(directory),
             "snapshot_date": manifest.get("fetched_at"),
+            "catalog_status": catalog_status,
+            "field_completeness": field_completeness,
+            "dataset_universe": manifest.get("dataset_universe") or {
+                "kind": "legacy_catalog",
+                "source": "manifest",
+            },
         }, datasets
 
+    def _manifest_is_complete(self, field_completeness, datasets):
+        if not isinstance(field_completeness, dict) or not isinstance(datasets, dict):
+            return False
+        expected_types = set(self.FIELD_TYPES)
+        for dataset_id in datasets:
+            rows = field_completeness.get(dataset_id)
+            if not isinstance(rows, dict) or set(rows) != expected_types:
+                return False
+            for field_type in self.FIELD_TYPES:
+                row = rows.get(field_type)
+                if (
+                    not isinstance(row, dict)
+                    or not self._valid_platform_count(row.get("expected_count"))
+                    or not self._valid_platform_count(row.get("loaded_count"))
+                    or row["expected_count"] != row["loaded_count"]
+                    or row.get("complete") is not True
+                    or row.get("truncation_reason") is not None
+                ):
+                    return False
+        return bool(datasets)
+
     def source_provenance(self):
+        base = {
+            "kind": "brain_api",
+            "path": None,
+            "snapshot_date": None,
+        }
         if self._platform_usage_provenance:
-            return dict(self._platform_usage_provenance)
-        if self._catalog_provenance:
-            return dict(self._catalog_provenance)
-        return {"kind": "brain_api", "path": None, "snapshot_date": None}
+            base.update(self._platform_usage_provenance)
+        elif self._catalog_provenance:
+            base.update(self._catalog_provenance)
+        base["field_completeness"] = deepcopy(self._field_completeness)
+        base["catalog_status"] = self._catalog_status
+        base["dataset_universe"] = deepcopy(self._dataset_universe_provenance)
+        return base
 
     @staticmethod
     def _alpha_count(field):
@@ -336,12 +412,12 @@ class FieldDiscovery:
         }
 
     def _persist_field_catalog(self, dataset_ids):
-        """Write a complete metadata-only, New-York-day field snapshot.
+        """Write a metadata-only, New-York-day field snapshot.
 
         The catalog deliberately contains no Simulation, Alpha, metric, or
         submission payload.  Dataset files are written before the manifest, so
-        an interrupted write cannot be mistaken for a complete snapshot by the
-        loader.
+        an interrupted write cannot be mistaken for a valid snapshot by the
+        loader; completeness is carried explicitly in the manifest.
         """
         if not self.persist_catalog or not self.catalog_root:
             return None
@@ -387,13 +463,30 @@ class FieldDiscovery:
                 "field_count": len(fields),
                 "field_sha256": digest,
                 "status": self._platform_usage_status.get(dataset_id, "UNKNOWN"),
+                "completeness": deepcopy(
+                    self._field_completeness.get(dataset_id, {})
+                ),
             }
+        completeness = {
+            dataset_id: deepcopy(self._field_completeness.get(dataset_id, {}))
+            for dataset_id in normalized
+        }
+        if not completeness or any(
+            not rows or any(not row.get("complete") for row in rows.values())
+            for rows in completeness.values()
+        ):
+            catalog_status = "INCOMPLETE"
+        else:
+            catalog_status = "COMPLETE"
         manifest = {
-            "schema": 1,
+            "schema": 2,
             "kind": "platform_field_catalog",
             "fetched_at": fetched_at,
             "local_date": local_day,
             "scope": self._catalog_scope(),
+            "catalog_status": catalog_status,
+            "field_completeness": completeness,
+            "dataset_universe": deepcopy(self._dataset_universe_provenance),
             "datasets": manifest_datasets,
         }
         try:
@@ -421,6 +514,98 @@ class FieldDiscovery:
             scores.keys(), key=lambda c: (scores[c], CATEGORY_VALUE[c]), reverse=True
         )
 
+    @staticmethod
+    def _valid_platform_count(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    def _set_field_completeness(self, dataset_id, field_type, contract):
+        dataset_contract = self._field_completeness.setdefault(dataset_id, {})
+        dataset_contract[field_type] = dict(contract)
+        if self._catalog_has_legacy_unverified:
+            self._catalog_status = "LEGACY_UNVERIFIED"
+            return
+        expected_types = set(self.FIELD_TYPES)
+        if not self._field_completeness:
+            self._catalog_status = "UNKNOWN"
+        elif any(
+            set(rows) != expected_types or any(
+                not rows[field_type].get("complete") for field_type in expected_types
+            )
+            for rows in self._field_completeness.values()
+        ):
+            self._catalog_status = "INCOMPLETE"
+        elif all(
+            set(rows) == expected_types
+            and all(rows[field_type].get("complete") for field_type in expected_types)
+            for rows in self._field_completeness.values()
+        ):
+            self._catalog_status = "COMPLETE"
+        else:
+            self._catalog_status = "INCOMPLETE"
+
+    def _fetch_field_type(self, dataset_id, field_type):
+        contract = {
+            "expected_count": None,
+            "loaded_count": 0,
+            "complete": False,
+            "truncation_reason": None,
+        }
+        collected = []
+        try:
+            page_budget = max(1, int(self.max_pages))
+        except (TypeError, ValueError):
+            page_budget = 1
+        offset = 0
+        expected_count = None
+        for _page_number in range(page_budget):
+            try:
+                results, count = self.client.get_datafields(
+                    dataset_id,
+                    limit=self.pagination_limit,
+                    offset=offset,
+                    field_type=field_type,
+                )
+            except Exception:
+                contract["truncation_reason"] = "API_ERROR"
+                break
+            if not isinstance(results, list):
+                contract["truncation_reason"] = "MALFORMED_PAGE"
+                break
+            if not self._valid_platform_count(count):
+                contract["truncation_reason"] = (
+                    "MISSING_COUNT" if count is None else "INVALID_COUNT"
+                )
+                break
+            if expected_count is None:
+                expected_count = count
+                contract["expected_count"] = count
+            elif count != expected_count:
+                contract["truncation_reason"] = "COUNT_CHANGED"
+                break
+
+            previous_offset = offset
+            collected.extend(results)
+            contract["loaded_count"] += len(results)
+            if contract["loaded_count"] > expected_count:
+                contract["truncation_reason"] = "COUNT_OVERFLOW"
+                break
+            if contract["loaded_count"] == expected_count:
+                contract["complete"] = True
+                break
+            if not results:
+                contract["truncation_reason"] = "COUNT_UNDERRUN"
+                break
+            offset += len(results)
+            if offset <= previous_offset:
+                contract["truncation_reason"] = "NON_PROGRESS"
+                break
+        else:
+            contract["truncation_reason"] = "MAX_PAGES"
+        if not contract["complete"] and contract["truncation_reason"] is None:
+            contract["truncation_reason"] = "COUNT_UNDERRUN"
+        self._set_field_completeness(dataset_id, field_type, contract)
+        return collected
+
     def _fields_for(self, dataset_id, persist=True, force_refresh=False):
         if not force_refresh and dataset_id in self._cache:
             return self._cache[dataset_id]
@@ -429,27 +614,7 @@ class FieldDiscovery:
             return self._cache[dataset_id]
         collected = []
         for ftype in self.FIELD_TYPES:
-            offset = 0
-            total = None
-            type_collected = 0
-            for _ in range(self.max_pages):
-                results, count = self.client.get_datafields(
-                    dataset_id, limit=self.pagination_limit, offset=offset,
-                    field_type=ftype,
-                )
-                if not isinstance(results, list):
-                    # A malformed platform response is not a field catalogue;
-                    # stop this dataset without turning the whole factory into
-                    # an exception loop.
-                    break
-                collected.extend(results)
-                type_collected += len(results)
-                total = count
-                if not results or (
-                    total is not None and type_collected >= total
-                ):
-                    break
-                offset += len(results)
+            collected.extend(self._fetch_field_type(dataset_id, ftype))
         # 同一 dataset 的不同类型可能返回重复 id（极端情况），去重保序。
         seen_ids = set()
         deduped = []
@@ -507,31 +672,50 @@ class FieldDiscovery:
         }
         self._save_disk_cache()
 
-    def _score_field(self, field, keywords):
+    def _score_components(self, field, keywords):
         haystack_id = str(field.get("id") or "").lower()
         haystack_name = str(field.get("name") or "").lower()
         haystack_desc = str(field.get("description") or "").lower()
-        score = 0.0
-        for kw in keywords:
-            if kw in haystack_id:
-                score += 3.0
-            if kw in haystack_name:
-                score += 2.0
-            if kw in haystack_desc:
-                score += 1.0
-        # Catalog metadata is evidence, not a hard filter: coverage rewards
-        # usable history, while prior alpha usage is a small exploration cost.
+        keyword_contribution = self._keyword_contribution(
+            haystack_id, haystack_name, haystack_desc, keywords
+        )
+        coverage_contribution = 0.0
         try:
             coverage = float(field.get("coverage") or field.get("coveragePercentage") or 0.0)
-            score += min(2.0, max(0.0, coverage / 100.0))
+            coverage_contribution = min(2.0, max(0.0, coverage / 100.0))
         except (TypeError, ValueError):
             pass
+        alpha_count_penalty = 0.0
         try:
             alpha_count = float(self._alpha_count(field))
-            score -= min(1.5, math.log1p(max(0.0, alpha_count)) / 10.0)
+            alpha_count_penalty = min(1.5, math.log1p(max(0.0, alpha_count)) / 10.0)
         except (TypeError, ValueError):
             pass
-        return score
+        return {
+            "keyword_contribution": keyword_contribution,
+            "coverage_contribution": coverage_contribution,
+            "alpha_count_penalty": alpha_count_penalty,
+        }
+
+    @staticmethod
+    def _keyword_contribution(haystack_id, haystack_name, haystack_desc, keywords):
+        contribution = 0.0
+        for keyword in keywords:
+            if keyword in haystack_id:
+                contribution += 3.0
+            if keyword in haystack_name:
+                contribution += 2.0
+            if keyword in haystack_desc:
+                contribution += 1.0
+        return contribution
+
+    def _score_field(self, field, keywords):
+        components = self._score_components(field, keywords)
+        return (
+            components["keyword_contribution"]
+            + components["coverage_contribution"]
+            - components["alpha_count_penalty"]
+        )
 
     @staticmethod
     def _dataset_id(field):
@@ -541,29 +725,82 @@ class FieldDiscovery:
         return str(dataset) if isinstance(dataset, (str, int)) else None
 
     @staticmethod
-    def _keywords_from_hypothesis(hypothesis, limit=6):
+    def _keywords_from_hypothesis(hypothesis, limit=12):
         hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
         ordered = []
         seen = set()
 
         def push(word):
             w = str(word or "").lower()
-            if len(w) > 2 and w not in seen and w not in _STOPWORDS:
+            if len(w) > 1 and w not in seen and w not in _STOPWORDS:
                 seen.add(w)
                 ordered.append(w)
+
+        def push_text(text):
+            for piece in re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", text.lower()):
+                if re.fullmatch(r"[\u3400-\u9fff]+", piece):
+                    if len(piece) > 1:
+                        push(piece)
+                    # 3- and 2-character chunks tend to match domain terms
+                    # such as 成交量/价格, while 4-character chunks remain a
+                    # useful fallback for compound labels.
+                    for size in (3, 2, 4):
+                        for start in range(0, len(piece) - size + 1):
+                            push(piece[start:start + size])
+                else:
+                    push(piece)
 
         tags = hypothesis.get("tags")
         tags = tags if isinstance(tags, list) else []
         for tag in tags:
-            for piece in re.split(r"[^a-z0-9]+", str(tag or "").lower()):
-                if piece:
-                    push(piece)
-        for piece in re.split(
-            r"[^a-z0-9]+", str(hypothesis.get("statement") or "").lower()
-        ):
-            if piece:
-                push(piece)
+            push_text(str(tag or ""))
+        push_text(str(hypothesis.get("statement") or ""))
+        try:
+            limit = max(0, int(limit))
+        except (TypeError, ValueError):
+            limit = 12
         return ordered[:limit]
+
+    def _dynamic_dataset_ids(self):
+        getter = getattr(self.client, "get_datasets", None)
+        if not callable(getter):
+            self._dataset_universe_provenance = {
+                "kind": "seed_fallback",
+                "source": "DATASET_CATEGORIES",
+                "reason": "CLIENT_CAPABILITY_UNAVAILABLE",
+            }
+            return []
+        try:
+            payload = getter()
+        except Exception:
+            self._dataset_universe_provenance = {
+                "kind": "seed_fallback",
+                "source": "DATASET_CATEGORIES",
+                "reason": "DYNAMIC_LISTING_UNAVAILABLE",
+            }
+            return []
+        if not isinstance(payload, list):
+            self._dataset_universe_provenance = {
+                "kind": "seed_fallback",
+                "source": "DATASET_CATEGORIES",
+                "reason": "MALFORMED_DYNAMIC_LISTING",
+            }
+            return []
+        dataset_ids = self._normalize_dataset_ids(payload)
+        if not dataset_ids:
+            self._dataset_universe_provenance = {
+                "kind": "seed_fallback",
+                "source": "DATASET_CATEGORIES",
+                "reason": "EMPTY_DYNAMIC_LISTING",
+            }
+            return []
+        self._dataset_universe_provenance = {
+            "kind": "brain_api",
+            "source": "get_datasets",
+            "status": "KNOWN",
+            "count": len(dataset_ids),
+        }
+        return dataset_ids
 
     def discover(self, hypothesis, target_count=6):
         hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
@@ -573,6 +810,7 @@ class FieldDiscovery:
             target_count = 0
         self.last_excluded_high_usage = []
         self.last_excluded_unknown_usage = []
+        self._candidate_counts = {}
         keywords = self._keywords_from_hypothesis(hypothesis)
         chosen = []
         seen = set()
@@ -586,13 +824,32 @@ class FieldDiscovery:
         )
         categories = self.categorize_hypothesis(hypothesis)
         dataset_ids = list(preferred_ids)
+        dynamic_ids = []
+        if preferred_ids:
+            self._dataset_universe_provenance = {
+                "kind": "explicit_scope",
+                "source": "hypothesis.datasets",
+                "count": len(preferred_ids),
+            }
         if not dataset_ids:
-            dataset_ids.extend(self.dataset_pool)
-            for category in categories:
-                for dataset_id in DATASET_CATEGORIES[category]:
-                    if dataset_id not in dataset_ids:
-                        dataset_ids.append(dataset_id)
-            if self.selection_mode in {"random", "semantic_random", "broad"}:
+            if self.dataset_pool:
+                dataset_ids.extend(self.dataset_pool)
+                self._dataset_universe_provenance = {
+                    "kind": "configured_pool",
+                    "source": "dataset_pool",
+                    "count": len(self.dataset_pool),
+                }
+            else:
+                dynamic_ids = self._dynamic_dataset_ids()
+                dataset_ids.extend(dynamic_ids)
+            if not dynamic_ids:
+                for category in categories:
+                    for dataset_id in DATASET_CATEGORIES[category]:
+                        if dataset_id not in dataset_ids:
+                            dataset_ids.append(dataset_id)
+            if not dynamic_ids and self.selection_mode in {
+                "random", "semantic_random", "broad"
+            }:
                 for dataset_group in DATASET_CATEGORIES.values():
                     for dataset_id in dataset_group:
                         if dataset_id not in dataset_ids:
@@ -643,7 +900,7 @@ class FieldDiscovery:
                 index = offsets[dataset_id]
                 if index >= len(ranked):
                     continue
-                _rank, score, field, actual_dataset = ranked[index]
+                _rank, score, field, actual_dataset, ranking_provenance = ranked[index]
                 offsets[dataset_id] = index + 1
                 key = (actual_dataset, str(field.get("id")))
                 if key in seen:
@@ -652,7 +909,7 @@ class FieldDiscovery:
                     actual_dataset, field, score, category=(
                         next((name for name, values in DATASET_CATEGORIES.items()
                               if actual_dataset in values), "preferred")
-                    ),
+                    ), ranking_provenance=ranking_provenance,
                 ))
                 seen.add(key)
                 progressed = True
@@ -683,6 +940,8 @@ class FieldDiscovery:
                 dataset_id: len(ranked_by_dataset.get(dataset_id, []))
                 for dataset_id in ordered_datasets
             },
+            "candidate_counts": dict(self._candidate_counts),
+            "dataset_universe": deepcopy(self._dataset_universe_provenance),
             "rejections": {
                 "high_usage": list(self.last_excluded_high_usage),
                 "unknown_usage": list(self.last_excluded_unknown_usage),
@@ -699,7 +958,7 @@ class FieldDiscovery:
             fields = self._fields_for(dataset_id, persist=False)
         except Exception:
             return []
-        ranked = []
+        cheap_candidates = []
         for field in fields:
             if not isinstance(field, dict) or not isinstance(field.get("id"), (str, int)):
                 continue
@@ -723,25 +982,82 @@ class FieldDiscovery:
                         continue
                 except (TypeError, ValueError):
                     pass
-            score = self._score_field(field, keywords)
-            if score <= 0 and self.selection_mode not in {"random", "semantic_random", "broad"}:
+            haystack_id = str(field.get("id") or "").lower()
+            haystack_name = str(field.get("name") or "").lower()
+            haystack_desc = str(field.get("description") or "").lower()
+            keyword_contribution = self._keyword_contribution(
+                haystack_id, haystack_name, haystack_desc, keywords
+            )
+            try:
+                coverage = float(
+                    field.get("coverage") or field.get("coveragePercentage") or 0.0
+                )
+                cheap_score = keyword_contribution + min(2.0, max(0.0, coverage / 100.0))
+            except (TypeError, ValueError):
+                cheap_score = keyword_contribution
+            if cheap_score <= 0 and self.selection_mode not in {
+                "random", "semantic_random", "broad"
+            }:
                 continue
             token = "|".join((self.random_seed, str(hypothesis or {}),
                               str(actual_dataset), field_id))
             digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
             noise = int(digest[:12], 16) / float(16 ** 12)
             if self.selection_mode == "random":
-                rank = noise
+                cheap_rank = noise
             elif self.selection_mode in {"semantic_random", "broad"}:
+                cheap_rank = ((1.0 - self.random_fraction) * cheap_score
+                              + self.random_fraction * noise)
+            else:
+                cheap_rank = cheap_score
+            cheap_candidates.append((
+                cheap_rank, noise, field, actual_dataset, field_id
+            ))
+
+        cheap_candidates.sort(
+            key=lambda item: (-item[0], str(item[2].get("id")))
+        )
+        cheap_candidates = cheap_candidates[:self.candidate_pool_size]
+        self._candidate_counts[dataset_id] = len(cheap_candidates)
+
+        ranked = []
+        for _cheap_rank, noise, field, actual_dataset, _field_id in cheap_candidates:
+            components = self._score_components(field, keywords)
+            score = (
+                components["keyword_contribution"]
+                + components["coverage_contribution"]
+                - components["alpha_count_penalty"]
+            )
+            random_contribution = 0.0
+            if self.selection_mode == "random":
+                rank = noise
+                random_contribution = noise
+            elif self.selection_mode in {"semantic_random", "broad"}:
+                random_contribution = self.random_fraction * noise
                 rank = ((1.0 - self.random_fraction) * score
                         + self.random_fraction * noise)
             else:
                 rank = score
-            ranked.append((rank, score, field, actual_dataset))
+            if score <= 0 and self.selection_mode not in {
+                "random", "semantic_random", "broad"
+            }:
+                continue
+            ranked.append((
+                rank,
+                score,
+                field,
+                actual_dataset,
+                {
+                    **components,
+                    "random_exploration_contribution": random_contribution,
+                },
+            ))
         ranked.sort(key=lambda item: (-item[0], -item[1], str(item[2].get("id"))))
         return ranked
 
-    def _profile_from_field(self, dataset_id, field, score, category):
+    def _profile_from_field(
+        self, dataset_id, field, score, category, ranking_provenance=None
+    ):
         field_id = str(field.get("id"))
         alpha_count = self._alpha_count(field)
         return {
@@ -762,6 +1078,12 @@ class FieldDiscovery:
             "dataset": str(dataset_id),
             "type": field.get("type"),
             "match_score": score,
+            "ranking_provenance": dict(ranking_provenance or {
+                "keyword_contribution": 0.0,
+                "coverage_contribution": 0.0,
+                "alpha_count_penalty": 0.0,
+                "random_exploration_contribution": 0.0,
+            }),
             "field_source": self.source_provenance(),
             "platform_dedupe": {
                 "source": self.source_provenance().get("kind"),
@@ -775,13 +1097,15 @@ class FieldDiscovery:
         hypothesis=None,
     ):
         ranked = self._rank_fields_for_dataset(dataset_id, keywords, category, hypothesis)
-        for _rank, score, field, actual_dataset in ranked:
+        for _rank, score, field, actual_dataset, ranking_provenance in ranked:
             if len(chosen) >= target_count:
                 break
             key = (actual_dataset, str(field.get("id")))
             if key in seen:
                 continue
-            chosen.append(self._profile_from_field(actual_dataset, field, score, category))
+            chosen.append(self._profile_from_field(
+                actual_dataset, field, score, category, ranking_provenance
+            ))
             seen.add(key)
 
 
@@ -789,4 +1113,5 @@ _STOPWORDS = {
     "with", "from", "that", "this", "will", "have", "been", "being",
     "into", "over", "under", "across", "about", "their", "there", "which",
     "while", "using", "should", "would", "where", "when", "after", "before",
+    "的", "了", "和", "与", "及", "在", "对", "将", "从", "是",
 }

@@ -17,6 +17,8 @@
 
 `alpha_colors.py` 是纯 derived color domain owner：保留 `classify_alpha_color()`、`has_research_signal()`、轻量 evidence summary 与 `load_color_candidates()`，不执行远端写入。`AlphaColorWorkflow` 是独立的 CLI control/write workflow，不属于四个 `AgentWorkflows`；它通过窄的 `get_alpha` / `set_alpha_color` hooks 编排远端读取、ownership fail-closed、dry-run、verified PATCH 和结果摘要。`main.py` 继续拥有锁、lazy Client、CLI JSON 与 exit code；只有显式 `alpha sync-colors` 才允许颜色 metadata 写入。
 
+`credentials.py` 是 local-only credential resolver，不依赖 Client、requests、Agent、Simulator、proposal execution 或 state。它只接受完整来源：显式 Client pair、WQB 环境变量、显式绝对路径 `WQB_CREDENTIALS_ENV_FILE`、home credentials file；partial、malformed、unreadable source 必须 fail-closed，不得从 cwd/父目录/package 自动发现 `.env` 或跨源拼接。`client.py` 继续拥有认证协议和 retry/Session 机制，只消费 resolver 结果。
+
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 
 ## 不变量

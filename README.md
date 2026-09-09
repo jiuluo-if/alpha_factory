@@ -19,6 +19,14 @@ pip install -r requirements.txt
 Copy-Item config.example.json config.json
 ```
 
+凭据不写入 `config.json`。生产环境/CI 推荐设置完整的
+`WQB_USERNAME` 和 `WQB_PASSWORD` 环境变量；本地工作站可在
+`~/.brain_credentials.txt` 中按“用户名一行、密码一行”保存。也可以通过
+`WQB_CREDENTIALS_ENV_FILE` 显式指定一个绝对路径的 env 文件；程序不会从
+当前目录、父目录或 package 目录自动搜索 `.env`，也不会混合不同来源的半套凭据。
+显式 env 文件兼容 `WQB_USERNAME/WQB_PASSWORD` 和旧式
+`BRAIN_USERNAME/BRAIN_PASSWORD` 键名。
+
 只读地发现平台字段：
 
 ```powershell

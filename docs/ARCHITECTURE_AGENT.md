@@ -68,6 +68,12 @@ typed AppConfig
 其他生产模块必须消费 typed sections。错误信息仍使用 `config.agent.*` 或
 `config.simulation.*`，因为它们指向用户提交的外部配置路径。
 
+凭据是另一条不进入 AppConfig 的本地配置边界：`credentials.py` 按显式
+Client pair、完整 WQB 环境变量、显式绝对路径 env 文件、home credentials file
+的顺序选择来源。它不做认证、不访问 BRAIN、不搜索 cwd/父目录/package `.env`，
+也不允许 partial source 与其他来源混合；`client.py` 仍独占 Basic Auth、retry、
+thread-local Session 和 `trust_env=False`。
+
 运行时对象图如下：
 
 ```text

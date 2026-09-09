@@ -61,6 +61,7 @@ RuntimeComponents
 - `Agent` 可以保留 `self.memory`、`self.trajectory` 等兼容属性，但这些属性必须集中投影自同一组组件；执行 workflow 必须通过 identity tests 证明共享对象，Alpha Feed 必须证明复用同一组 cache，Optimizer 必须证明复用同一 trajectory、weekly cache 和 AlphaFactory。
 - `AlphaFeedWorkflow` 只负责 BRAIN 用户 Alpha 的只读分页、纽约七日窗口、去重/bucket 和两个既有 cache 的更新；它只接收 `get_all_user_alphas`，不得导入 `Agent`/`Simulator`、调用 POST/PATCH 或迁移 optimizer。
 - `alpha_colors.py` 只负责纯 derived color classification、轻量 evidence summary 和 trajectory candidate loading；`AlphaColorWorkflow` 是独立的显式远端 color metadata 同步工作流，只通过 `get_alpha` 与 `set_alpha_color(..., verify=True)` 工作。`main.py` 保留 `alpha sync-colors` 的 lock、lazy Client、JSON 和 exit-code 边界；不得自动同步颜色。
+- 凭据解析由 `wqb_agent/credentials.py` 负责：完整显式 Client pair → 完整 `WQB_USERNAME/WQB_PASSWORD` → 显式绝对路径 `WQB_CREDENTIALS_ENV_FILE` → `~/.brain_credentials.txt`；partial/malformed/unreadable source 必须 fail-closed，禁止 cwd/父目录/package `.env` 搜索、source mixing、secret 写入 config/state/log。Client 只消费 resolver，认证 HTTP/retry/Session 语义不变。
 - `OptimizerWorkflow` 只消费既有 trajectory、weekly cache 和 AlphaFactory；它按 evidence → code screen → Agent-authored semantic gate 编排 CHILD proposal，不能生成 `child_economic_hypothesis`、扫描参数、刷新 Alpha Feed、写 proposals 或触发 Simulation。
 - 不引入 DI/IoC 框架，不创建 `Workflow(agent=self)` 或 `hooks.get_attr` 逃生通道；hooks 必须是窄的、按操作定义的显式回调。
 

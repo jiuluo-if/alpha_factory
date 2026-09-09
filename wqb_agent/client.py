@@ -18,10 +18,11 @@ Thread safety: each thread owns its own requests.Session and auth flag
 first authenticating thread wins through a lock, so the 3 simulation workers
 never hammer /authentication in parallel.
 
-Credentials (in order): environment variables WQB_USERNAME /
-WQB_PASSWORD, the credentials file ~/.brain_credentials.txt (username
-then password), or a project-local .env (BRAIN_USERNAME /
-BRAIN_PASSWORD). The local proxy is bypassed (trust_env=False): a
+Credentials (in order): explicit constructor credentials, environment
+variables WQB_USERNAME / WQB_PASSWORD, an explicitly configured
+WQB_CREDENTIALS_ENV_FILE, or ~/.brain_credentials.txt (username then
+password). No cwd, parent-directory, package-directory, or implicit .env
+search is performed. The local proxy is bypassed (trust_env=False): a
 local proxy rewrites the auth body and causes HTTP 400.
 
 Auth note (verified against the live platform): BRAIN /authentication
@@ -30,7 +31,6 @@ with 400 "Unexpected property". Keep the Basic-Auth empty-body form.
 """
 
 import math
-import os
 import random
 import threading
 import time
@@ -38,10 +38,15 @@ import requests
 
 from .failures import FailureKind, classify_error
 from .protocol import retry_after_seconds
+from .credentials import (
+    CredentialError,
+    DEFAULT_CREDENTIALS_FILE,
+    resolve_credentials,
+)
 
 BASE_URL = "https://api.worldquantbrain.com"
 
-CREDENTIALS_FILE = os.path.expanduser("~/.brain_credentials.txt")
+CREDENTIALS_FILE = DEFAULT_CREDENTIALS_FILE
 
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
@@ -99,55 +104,15 @@ class WQBSubmitUnknownError(WQBSimulationError):
 
 
 def load_credentials(username_env="WQB_USERNAME", password_env="WQB_PASSWORD"):
-    username = os.environ.get(username_env)
-    password = os.environ.get(password_env)
-    if username and password:
-        return username, password
-    if os.path.exists(CREDENTIALS_FILE):
-        try:
-            with open(CREDENTIALS_FILE, encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip()]
-        except OSError:
-            lines = []  # unreadable credential file: fall through to .env
-        if len(lines) >= 2:
-            return lines[0], lines[1]
-    # Project-local .env (BRAIN_USERNAME / BRAIN_PASSWORD), e.g. newwqb/.env
-    creds = _load_from_env_file(username_env, password_env)
-    if creds:
-        return creds
-    return None, None
-
-
-def _load_from_env_file(username_env="WQB_USERNAME", password_env="WQB_PASSWORD"):
-    """Read credentials from a .env file next to the project root.
-
-    Tries the current working directory, then the package directory, then
-    their parents. Accepts both BRAIN_USERNAME/BRAIN_PASSWORD and the
-    username/password env names.
-    """
-    candidates = []
-    cwd = os.getcwd()
-    candidates.append(os.path.join(cwd, ".env"))
-    candidates.append(os.path.join(cwd, "..", ".env"))
-    pkg_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(os.path.join(pkg_dir, ".env"))
-    candidates.append(os.path.join(pkg_dir, "..", ".env"))
-    for path in candidates:
-        if not os.path.exists(path):
-            continue
-        values = {}
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                values[key.strip()] = val.strip().strip('"').strip("'")
-        username = values.get(username_env) or values.get("BRAIN_USERNAME")
-        password = values.get(password_env) or values.get("BRAIN_PASSWORD")
-        if username and password:
-            return username, password
-    return None
+    """Compatibility tuple adapter over the deterministic credentials resolver."""
+    source = resolve_credentials(
+        username_env=username_env,
+        password_env=password_env,
+        credentials_file=CREDENTIALS_FILE,
+    )
+    if source is None:
+        return None, None
+    return source.username, source.password
 
 
 class WQBClient:
@@ -166,9 +131,28 @@ class WQBClient:
         submit_spacing_sec=2.0,
     ):
         self.base_url = base_url.rstrip("/")
-        self.username, self.password = username, password
-        if self.username is None or self.password is None:
-            self.username, self.password = load_credentials()
+        explicit_username = username is not None
+        explicit_password = password is not None
+        if explicit_username != explicit_password:
+            raise WQBAuthError(
+                "Incomplete explicit WQB credentials; provide both "
+                "username and password."
+            )
+        if explicit_username:
+            if not username or not password:
+                raise WQBAuthError(
+                    "Incomplete explicit WQB credentials; provide both "
+                    "username and password."
+                )
+            self.username, self.password = username, password
+        else:
+            try:
+                self.username, self.password = load_credentials(
+                    username_env="WQB_USERNAME",
+                    password_env="WQB_PASSWORD",
+                )
+            except CredentialError as exc:
+                raise WQBAuthError(str(exc)) from exc
         if not self.username or not self.password:
             raise WQBAuthError(
                 "No credentials found. Set WQB_USERNAME/WQB_PASSWORD "

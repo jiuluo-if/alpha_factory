@@ -115,7 +115,7 @@
 - [x] 增加 facade delegation、直接 workflow 等价性、依赖方向、POST 次数和 `last_run_stats` 回归测试
 - [x] 更新 AGENTS/architecture 文档，明确 Agent、Workflow、Simulator、Client、CheckpointStore owner
 - [x] 完成定向测试、全量 unittest、compileall、Ruff、doctor/audit、diff check、fresh architecture review
-- [ ] 使用 `fix：`/`refactor：` 英文前缀加中文内容提交，并自动推送到 `origin/main`，重新确认远端 SHA
+- [x] 使用 `fix：`/`refactor：` 英文前缀加中文内容提交，并自动推送到 `origin/main`，重新确认远端 SHA
 
 ## 本阶段当前下一步
 

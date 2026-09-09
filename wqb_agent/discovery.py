@@ -69,6 +69,30 @@ CATEGORY_KEYWORDS = {
 }
 
 
+def normalize_coverage(field):
+    """Return coverage as a bounded 0.0-1.0 value, or None when unusable.
+
+    BRAIN fixtures and cached profiles have used both fractional and
+    percentage forms. The helper is derived-only and never mutates metadata.
+    """
+    if not isinstance(field, dict):
+        return None
+    for key in ("coverage", "coveragePercentage", "coverage_percent"):
+        if key not in field or field[key] is None:
+            continue
+        value = field[key]
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number) or number < 0 or number > 100:
+            return None
+        return number if number <= 1 else number / 100.0
+    return None
+
+
 class FieldDiscovery:
     CACHE_SCHEMA = 2
 
@@ -76,6 +100,7 @@ class FieldDiscovery:
     # 用户 2026-08-20 校正：vec_avg/vec_sum 的输入必须是 VECTOR，输出为
     # 可继续参与矩阵运算的 MATRIX 信号；两类仍都要发现，但用途不同。
     FIELD_TYPES = ("MATRIX", "VECTOR")
+    MAX_ACTIVE_DATASETS = 12
 
     def __init__(self, client, pagination_limit=50, max_pages=20,
                  cache_path=None, cache_ttl_sec=7 * 24 * 3600,
@@ -679,12 +704,10 @@ class FieldDiscovery:
         keyword_contribution = self._keyword_contribution(
             haystack_id, haystack_name, haystack_desc, keywords
         )
-        coverage_contribution = 0.0
-        try:
-            coverage = float(field.get("coverage") or field.get("coveragePercentage") or 0.0)
-            coverage_contribution = min(2.0, max(0.0, coverage / 100.0))
-        except (TypeError, ValueError):
-            pass
+        coverage = normalize_coverage(field)
+        coverage_contribution = (
+            0.0 if coverage is None else min(2.0, max(0.0, coverage * 2.0))
+        )
         alpha_count_penalty = 0.0
         try:
             alpha_count = float(self._alpha_count(field))
@@ -802,6 +825,41 @@ class FieldDiscovery:
         }
         return dataset_ids
 
+    def _select_active_dataset_ids(self, dataset_ids, categories, keywords, round_no):
+        """Bound dynamic dataset work before any field pagination starts."""
+        dataset_ids = self._normalize_dataset_ids(dataset_ids)
+        if len(dataset_ids) <= self.MAX_ACTIVE_DATASETS:
+            self._dataset_universe_provenance = {
+                **self._dataset_universe_provenance,
+                "active_count": len(dataset_ids),
+                "active_pool": list(dataset_ids),
+                "selection_strategy": "bounded_all",
+            }
+            return dataset_ids
+        category_ids = {
+            dataset_id
+            for category in categories
+            for dataset_id in DATASET_CATEGORIES.get(category, [])
+        }
+        scored = []
+        for dataset_id in dataset_ids:
+            text = dataset_id.lower().replace("_", " ")
+            keyword_score = sum(1 for keyword in keywords if keyword in text)
+            category_score = 4 if dataset_id in category_ids else 0
+            tie = hashlib.sha256(
+                f"{self.random_seed}|{round_no}|{dataset_id}".encode()
+            ).hexdigest()
+            scored.append((-(keyword_score + category_score), tie, dataset_id))
+        scored.sort()
+        active = [item[2] for item in scored[: self.MAX_ACTIVE_DATASETS]]
+        self._dataset_universe_provenance = {
+            **self._dataset_universe_provenance,
+            "active_count": len(active),
+            "active_pool": list(active),
+            "selection_strategy": "bounded_semantic_dataset_pool",
+        }
+        return active
+
     def discover(self, hypothesis, target_count=6):
         hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
         try:
@@ -860,6 +918,10 @@ class FieldDiscovery:
                 for dataset_group in DATASET_CATEGORIES.values()
                 for dataset_id in dataset_group
             ]
+        if dynamic_ids:
+            dataset_ids = self._select_active_dataset_ids(
+                dataset_ids, categories, keywords, hypothesis.get("_round", 0)
+            )
         self.refresh_platform_usage(dataset_ids)
 
         ranked_by_dataset = {}
@@ -988,13 +1050,11 @@ class FieldDiscovery:
             keyword_contribution = self._keyword_contribution(
                 haystack_id, haystack_name, haystack_desc, keywords
             )
-            try:
-                coverage = float(
-                    field.get("coverage") or field.get("coveragePercentage") or 0.0
-                )
-                cheap_score = keyword_contribution + min(2.0, max(0.0, coverage / 100.0))
-            except (TypeError, ValueError):
-                cheap_score = keyword_contribution
+            coverage = normalize_coverage(field)
+            coverage_score = (
+                0.0 if coverage is None else min(2.0, max(0.0, coverage * 2.0))
+            )
+            cheap_score = keyword_contribution + coverage_score
             if cheap_score <= 0 and self.selection_mode not in {
                 "random", "semantic_random", "broad"
             }:
@@ -1064,10 +1124,7 @@ class FieldDiscovery:
             "id": field_id,
             "name": field.get("name") or field.get("description") or field_id,
             "description": field.get("description") or "",
-            "coverage": (
-                field.get("coverage") or field.get("coveragePercentage")
-                or field.get("coverage_percent")
-            ),
+            "coverage": normalize_coverage(field),
             "alpha_count": alpha_count,
             "frequency": (
                 field.get("frequency") or field.get("dataFrequency")

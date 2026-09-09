@@ -13,6 +13,7 @@ import math
 import random
 from dataclasses import dataclass
 
+from .discovery import normalize_coverage
 from .diversity import extract_fields
 from .expression import analyze_expression, canonical_expression
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
@@ -381,9 +382,10 @@ MAX_TEMPLATE_FAMILY_PER_BATCH = 2
 _SEMANTIC_CONCEPT_RULES = (
     ("data_quality", ("missing", "null", "nan", "quality", "coverage", "stale")),
     ("analyst_revision", ("revision", "revised", "estimate change", "forecast change")),
+    ("option_relative", ("put call", "put-call", "putcall", "iv skew")),
+    ("liquidity", ("open interest", "option volume", "liquidity", "trading volume", "dollar volume", "turnover", "bid ask", "bid-ask")),
     ("volatility", ("volatility", "implied vol", "realized vol", "iv_skew", "variance")),
     ("event_count", ("mention count", "event count", "number of events", "occurrence", "filing count")),
-    ("liquidity", ("liquidity", "trading volume", "dollar volume", "turnover", "bid ask", "bid-ask")),
     ("sentiment", ("sentiment", "social", "news", "recommendation", "bullish", "bearish")),
     ("valuation", ("valuation", "target price", "price target", "price-to", "price to", "multiple", "p/e", "p/b")),
     ("earnings", ("earnings", "eps", "revenue", "sales", "profit", "cash flow", "fscore")),
@@ -415,9 +417,9 @@ def _semantic_profile_text(profile, *, include_dataset=True):
     if not isinstance(profile, dict):
         return ""
     values = []
-    keys = ("id", "name", "description", "frequency", "category")
+    keys = ("id", "name", "description")
     if include_dataset:
-        keys = ("id", "name", "description", "dataset", "frequency", "category")
+        keys = (*keys, "dataset", "frequency", "category")
     for key in keys:
         value = profile.get(key)
         if isinstance(value, dict):
@@ -450,12 +452,18 @@ def _derive_field_semantic_traits(profile):
             "concept": "unknown",
             "measurement": "unknown",
             "behavior": "unknown",
+            "frequency": "unknown",
+            "sign_semantics": "unknown",
             "direction_meaning": "unknown",
             "update_style": "unknown",
             "tags": [],
             "status": "UNKNOWN",
+            "semantic_admission": "UNKNOWN",
+            "metadata_semantics": "UNKNOWN",
         }
     text = _semantic_profile_text(profile)
+    # Category and dataset are fallback context, not direct field evidence.
+    # Keep them out of the high-confidence admission path.
     direct_text = _semantic_profile_text(profile, include_dataset=False)
     category = str(profile.get("category") or "").lower()
     frequency = _semantic_frequency_text(profile)
@@ -474,9 +482,9 @@ def _derive_field_semantic_traits(profile):
             break
     if concept == "unknown":
         category_rules = {
-            "analyst": "analyst_revision",
-            "option": "volatility",
-            "options": "volatility",
+            "analyst": "analyst",
+            "option": "option",
+            "options": "option",
             "fundamental": "fundamental",
             "social": "sentiment",
             "news": "sentiment",
@@ -484,7 +492,7 @@ def _derive_field_semantic_traits(profile):
         }
         concept = category_rules.get(category, "unknown")
         concept_hits = [category] if concept != "unknown" else []
-        direct_concept_hits = list(concept_hits)
+        direct_concept_hits = []
 
     measurement = "level"
     measurement_hits = []
@@ -510,11 +518,8 @@ def _derive_field_semantic_traits(profile):
     event_signal = concept in {"analyst_revision", "event_count", "sentiment"}
     slow_signal = frequency_slow or concept in {"fundamental", "earnings", "valuation"} and not frequency_fast
     sparse = False
-    try:
-        coverage = float(profile.get("coverage"))
-        sparse = math.isfinite(coverage) and coverage < 0.5
-    except (TypeError, ValueError):
-        pass
+    coverage = normalize_coverage(profile)
+    sparse = coverage is not None and coverage < 0.5
     if slow_signal:
         behavior = "slow_moving"
     elif event_signal:
@@ -556,6 +561,8 @@ def _derive_field_semantic_traits(profile):
 
     direction_meaning = {
         "analyst_revision": "information_update",
+        "option_relative": "relative_option_position",
+        "option": "option_measurement",
         "volatility": "risk_exposure",
         "event_count": "attention_events",
         "liquidity": "market_participation",
@@ -574,6 +581,8 @@ def _derive_field_semantic_traits(profile):
         tags.add("volume")
     if concept == "volatility":
         tags.add("volatility")
+    if concept == "option_relative":
+        tags.add("relative")
     if "option" in text or "call" in text or "put" in text:
         tags.add("option")
     if concept == "analyst_revision" or "analyst" in text:
@@ -590,6 +599,16 @@ def _derive_field_semantic_traits(profile):
         tags.add("asset_scale")
     if any(word in text for word in ("social", "news", "mention")):
         tags.add("attention")
+    semantic_admission = (
+        "ALLOW" if direct_concept_hits else
+        "REVIEW" if concept != "unknown" else "UNKNOWN"
+    )
+    metadata_semantics = (
+        "AVAILABLE" if str(profile.get("description") or "").strip()
+        else "UNKNOWN"
+    )
+    if metadata_semantics != "AVAILABLE" and semantic_admission == "ALLOW":
+        semantic_admission = "REVIEW"
     return {
         "concept": concept,
         "measurement": measurement,
@@ -601,6 +620,8 @@ def _derive_field_semantic_traits(profile):
         "tags": sorted(tags),
         "status": "KNOWN" if concept != "unknown" and direct_concept_hits else "UNKNOWN",
         "confidence": "HIGH" if direct_concept_hits else "LOW",
+        "semantic_admission": semantic_admission,
+        "metadata_semantics": metadata_semantics,
         "evidence": {
             "concept": concept_hits,
             "direct_concept": direct_concept_hits,
@@ -888,7 +909,7 @@ class AlphaFactory:
         behavior = traits["behavior"]
         frequency = traits["frequency"]
         sign_semantics = traits["sign_semantics"]
-        known = traits["status"] == "KNOWN"
+        known = traits.get("semantic_admission") == "ALLOW"
         field_type = str(profile.get("type") or "").upper()
         reasons = []
         score = 0
@@ -1013,7 +1034,7 @@ class AlphaFactory:
     def _relationship_gate(cls, profiles, template):
         """Return an auditable relation decision for pair/triple slots."""
         traits = [_derive_field_semantic_traits(profile) for profile in profiles]
-        if any(item.get("status") != "KNOWN" for item in traits):
+        if any(item.get("semantic_admission") != "ALLOW" for item in traits):
             return {
                 "admission": "REVIEW",
                 "score": 0,
@@ -1091,13 +1112,15 @@ class AlphaFactory:
     @staticmethod
     def _field_mechanism(profile, traits, template, relation=None):
         field_id = str(profile.get("id"))
-        if traits.get("status") != "KNOWN":
+        if traits.get("semantic_admission") != "ALLOW":
             return (
-                f"字段 {field_id} 的语义为 UNKNOWN；当前 profile 只能支持 {template.family} 的语法审阅，"
-                "不能证明该字段具备模板所需的经济机制。"
+                f"字段 {field_id} 的语义准入为 {traits.get('semantic_admission', 'UNKNOWN')}；"
+                f"当前 profile 只能支持 {template.family} 的语法审阅，不能证明该字段具备该经济机制。"
             )
         fit_reason = {
             "analyst_revision": "修正值直接承载分析师预期更新，适合检验变化、持续性或滞后确认",
+            "option_relative": "put-call/skew 字段表达期权分布的相对位置，适合离散或相对关系检验",
+            "liquidity": "交易活跃度或未平仓量描述参与程度，适合流动性与活动强度检验",
             "volatility": "波动率是风险暴露或状态变量，适合风险调整、regime 或相对关系",
             "fundamental": "低频基本面水平代表经济规模，适合持久性和相对状态检验",
             "earnings": "盈利相关字段承载经营预期，适合变化与信息扩散检验",
@@ -1427,9 +1450,6 @@ class AlphaFactory:
         assembled = []
         used_fields = set()
         economic_mode = str(hypothesis.get("template_mode") or "").lower() == "economic"
-        vector_template_id = (
-            "vector_persistent_signal" if economic_mode else "vector_mean_rank"
-        )
         explicit_templates = self.registry.select(hypothesis)
         has_explicit_templates = bool(
             hypothesis.get("template_ids") or hypothesis.get("template_family")
@@ -1447,6 +1467,13 @@ class AlphaFactory:
             )
         )
         if not template_order:
+            return []
+        template_catalog = [
+            self.registry.get(template_id)
+            for template_id in template_order
+        ]
+        template_catalog = [template for template in template_catalog if template]
+        if not template_catalog:
             return []
         family_counts = {}
         for offset, profile in enumerate(fields):
@@ -1467,24 +1494,24 @@ class AlphaFactory:
                 continue
             selected = None
             traits = _derive_field_semantic_traits(profile)
-            # If the preferred skeleton was already seen, rotate through the
-            # bounded catalog for this field instead of repeatedly emitting an
-            # empty round.  This preserves one candidate per field while
-            # turning exact-expression dedupe into useful structural novelty.
-            for step in range(len(template_order)):
-                template_id = template_order[(offset + step) % len(template_order)]
-                if template_id == vector_template_id and field_type != "VECTOR":
-                    template_id = "rank_level"
-                if template_id != vector_template_id and field_type == "VECTOR":
-                    template_id = vector_template_id
-                template = self.registry.get(template_id)
-                if template is None:
-                    continue
+            compatible_templates = []
+            for template in template_catalog:
                 compatibility = self._template_semantic_compatibility(
                     template, profile, traits
                 )
-                if compatibility["admission"] == "REJECT":
-                    continue
+                if compatibility["admission"] != "REJECT":
+                    compatible_templates.append((template, compatibility))
+            # Explore only the compatible semantic neighborhood.  Sorting by
+            # fit first preserves deterministic, field-aware preference while
+            # the offset rotates ties and still allows structural exploration.
+            compatible_templates.sort(
+                key=lambda item: (-item[1]["score"], item[0].template_id)
+            )
+            for step in range(len(compatible_templates)):
+                template, compatibility = compatible_templates[
+                    (offset + step) % len(compatible_templates)
+                ]
+                template_id = template.template_id
                 family_cap = 4 if economic_mode else MAX_TEMPLATE_FAMILY_PER_BATCH
                 if family_counts.get(template.family, 0) >= family_cap:
                     continue

@@ -151,3 +151,23 @@
 - [x] 实现 MATRIX/VECTOR 独立 completeness、动态 dataset boundary 和 bounded candidate retrieval
 - [x] 输出透明 ranking provenance，不改变 Factory template semantics
 - [x] 完成全量 unittest、compileall、Ruff、diff review、提交并推送
+
+## 2026-09-09 Factory-Discovery semantic calibration
+
+- [ ] 审计 Factory、Discovery、proposal contract、diversity、SuggestionWorkflow 与架构边界
+- [ ] 用回归测试锁定 analyst/option false-positive、semantic admission 与 rationale 分层
+- [ ] 统一 coverage normalization 并让 Discovery/Factory 共用同一 contract
+- [ ] 复核动态 dataset bounded selection 与 incomplete catalog 生命周期；只修有测试证明的问题
+- [ ] 完成 full quality gate、doctor/state audit、fresh diff review，并提交推送
+
+## 本阶段当前下一步
+
+先完成目标文件列出的源码与测试审计，记录可复现缺口后再写失败测试。
+
+## 2026-09-09 Factory-Discovery semantic calibration 验收
+
+- [x] 审计 Factory、Discovery、proposal contract、diversity、SuggestionWorkflow 与架构边界
+- [x] 用回归测试锁定 analyst/option false-positive、semantic admission 与 rationale 分层
+- [x] 统一 coverage normalization 并让 Discovery/Factory 共用同一 contract
+- [x] 复核动态 dataset bounded selection 与 incomplete catalog 生命周期；只修有测试证明的问题
+- [x] 完成 full quality gate、doctor/state audit、fresh diff review，并提交推送

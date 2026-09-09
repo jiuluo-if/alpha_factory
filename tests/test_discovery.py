@@ -15,7 +15,7 @@ from wqb_agent.agent import (
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
 from wqb_agent.candidate import CandidateBuilder
-from wqb_agent.discovery import FieldDiscovery
+from wqb_agent.discovery import FieldDiscovery, normalize_coverage
 from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
@@ -256,22 +256,28 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
 
     def test_incomplete_catalog_reload_preserves_truncation_provenance(self):
         class LargeClient:
+            def __init__(self):
+                self.calls = []
+
             def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                self.calls.append((dataset_id, field_type, offset))
                 rows = [
                     {"id": f"{field_type.lower()}_{index}", "type": field_type}
                     for index in range(1001)
                 ]
                 return rows[offset:offset + limit], len(rows)
 
+        client = LargeClient()
         discovery = FieldDiscovery(
-            LargeClient(), pagination_limit=50, max_pages=20,
+            client, pagination_limit=50, max_pages=20,
             catalog_root=self._tmp,
             cache_path=os.path.join(self._tmp, "fields_cache.json"),
             persist_catalog=True,
         )
         discovery.discover({"datasets": ["large"], "statement": "matrix"}, 1)
+        reloaded_client = LargeClient()
         reloaded = FieldDiscovery(
-            LargeClient(),
+            reloaded_client,
             catalog_root=self._tmp,
             cache_path=os.path.join(self._tmp, "reloaded_cache.json"),
         )
@@ -283,6 +289,11 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
             provenance["field_completeness"]["large"]["MATRIX"]["truncation_reason"],
             "MAX_PAGES",
         )
+        first = reloaded.discover({"datasets": ["large"], "statement": "matrix"}, 2)
+        second = reloaded.discover({"datasets": ["large"], "statement": "matrix"}, 2)
+        self.assertEqual([field["id"] for field in first], [field["id"] for field in second])
+        self.assertEqual(reloaded.source_provenance()["catalog_status"], "INCOMPLETE")
+        self.assertEqual(reloaded_client.calls, [])
 
     def test_platform_count_above_loaded_is_count_underrun(self):
         class UnderrunClient:
@@ -675,6 +686,56 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
             discovery.source_provenance()["dataset_universe"]["kind"],
             "brain_api",
         )
+
+    def test_dynamic_dataset_universe_is_bounded_before_field_pagination(self):
+        class LargeDynamicClient(FakeClient):
+            def get_datasets(self):
+                return ([{"id": "revision_signal_dataset"}] + [
+                    {"id": f"irrelevant_{index}"} for index in range(120)
+                ])
+
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                self.datafield_calls.append((dataset_id, limit, offset, field_type))
+                if dataset_id != "revision_signal_dataset":
+                    return [], 0
+                rows = [{
+                    "id": "revision_field",
+                    "name": "EPS revision",
+                    "description": "analyst EPS estimate revision",
+                    "type": field_type,
+                }]
+                return rows[offset:offset + limit], len(rows)
+
+        client = LargeDynamicClient()
+        discovery = FieldDiscovery(
+            client,
+            pagination_limit=2,
+            max_pages=2,
+            selection_mode="semantic",
+            random_seed="bounded-datasets",
+        )
+        fields = discovery.discover({"statement": "analyst revision"}, target_count=1)
+
+        self.assertEqual(fields[0]["dataset"], "revision_signal_dataset")
+        queried = {call[0] for call in client.datafield_calls}
+        self.assertLessEqual(
+            len(queried), discovery.MAX_ACTIVE_DATASETS,
+        )
+        self.assertLess(len(queried), 20)
+        selection = discovery.last_dataset_selection
+        self.assertEqual(selection["dataset_universe"]["count"], 121)
+        self.assertLessEqual(
+            selection["dataset_universe"]["active_count"],
+            discovery.MAX_ACTIVE_DATASETS,
+        )
+
+    def test_coverage_normalization_is_shared_and_conservative(self):
+        self.assertEqual(normalize_coverage({"coverage": 0.95}), 0.95)
+        self.assertEqual(normalize_coverage({"coveragePercentage": 95}), 0.95)
+        self.assertEqual(normalize_coverage({"coverage_percent": 1}), 1.0)
+        self.assertEqual(normalize_coverage({"coverage": 0}), 0.0)
+        for value in (-1, 101, float("nan"), "not-a-number"):
+            self.assertIsNone(normalize_coverage({"coverage": value}))
 
     def test_chinese_hypothesis_produces_stable_useful_tokens(self):
         tokens = FieldDiscovery._keywords_from_hypothesis({

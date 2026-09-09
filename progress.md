@@ -162,3 +162,14 @@
 - 已实现 read-only `get_datasets()` 动态 universe 边界、`DATASET_CATEGORIES` fallback、每 dataset 默认 100 项 bounded candidate pool、中文/英文 token 和四项 ranking provenance。
 - fresh 验证：`python -m unittest discover -s tests` 为 620 tests OK；`python -m unittest tests.test_discovery` 为 36 tests OK；compileall、targeted Ruff 和 diff-check 通过。
 - 当前仅剩：只暂存本目标文件，配置 Git 邮箱，提交并推送后核对远端 SHA；不纳入并行 Alpha Factory 未提交文件。
+## 2026-09-09 Factory-Discovery semantic calibration
+
+- 已读取 goal objective，并确认本阶段禁止并行修改、禁止架构重构、只修测试证明的问题。
+- 已完成相关长期记忆检索、工作树/提交基线检查和目标文件/测试关键词审计。
+
+## 2026-09-09 Factory-Discovery semantic calibration 验收
+
+- 已完成只读审计与 TDD 回归：analyst estimate/target/revision、option activity/skew、semantic admission、coverage normalization、动态 dataset bounded selection 与 incomplete catalog reload 均有测试证据。
+- 已将模板选择改为字段兼容集合内的固定分数排序与 seed/offset 探索；保留 VECTOR/MATRIX、operator evidence、dedupe、family cap 和禁止参数扫描边界。
+- 质量门已通过：626 tests、compileall、mypy 9 frontier、Ruff；coverage report 总覆盖 77.4%。doctor/audit 正常；preflight 只读结果为 BLOCKED（既有 round_11 checkpoint），未修改真实研究状态。
+- 当前动作：读取 Factory、Discovery、proposal contract、diversity、SuggestionWorkflow、架构文档及相关测试的关键实现段，定位可复现缺口。

@@ -5,6 +5,14 @@
 - 研究状态是事实源；不得手改或删除未完成 checkpoint、trajectory、proposals、submission pool、factory session 或有效锁。
 - 默认生产入口是 `python main.py --suggest` → 审阅 proposals → `python main.py --run-proposals`。
 - `SUBMIT_UNKNOWN` 不重发，known progress URL 只读对账，缺失证据保持 `UNKNOWN`/`UNAVAILABLE`。
+
+## 2026-09-09 Factory-Discovery semantic calibration 初始审计
+
+- 当前 HEAD 为 `608c4b2`，工作树在本阶段开始时干净；上一阶段已在 `alpha_factory.py` 增加 traits 的 `frequency`/`sign_semantics` 与模板兼容评分。
+- 当前 Discovery 已有 dataset-level bounded candidate pool、动态 dataset universe、MATRIX/VECTOR 独立 completeness 和 `COMPLETE/INCOMPLETE/LEGACY_UNVERIFIED` provenance；需继续核对其 active dataset 选择是否仍会对 100+ 动态 dataset 全量分页。
+- 当前测试已有 analyst revision、slow fundamental、option volatility、UNKNOWN mechanism、fixed seed 和 incomplete catalog 回归，但尚未覆盖 analyst estimate level/target price、open interest、put-call skew、coverage 三种字段键/百分比表达和 invalid coverage。
+- 下一步需直接阅读 `FieldDiscovery` 的 coverage/profile 归一化路径与 AlphaFactory 的 semantic fallback，先确认真实 false-positive/false-negative，再写红灯测试。
+- 新增红灯已复现：`category=analyst` 的无 revision 字段落入 `analyst_revision`；`option open interest` 被通用 `open` 命中为 `market_price`；Discovery 没有共享 `normalize_coverage`，且动态 dataset 规模测试在导入 helper 处失败。
 - 用户明确授权删除外部 `F:\\codex\\wqb_alpha_factory\\.wqb_state`；本目录“多余”文件需按证据判定。
 
 ## 当前目录快照
@@ -158,3 +166,12 @@
 - 全量 field metadata 仍受分页预算约束；排序前先按 cheap lexical/coverage 候选截到默认 100，再做 semantic/coverage/alphaCount/random ranking，active `target_count` 未扩大。
 - catalog manifest 与 field profiles 只增加 metadata/completeness/ranking provenance；测试逐文件确认不含 `metrics` 或 `results`，未触碰 Simulation、Alpha submission、trajectory、checkpoint 或 Factory template semantics。
 - 并行 Alpha Factory 对话曾使中途全量测试出现其目标文件的 tuple/semantic 失败；其后已自修并报告全量 620 tests、compileall、mypy、Ruff、coverage 通过，本任务不包含其文件。
+
+## 2026-09-09 Alpha Factory semantic calibration 验收
+
+- Analyst 语义现在区分 estimate level、target price 与 revision；仅有 analyst category 的字段降为 `REVIEW`，不再伪造 `analyst_revision`。
+- Option 语义将 open interest 归入 liquidity，将 put-call/IV skew 归入 option-relative/dispersion；泛化 skew 不再直接升级为期权机制。
+- `semantic_admission` 与 metadata availability 分离；`field_hypothesis_basis.mechanism` 使用字段 traits 与 fit reason，不复制 template rationale，UNKNOWN/REVIEW 不宣称强机制。
+- Discovery/Factory 共用派生 `normalize_coverage()`，fraction/percentage 形式统一到 0..1，非法值保守为 `None`，不修改原始 BRAIN metadata。
+- 动态 dataset universe 在 field pagination 前固定上限 12 个，并记录 full universe 与 active pool；不完整 catalog reload 保持 provenance 且不重复大分页。
+- 定向 Factory/Discovery 87 tests、全量 626 tests、compileall、mypy、Ruff 通过；coverage report 总覆盖 77.4%。doctor/audit 通过，preflight 仍因既有 `round_11.checkpoint.json` 与 `SUBMIT_UNKNOWN` 为 BLOCKED，本阶段未做远端写入。

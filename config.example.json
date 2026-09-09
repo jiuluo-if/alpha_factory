@@ -25,7 +25,14 @@
       "max_alpha_count": 1000000,
       "mode": "semantic_random",
       "random_fraction": 0.35,
-      "random_seed": "newwqb-field-exploration"
+      "random_seed": "newwqb-field-exploration",
+      "platform_usage_refresh": true,
+      "require_platform_alpha_count": true,
+      "dataset_sampling": "stratified",
+      "dataset_pool": ["pv1", "pv13", "option8", "option9", "fundamental6", "news18"],
+      "min_datasets": 3,
+      "min_cross_dataset_pairs": 1,
+      "persist_catalog": true
     },
     "submission_pool": {
       "filename": "submission_pool.json"
@@ -69,10 +76,13 @@
     "max_pagination_pages": 20,
     "state_dir": ".wqb_state",
     "factory": {
+      "batch_size": 100,
       "max_runtime_sec": 86400,
       "max_rounds": 0,
       "idle_sleep_sec": 30,
-      "max_simulations": 300,
+      "max_simulations": 11200,
+      "daily_simulation_cap": 1600,
+      "weekly_simulation_cap": 11200,
       "max_proposals_per_round": 100,
       "template_mode": "economic"
     },

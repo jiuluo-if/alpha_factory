@@ -28,6 +28,15 @@ _FIELD_SELECTION_DEFAULTS = {
     "mode": "semantic_random",
     "random_fraction": 0.35,
     "random_seed": "newwqb",
+    # Field usage is platform truth when local Simulation/Alpha results are
+    # intentionally ephemeral.  Keep the switch explicit for offline tests.
+    "platform_usage_refresh": False,
+    "require_platform_alpha_count": False,
+    "dataset_sampling": "stratified",
+    "dataset_pool": [],
+    "min_datasets": 1,
+    "min_cross_dataset_pairs": 0,
+    "persist_catalog": False,
 }
 _SEARCH_POLICY_DEFAULTS = {
     "max_pending_per_arm": 1,
@@ -127,8 +136,10 @@ class ResearchAllocation:
 
 @dataclass(frozen=True)
 class FactoryConfig:
-    max_simulations: int = 300
+    max_simulations: int = 11200
     max_runtime_sec: int = 86400
+    daily_simulation_cap: int = 1600
+    weekly_simulation_cap: int = 11200
 
 
 @dataclass(frozen=True)
@@ -193,6 +204,46 @@ def _resolve_runtime_policies(agent):
         raise ValueError("config.agent.field_selection.random_fraction 必须在 0 到 1 之间")
     field_selection["mode"] = str(field_selection["mode"] or "semantic_random")
     field_selection["random_seed"] = str(field_selection["random_seed"] or "newwqb")
+    field_selection["dataset_sampling"] = str(
+        field_selection["dataset_sampling"] or "stratified"
+    ).lower()
+    try:
+        field_selection["min_datasets"] = max(
+            1, int(field_selection["min_datasets"])
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("config.agent.field_selection.min_datasets 必须是整数") from exc
+    try:
+        field_selection["min_cross_dataset_pairs"] = max(
+            0, int(field_selection["min_cross_dataset_pairs"])
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "config.agent.field_selection.min_cross_dataset_pairs 必须是整数"
+        ) from exc
+    raw_pool = field_selection.get("dataset_pool") or []
+    if isinstance(raw_pool, (str, int)):
+        raw_pool = [raw_pool]
+    if not isinstance(raw_pool, list):
+        raise ValueError("config.agent.field_selection.dataset_pool 必须是数组")
+    field_selection["dataset_pool"] = [
+        str(item.get("id") or item.get("name")) if isinstance(item, dict)
+        else str(item)
+        for item in raw_pool
+        if isinstance(item, (str, int)) or (
+            isinstance(item, dict) and (item.get("id") or item.get("name"))
+        )
+    ]
+    for key in (
+        "platform_usage_refresh", "require_platform_alpha_count", "persist_catalog"
+    ):
+        value = field_selection[key]
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            field_selection[key] = value.strip().lower() == "true"
+            continue
+        raise ValueError(f"config.agent.field_selection.{key} 必须是布尔值")
 
     search_policy = {**_SEARCH_POLICY_DEFAULTS, **dict(agent.get("search_policy") or {})}
     try:
@@ -228,7 +279,11 @@ def parse_config(raw):
     search_max = int(search_raw.get("max_simulations", research_raw.get("max_simulations", 100)))
     research_max = int(research_raw.get("max_simulations", search_max))
     factory_raw = dict(agent.get("factory") or {})
-    factory_max = int(factory_raw.get("max_simulations", search_max))
+    legacy_factory_max = int(factory_raw.get("max_simulations", search_max))
+    factory_max = int(factory_raw.get("weekly_simulation_cap", legacy_factory_max))
+    daily_factory_max = int(factory_raw.get("daily_simulation_cap", factory_max))
+    if daily_factory_max > factory_max:
+        raise ValueError("daily_simulation_cap 不得超过 weekly_simulation_cap")
     validate_budget_hierarchy(
         factory_max_simulations=factory_max,
         search_max_simulations=search_max,
@@ -249,6 +304,8 @@ def parse_config(raw):
     factory = FactoryConfig(
         max_simulations=factory_max,
         max_runtime_sec=int(factory_raw.get("max_runtime_sec", 86400)),
+        daily_simulation_cap=daily_factory_max,
+        weekly_simulation_cap=factory_max,
     )
     if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
         raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
@@ -256,6 +313,8 @@ def parse_config(raw):
     # Keep the validated typed factory model; the raw mapping remains
     # available only through ``runtime.factory`` for extensible legacy keys.
     factory_settings = dict(agent.get("factory") or {})
+    factory_settings.setdefault("daily_simulation_cap", daily_factory_max)
+    factory_settings.setdefault("weekly_simulation_cap", factory_max)
     research_allocation_raw = dict(agent.get("research_allocation") or {})
     statistical_policy = dict(agent.get("statistical_policy") or {})
     robustness_policy = dict(agent.get("robustness_policy") or {})

@@ -65,7 +65,29 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertIsInstance(config.factory, FactoryConfig)
         self.assertEqual(config.factory.max_simulations, 12)
         self.assertEqual(config.factory.max_runtime_sec, 99)
+        self.assertEqual(config.factory.daily_simulation_cap, 12)
+        self.assertEqual(config.factory.weekly_simulation_cap, 12)
         self.assertEqual(config.runtime.max_rounds, 8)
+
+    def test_factory_weekly_and_daily_caps_are_typed_and_validated(self):
+        config = parse_config({"simulation": {}, "agent": {
+            "factory": {
+                "max_simulations": 300,
+                "daily_simulation_cap": 1600,
+                "weekly_simulation_cap": 11200,
+            },
+            "search_policy": {"max_simulations": 100},
+        }})
+        self.assertEqual(config.factory.max_simulations, 11200)
+        self.assertEqual(config.factory.daily_simulation_cap, 1600)
+        self.assertEqual(config.factory.weekly_simulation_cap, 11200)
+        with self.assertRaises(ValueError):
+            parse_config({"simulation": {}, "agent": {
+                "factory": {
+                    "daily_simulation_cap": 1601,
+                    "weekly_simulation_cap": 1600,
+                },
+            }})
 
     def test_agent_typed_config_does_not_round_trip_through_legacy_dict(self):
         typed = parse_config({"simulation": {"neutralization": "SUBINDUSTRY"}, "agent": {}})
@@ -503,8 +525,11 @@ class TestRuntimeSafety(unittest.TestCase):
     def test_audit_detects_checkpoint_ledger_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
-                json.dump({"complete": True, "experiments": [{
-                    "status": "DONE", "proposal_id": "p"
+                json.dump({"schema_version": 1, "round_no": 1,
+                           "hypothesis": {}, "complete": True, "experiments": [{
+                    "id": "e1", "round": 1, "hypothesis_id": "h",
+                    "expression": "rank(low)", "settings": {},
+                    "fields_used": ["low"], "status": "DONE", "proposal_id": "p"
                 }]}, handle)
             with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
                 handle.write(json.dumps({
@@ -524,6 +549,20 @@ class TestRuntimeSafety(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("ledger_missing", result["errors"])
             self.assertIn("checkpoint_ledger_mismatch", result["errors"])
+
+    def test_audit_allows_ephemeral_lifecycle_without_local_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
+                json.dump({"schema_version": 1, "round_no": 1,
+                           "hypothesis": {}, "complete": True, "experiments": [{
+                    "id": "e1", "round": 1, "hypothesis_id": "h",
+                    "expression": "rank(low)", "settings": {},
+                    "fields_used": ["low"], "status": "DONE", "proposal_id": "p"
+                }]}, handle)
+            result = audit_state(tmp, lifecycle_persistent=False)
+            self.assertTrue(result["ok"])
+            self.assertNotIn("ledger_missing", result["errors"])
+            self.assertNotIn("checkpoint_ledger_mismatch", result["errors"])
 
     def test_audit_detects_orphan_validation_parent(self):
         with tempfile.TemporaryDirectory() as tmp:

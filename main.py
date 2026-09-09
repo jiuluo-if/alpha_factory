@@ -204,7 +204,10 @@ def main():
         return
     if args.audit_state:
         from wqb_agent.audit import audit_state
-        result = audit_state(typed_config.runtime.state_dir)
+        result = audit_state(
+            typed_config.runtime.state_dir,
+            lifecycle_persistent=False,
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
             sys.exit(2)
@@ -321,6 +324,14 @@ def main():
                 max_rounds=factory_cfg.get("max_rounds", 0),
                 idle_sleep_sec=factory_cfg.get("idle_sleep_sec", 30),
                 max_simulations=factory_cfg.get("max_simulations", 240),
+                daily_simulation_cap=factory_cfg.get(
+                    "daily_simulation_cap",
+                    factory_cfg.get("max_simulations", 240),
+                ),
+                weekly_simulation_cap=factory_cfg.get(
+                    "weekly_simulation_cap",
+                    factory_cfg.get("max_simulations", 240),
+                ),
             )
             print(json.dumps(session, ensure_ascii=False, indent=2))
         elif args.run_proposals:

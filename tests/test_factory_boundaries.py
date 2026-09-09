@@ -480,6 +480,14 @@ class TestFactoryBatchContract(unittest.TestCase):
         self.assertEqual(traits["concept"], "analyst_revision")
         self.assertEqual(traits["measurement"], "change")
         self.assertEqual(traits["update_style"], "event_driven")
+        self.assertEqual(traits["frequency"], "daily")
+        self.assertEqual(traits["sign_semantics"], "signed_change")
+
+        ranked = factory.rank_compatible_templates(profile)
+        self.assertTrue({
+            "change", "persistent_level", "innovation_surprise",
+            "delayed_confirmation", "accumulated_change", "quality_change",
+        }.issuperset(item["template"].family for item in ranked[:4]))
 
         proposals = factory.generate_factory_batch(
             {"id": "revision-semantics"}, [profile],
@@ -515,6 +523,10 @@ class TestFactoryBatchContract(unittest.TestCase):
             {"id": "fundamental-semantics"}, [profile],
             self._operator_reference(), target=8, seed="fundamental-semantics",
         )
+        traits = AlphaFactory().derive_field_semantic_traits(profile)
+        self.assertEqual(traits["frequency"], "quarterly")
+        self.assertEqual(traits["sign_semantics"], "nonnegative_level")
+        self.assertEqual(traits["behavior"], "slow_moving")
         self.assertTrue(proposals)
         self.assertNotIn(
             "event_trigger",
@@ -537,6 +549,8 @@ class TestFactoryBatchContract(unittest.TestCase):
             {"id": "option-semantics"}, [profile],
             self._operator_reference(), target=4, seed="option-semantics",
         )
+        traits = AlphaFactory().derive_field_semantic_traits(profile)
+        self.assertEqual(traits["sign_semantics"], "nonnegative_level")
         self.assertTrue(proposals)
         self.assertTrue({
             "risk_adjusted_reversal", "downside_risk", "distribution_regime",
@@ -599,6 +613,28 @@ class TestFactoryBatchContract(unittest.TestCase):
             [profile], self._operator_reference(), max_candidates=1,
         )
         self.assertEqual(proposals, [])
+
+    def test_derived_unknown_semantics_never_admit_a_strong_economic_mechanism(self):
+        profile = {
+            "id": "opaque_signal",
+            "name": "Opaque signal",
+            "description": "verified proprietary signal",
+            "dataset": "model16",
+            "type": "MATRIX",
+            "frequency": "daily",
+            "category": "model",
+            "coverage": 0.9,
+            "semantic_status": "KNOWN",
+        }
+        factory = AlphaFactory()
+        ranked = factory.rank_compatible_templates(profile)
+        self.assertTrue(ranked)
+        self.assertTrue(all(item["admission"] != "ALLOW" for item in ranked))
+        candidate = factory.generate(
+            {"template_ids": ["persistent_level"]}, [profile], count=1
+        )[0]
+        self.assertIn("UNKNOWN", candidate["economic_mechanism"])
+        self.assertNotIn("平滑后的相对高低", candidate["economic_mechanism"])
 
     def test_semantic_matching_is_deterministic_for_a_fixed_seed(self):
         fields = [

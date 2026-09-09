@@ -539,6 +539,21 @@ def _derive_field_semantic_traits(profile):
     else:
         update_style = "unknown"
 
+    if concept == "analyst_revision" or measurement == "change":
+        sign_semantics = "signed_change"
+    elif concept in {"volatility", "event_count", "fundamental", "earnings", "data_quality"}:
+        sign_semantics = "nonnegative_level"
+    elif measurement == "dispersion":
+        sign_semantics = "nonnegative_dispersion"
+    elif measurement in {"ratio", "probability"}:
+        sign_semantics = "bounded"
+    elif concept in {"market_price", "sentiment"}:
+        sign_semantics = "signed_level"
+    elif concept == "liquidity":
+        sign_semantics = "nonnegative_level"
+    else:
+        sign_semantics = "unknown"
+
     direction_meaning = {
         "analyst_revision": "information_update",
         "volatility": "risk_exposure",
@@ -579,6 +594,8 @@ def _derive_field_semantic_traits(profile):
         "concept": concept,
         "measurement": measurement,
         "behavior": behavior,
+        "frequency": frequency or "unknown",
+        "sign_semantics": sign_semantics,
         "direction_meaning": direction_meaning,
         "update_style": update_style,
         "tags": sorted(tags),
@@ -869,6 +886,8 @@ class AlphaFactory:
         concept = traits["concept"]
         measurement = traits["measurement"]
         behavior = traits["behavior"]
+        frequency = traits["frequency"]
+        sign_semantics = traits["sign_semantics"]
         known = traits["status"] == "KNOWN"
         field_type = str(profile.get("type") or "").upper()
         reasons = []
@@ -887,7 +906,8 @@ class AlphaFactory:
             score += 60
             reasons.append("字段语义明确指向数据质量")
         elif family == "event_trigger":
-            if not known or behavior != "event_driven":
+            if (not known or behavior != "event_driven"
+                    or frequency in {"weekly", "monthly", "quarterly", "annual"}):
                 return {"admission": "REJECT", "score": -30, "reasons": ["缺少事件驱动语义证据"]}
             score += 65
             reasons.append("字段以事件驱动方式更新")
@@ -927,6 +947,29 @@ class AlphaFactory:
             elif family == "distribution_regime":
                 score += 24
                 reasons.append("波动率适合风险状态或 regime 表达")
+            elif family in {"relative_spread_change", "relative_ratio",
+                            "relative_covariance", "relative_correlation",
+                            "generic_multi_field_spread", "generic_multi_field_ratio"}:
+                score += 18
+                reasons.append("波动率可与价格或另一风险量构成相对关系")
+        if concept == "analyst_revision":
+            if family in {"change", "persistent_level", "innovation_surprise",
+                          "delayed_confirmation"}:
+                score += 35
+                reasons.append("修正字段直接观测预期更新、持续性或滞后确认")
+            elif family == "event_trigger":
+                score -= 25
+                reasons.append("修正虽是更新事件，但优先测试变化本身而非极端触发")
+        if behavior == "slow_moving":
+            if family == "event_trigger":
+                return {"admission": "REJECT", "score": -30, "reasons": ["慢变字段不默认进入事件触发"]}
+            if family in {"persistent_level", "distribution_regime", "group_centered_level"}:
+                score += 24
+                reasons.append("低频字段更适合检验持久状态或历史 regime")
+        if sign_semantics == "nonnegative_level" and family in {
+                "reversal", "risk_adjusted_reversal", "downside_risk"}:
+            score -= 8
+            reasons.append("非负水平字段不把符号方向直接解释为反转")
         if concept == "analyst_revision" and family == "data_quality_penalty":
             return {"admission": "REJECT", "score": -30, "reasons": ["修正字段不能冒充数据质量"]}
         if not known:
@@ -1053,10 +1096,22 @@ class AlphaFactory:
                 f"字段 {field_id} 的语义为 UNKNOWN；当前 profile 只能支持 {template.family} 的语法审阅，"
                 "不能证明该字段具备模板所需的经济机制。"
             )
+        fit_reason = {
+            "analyst_revision": "修正值直接承载分析师预期更新，适合检验变化、持续性或滞后确认",
+            "volatility": "波动率是风险暴露或状态变量，适合风险调整、regime 或相对关系",
+            "fundamental": "低频基本面水平代表经济规模，适合持久性和相对状态检验",
+            "earnings": "盈利相关字段承载经营预期，适合变化与信息扩散检验",
+            "event_count": "事件计数代表注意力事件强度，适合事件发生后的变化检验",
+            "data_quality": "数据质量字段描述可用性风险，只进入缺失或陈旧信息机制",
+        }.get(
+            traits["concept"],
+            f"该字段的 {traits['measurement']} 测量与 {template.family} 的有限结构相容",
+        )
         mechanism = (
             f"字段 {field_id} 被识别为 {traits['concept']}，测量为 {traits['measurement']}，"
-            f"行为为 {traits['behavior']}；其 {traits['direction_meaning']} 与 {template.family} 的"
-            "结构假设相容，需用独立样本和平台 checks 证伪。"
+            f"频率为 {traits['frequency']}，符号语义为 {traits['sign_semantics']}，"
+            f"行为为 {traits['behavior']}；{fit_reason}。"
+            "该机制仍需用独立样本和平台 checks 证伪。"
         )
         if relation and relation.get("labels"):
             mechanism += f" 槽位关系证据为：{', '.join(relation['labels'])}。"

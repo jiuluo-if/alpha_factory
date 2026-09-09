@@ -9,6 +9,7 @@
 - 唯一执行入口：`python main.py suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py run-proposals`；不得绕过 `Agent.run_proposals()`。
 - 提案执行编排归 `wqb_agent/proposal_execution.py` 的 `ProposalExecutionWorkflow` 所有；`Agent.run_proposals()` 只作兼容 facade。Workflow 不导入 `Agent`、不直接调用 Client POST；Simulation 提交由 `Simulator`、checkpoint 持久化由 `CheckpointStore` 负责。
 - Suggestion/discovery 编排归 `wqb_agent/suggestion_workflow.py` 的 `SuggestionWorkflow` 所有；`Agent.run_suggestion_round()` 只作兼容 facade。该 workflow 只读 discovery/context，不能导入 `Agent`、`Client`、`Simulator` 或 `ProposalExecutionWorkflow`，不产生 Simulation POST、checkpoint 写入或 owner lock。
+- 优化候选编排归 `wqb_agent/optimizer_workflow.py` 的 `OptimizerWorkflow` 所有；`Agent` 的优化方法只作兼容 facade。它只消费已有证据、cloud 轻量优先级提示和 Agent-authored `child_economic_hypothesis`，不生成经济机制、不扫描参数、不写 proposals、不修改 trajectory、不刷新 Alpha Feed 或触发 Simulation。
 - 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 的远端轻量元数据只按美国东部本地滚动 7 日窗口缓存，指标、轨迹、checkpoint 和证据不进入该缓存。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
 - 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。
@@ -48,16 +49,18 @@ AgentRuntimePolicy
   ↓
 RuntimeComponents
   ↓
-Agent 提供显式 operation hooks
+  Agent 提供显式 operation hooks
   ├── SuggestionWorkflow
-  └── ProposalExecutionWorkflow
-  └── AlphaFeedWorkflow
+  ├── ProposalExecutionWorkflow
+  ├── AlphaFeedWorkflow
+  └── OptimizerWorkflow
 ```
 
 - `build_agent_runtime_policy()` 是 Agent 配置投影的唯一 owner；`Agent.__init__` 不得再次逐字段解释 `config.runtime`、`config.factory` 或 `field_selection`。
 - `RuntimeComponents` 只拥有已经解析的领域对象，不放入 workflow，也不反向导入 `Agent`；workflow composition 只能接收既有组件，不能重新构造 `Trajectory`、`TrialLedger`、`Simulator`、`CheckpointStore` 或 `SubmissionPool`。
-- `Agent` 可以保留 `self.memory`、`self.trajectory` 等兼容属性，但这些属性必须集中投影自同一组组件；执行 workflow 必须通过 identity tests 证明共享对象，Alpha Feed 必须证明复用同一组 cache。
+- `Agent` 可以保留 `self.memory`、`self.trajectory` 等兼容属性，但这些属性必须集中投影自同一组组件；执行 workflow 必须通过 identity tests 证明共享对象，Alpha Feed 必须证明复用同一组 cache，Optimizer 必须证明复用同一 trajectory、weekly cache 和 AlphaFactory。
 - `AlphaFeedWorkflow` 只负责 BRAIN 用户 Alpha 的只读分页、纽约七日窗口、去重/bucket 和两个既有 cache 的更新；它只接收 `get_all_user_alphas`，不得导入 `Agent`/`Simulator`、调用 POST/PATCH 或迁移 optimizer。
+- `OptimizerWorkflow` 只消费既有 trajectory、weekly cache 和 AlphaFactory；它按 evidence → code screen → Agent-authored semantic gate 编排 CHILD proposal，不能生成 `child_economic_hypothesis`、扫描参数、刷新 Alpha Feed、写 proposals 或触发 Simulation。
 - 不引入 DI/IoC 框架，不创建 `Workflow(agent=self)` 或 `hooks.get_attr` 逃生通道；hooks 必须是窄的、按操作定义的显式回调。
 
 ## Alpha 经济含义与自相关硬约束

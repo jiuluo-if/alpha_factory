@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .alpha_feed_workflow import AlphaFeedHooks, AlphaFeedWorkflow
+from .optimizer_workflow import OptimizerHooks, OptimizerWorkflow
 from .proposal_execution import (
     ProposalExecutionContext,
     ProposalExecutionHooks,
@@ -17,20 +18,22 @@ from .suggestion_workflow import SuggestionHooks, SuggestionWorkflow
 
 @dataclass(frozen=True)
 class AgentWorkflowHooks:
-    """三个 workflow 所需的显式 Agent 操作回调。"""
+    """四个 workflow 所需的显式 Agent 操作回调。"""
 
     suggestion: SuggestionHooks
     proposal_execution: ProposalExecutionHooks
     alpha_feed: AlphaFeedHooks
+    optimizer: OptimizerHooks
 
 
 @dataclass(frozen=True)
 class AgentWorkflows:
-    """由同一套基础组件和缓存组合出的三个 workflow。"""
+    """由同一套基础组件和缓存组合出的四个 workflow。"""
 
     suggestion: SuggestionWorkflow
     proposal_execution: ProposalExecutionWorkflow
     alpha_feed: AlphaFeedWorkflow
+    optimizer: OptimizerWorkflow
 
 
 def build_agent_workflows(
@@ -83,8 +86,17 @@ def build_agent_workflows(
         daily_cache=daily_cache,
         weekly_cache=weekly_cache,
     )
+    optimizer = OptimizerWorkflow(
+        trajectory=components.trajectory,
+        alpha_feed_cache=weekly_cache,
+        alpha_factory=components.builder.factory,
+        quality_policy=policy.quality_policy,
+        operator_reference=operator_reference,
+        hooks=hooks.optimizer,
+    )
     return AgentWorkflows(
         suggestion=suggestion,
         proposal_execution=proposal_execution,
         alpha_feed=alpha_feed,
+        optimizer=optimizer,
     )

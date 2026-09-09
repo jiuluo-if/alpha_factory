@@ -11,9 +11,9 @@
 
 `SuggestionWorkflow` 是 suggestion round 的唯一编排 owner：它负责 discovery fallback、suggestion bundle 组装、`suggestions.json` emission 和既有控制台输出；`Agent` 只保留高层研究规划 hooks 与兼容 facade。Workflow 通过显式依赖和窄 operation-shaped hooks 工作，不反向导入 `Agent`，不直接依赖 `Client`/`Simulator`/checkpoint，也不复制 `_last_round_skipped` 或 `memory.best_exhausted`。
 
-运行时装配的 owner 关系是：`AppConfig` → `AgentRuntimePolicy` → `RuntimeComponents` → `AgentWorkflows`。`build_agent_runtime_policy()` 集中解析 Agent 实际消费的配置投影；`RuntimeComponents` 只拥有基础领域对象；`runtime_composition.py` 只用既有组件和显式 hooks 创建 `SuggestionWorkflow` 与 `ProposalExecutionWorkflow`，不得反向导入 `Agent` 或重复构造组件。Agent 的旧 public attributes 可以继续保留，但必须集中投影自这套唯一对象图。
+运行时装配的 owner 关系是：`AppConfig` → `AgentRuntimePolicy` → `RuntimeComponents` → `AgentWorkflows`。`build_agent_runtime_policy()` 集中解析 Agent 实际消费的配置投影；`RuntimeComponents` 只拥有基础领域对象；`runtime_composition.py` 只用既有组件和显式 hooks 创建 `SuggestionWorkflow`、`ProposalExecutionWorkflow`、`AlphaFeedWorkflow` 与 `OptimizerWorkflow`，不得反向导入 `Agent` 或重复构造组件。Agent 的旧 public attributes 可以继续保留，但必须集中投影自这套唯一对象图。
 
-`AlphaFeedWorkflow` 是 `AgentWorkflows` 的第三个成员，负责 BRAIN 用户 Alpha 的只读分页、`America/New_York` 七个自然日窗口、去重、bucket 以及 `DailyResearchCache`/`WeeklyAlphaFeedCache` 更新。它只接收 `get_all_user_alphas` 操作，不接收整个 Client，不依赖 Agent、Simulator、proposal/suggestion workflow，不产生 POST、PATCH、submission 或 checkpoint 写入。`Agent._cloud_alpha_ids()` 仍是 optimizer 对 weekly cache 的消费方，不迁移到该 workflow。
+`AlphaFeedWorkflow` 是 `AgentWorkflows` 的第三个成员，负责 BRAIN 用户 Alpha 的只读分页、`America/New_York` 七个自然日窗口、去重、bucket 以及 `DailyResearchCache`/`WeeklyAlphaFeedCache` 更新。它只接收 `get_all_user_alphas` 操作，不接收整个 Client，不依赖 Agent、Simulator、proposal/suggestion/optimizer workflow，不产生 POST、PATCH、submission 或 checkpoint 写入。`OptimizerWorkflow` 是第四个成员，拥有 `_cloud_alpha_ids()` 消费逻辑、已有证据筛选、Agent hypothesis gate 和 AlphaFactory CHILD 编排；cloud metadata 只作排序提示。
 
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 
@@ -27,7 +27,7 @@
 
 ## 自主模拟双层边界
 
-- `Agent.generate_optimized_proposals()` 先调用 `AlphaFactory.screen_optimization_parents()` 做代码初筛，再做 Agent 经济机制/反过拟合筛选；云端 Alpha 轻量缓存只提升已有本地证据的优先级，不作为独立性能证据。
+- `OptimizerWorkflow` 先调用 `AlphaFactory.screen_optimization_parents()` 做代码初筛，再验证 Agent 已提供的经济机制/反过拟合 gate；`Agent.optimizable_signal_records()`、`optimizer_gate_report()` 和 `generate_optimized_proposals()` 仅为兼容 facade。云端 Alpha 轻量缓存只提升已有本地证据的优先级，不作为独立性能证据。
 - 优化题案标记 `research_layer=optimization`、`research_role=EXPLOIT`；来源按 `cloud`、`current_run` 审计。探索题案由 `AlphaFactory.generate_factory_batch()` 以稳定种子随机化已核验字段和经济模板，标记 `research_layer=exploration`、`research_role=EXPLORE`、`experiment_stage=BASELINE`、`exploration_objective=signal_discovery`。
 - 双层不增加执行入口：完整批次仍须通过 100 题案 gate、正常 Agent preflight 和 `Agent.run_proposals()`；代码/Agent 任一层不足或失败都不能用重复题案填充。
 

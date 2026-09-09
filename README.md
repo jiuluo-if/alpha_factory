@@ -47,8 +47,9 @@ python main.py run-proposals
 wqb_agent/research_api.py  # Agent-facing facade
 wqb_agent/runtime_policy.py       # AppConfig 到 Agent 运行时投影
 wqb_agent/runtime_components.py   # 唯一的基础领域组件
-wqb_agent/runtime_composition.py  # 两个 workflow 的显式组合边界
+wqb_agent/runtime_composition.py  # 四个 workflow 的显式组合边界
 wqb_agent/alpha_feed_workflow.py  # 只读 Alpha 元数据同步
+wqb_agent/optimizer_workflow.py    # 证据驱动 CHILD 编排
 wqb_agent/                 # BRAIN、执行、状态和评估实现
 main.py                    # 兼容 CLI 与安全入口
 docs/                      # 当前协议、研究政策与少量参考
@@ -68,13 +69,14 @@ RuntimeComponents
   ↓ Agent 提供显式 hooks
 AgentWorkflows
   ├── SuggestionWorkflow（只读建议）
-  └── ProposalExecutionWorkflow（提案执行与恢复）
-  └── AlphaFeedWorkflow（只读 Alpha 元数据同步）
+  ├── ProposalExecutionWorkflow（提案执行与恢复）
+  ├── AlphaFeedWorkflow（只读 Alpha 元数据同步）
+  └── OptimizerWorkflow（证据驱动 CHILD 编排）
 ```
 
 `AgentRuntimePolicy` 只保存 Agent 实际消费的已解析值，不复制完整
 `AppConfig`。`RuntimeComponents` 只拥有 memory、trajectory、ledger、discovery、
-simulator、checkpoint 等基础对象，不承担 workflow 编排；三个 workflow 共享既有组件或缓存，
+simulator、checkpoint 等基础对象，不承担 workflow 编排；四个 workflow 共享既有组件或缓存，
 不会自行创建第二个 `Simulator`、`Trajectory` 或 `CheckpointStore`。Agent 仍投影旧的
 public attributes，以保持兼容 facade 和现有研究方法不变。`AlphaFeedWorkflow` 只读取
 `get_all_user_alphas`，维护 `America/New_York` 七个自然日的轻量元数据，不发送 Simulation
@@ -99,7 +101,7 @@ python -m compileall -q wqb_agent scripts tests
 ## 颜色、Agent 优化与阶段配额
 
 - 颜色在每个 Simulation settle 后立即刷新当前进程的 `DailyResearchCache`，整批结束时再按完整证据重算；因此混合批次或中断不会把颜色更新延迟到整批成功。
-- `suggestions.json` 的 `optimizer_context` 是优化门禁的可审计摘要。只有 DONE、指标、字段审计元数据齐全，并由 Agent 明确提供 `child_economic_hypothesis` 时，才允许生成 `CHILD`/`agent_optimizer` 候选；参数、窗口、符号扫描不构成自主优化。
+- `suggestions.json` 的 `optimizer_context` 是优化门禁的可审计摘要。`OptimizerWorkflow` 只做 DONE/证据筛选、AlphaFactory 代码初筛和 Agent 已明确提供的 `child_economic_hypothesis` 语义/反过拟合验证；只有 gate 通过才允许生成 `CHILD`/`agent_optimizer` 候选。Python 不生成经济机制，参数、窗口、符号扫描不构成自主优化。
 - 当前阶段工厂本地配额为每周 `11200` 次（`7*1600`），每日 `1600` 次，按 `America/New_York` 本地日刷新。`factory_session.json` 只保存配额控制元数据；未完成 checkpoint 的恢复预留优先，不能通过新轮绕过。
 - `python main.py alpha sync-feed` 每次只读分页拉取当前工作日前推 7 个自然日的用户 Alpha：提交 Alpha 与模拟 Alpha 在同一刷新批次按纽约本地日分桶，写入 `.alpha_feed_cache/weekly.json`，保留 `updated_at`/`expires_at`，并按 `11200（7*1600）` 模拟元数据上限清理窗口外数据。
 

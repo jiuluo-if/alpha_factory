@@ -7,6 +7,7 @@ keeps the skeleton visible to the later proposal and diversity gates.
 """
 
 import hashlib
+import itertools
 import json
 import math
 import random
@@ -377,6 +378,221 @@ ECONOMIC_TEMPLATES = (
 MAX_TEMPLATE_FAMILY_PER_BATCH = 2
 
 
+_SEMANTIC_CONCEPT_RULES = (
+    ("data_quality", ("missing", "null", "nan", "quality", "coverage", "stale")),
+    ("analyst_revision", ("revision", "revised", "estimate change", "forecast change")),
+    ("volatility", ("volatility", "implied vol", "realized vol", "iv_skew", "variance")),
+    ("event_count", ("mention count", "event count", "number of events", "occurrence", "filing count")),
+    ("liquidity", ("liquidity", "trading volume", "dollar volume", "turnover", "bid ask", "bid-ask")),
+    ("sentiment", ("sentiment", "social", "news", "recommendation", "bullish", "bearish")),
+    ("valuation", ("valuation", "target price", "price target", "price-to", "price to", "multiple", "p/e", "p/b")),
+    ("earnings", ("earnings", "eps", "revenue", "sales", "profit", "cash flow", "fscore")),
+    ("fundamental", ("total assets", "assets", "liabilities", "equity", "book value", "debt", "fundamental")),
+    ("market_price", ("price", "close", "open", "high", "low", "vwap", "return")),
+)
+
+_SEMANTIC_MEASUREMENT_RULES = (
+    ("dispersion", ("dispersion", "skew", "spread", "standard deviation", "std dev")),
+    ("ratio", ("ratio", "percent", "%", "margin", "yield", "multiple", "p/e", "p/b")),
+    ("change", ("revision", "revised", "change", "delta", "growth", "return", "momentum", "surprise", "diff")),
+    ("count", ("count", "number", "mentions", "events", "occurrence", "volume")),
+    ("probability", ("probability", "likelihood", "rating", "recommendation")),
+)
+
+_SEMANTIC_RELATION_LABELS = {
+    "same_economic_concept",
+    "numerator_denominator",
+    "complementary_expectations",
+    "comparable_scale",
+    "price_volume",
+    "option_pair",
+    "revision_dispersion",
+}
+
+
+def _semantic_profile_text(profile, *, include_dataset=True):
+    """Build semantic evidence only from the documented field profile keys."""
+    if not isinstance(profile, dict):
+        return ""
+    values = []
+    keys = ("id", "name", "description", "frequency", "category")
+    if include_dataset:
+        keys = ("id", "name", "description", "dataset", "frequency", "category")
+    for key in keys:
+        value = profile.get(key)
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("name")
+        if value is not None:
+            values.append(str(value))
+    return " ".join(values).lower().replace("_", " ")
+
+
+def _semantic_has(text, phrase):
+    phrase = str(phrase).lower()
+    if not phrase:
+        return False
+    if any(char.isalnum() for char in phrase):
+        return phrase in text
+    return phrase in text
+
+
+def _semantic_frequency_text(profile):
+    value = profile.get("frequency") if isinstance(profile, dict) else None
+    if isinstance(value, dict):
+        value = value.get("name") or value.get("id")
+    return str(value or "").lower()
+
+
+def _derive_field_semantic_traits(profile):
+    """Derive a conservative, non-persistent semantic view of one profile."""
+    if not isinstance(profile, dict):
+        return {
+            "concept": "unknown",
+            "measurement": "unknown",
+            "behavior": "unknown",
+            "direction_meaning": "unknown",
+            "update_style": "unknown",
+            "tags": [],
+            "status": "UNKNOWN",
+        }
+    text = _semantic_profile_text(profile)
+    direct_text = _semantic_profile_text(profile, include_dataset=False)
+    category = str(profile.get("category") or "").lower()
+    frequency = _semantic_frequency_text(profile)
+
+    concept = "unknown"
+    concept_hits = []
+    direct_concept_hits = []
+    for candidate, keywords in _SEMANTIC_CONCEPT_RULES:
+        hits = [word for word in keywords if _semantic_has(text, word)]
+        if hits:
+            concept = candidate
+            concept_hits = hits
+            direct_concept_hits = [
+                word for word in keywords if _semantic_has(direct_text, word)
+            ]
+            break
+    if concept == "unknown":
+        category_rules = {
+            "analyst": "analyst_revision",
+            "option": "volatility",
+            "options": "volatility",
+            "fundamental": "fundamental",
+            "social": "sentiment",
+            "news": "sentiment",
+            "liquidity": "liquidity",
+        }
+        concept = category_rules.get(category, "unknown")
+        concept_hits = [category] if concept != "unknown" else []
+        direct_concept_hits = list(concept_hits)
+
+    measurement = "level"
+    measurement_hits = []
+    for candidate, keywords in _SEMANTIC_MEASUREMENT_RULES:
+        hits = [word for word in keywords if _semantic_has(text, word)]
+        if hits:
+            measurement = candidate
+            measurement_hits = hits
+            break
+    if concept == "analyst_revision":
+        measurement = "change"
+        if "revision" not in measurement_hits:
+            measurement_hits = ["revision"] + measurement_hits
+    if concept == "event_count":
+        measurement = "count"
+
+    frequency_slow = any(
+        marker in frequency for marker in ("quarter", "monthly", "month", "annual", "year", "weekly", "week")
+    )
+    frequency_fast = any(
+        marker in frequency for marker in ("intraday", "minute", "hour", "daily", "day")
+    )
+    event_signal = concept in {"analyst_revision", "event_count", "sentiment"}
+    slow_signal = frequency_slow or concept in {"fundamental", "earnings", "valuation"} and not frequency_fast
+    sparse = False
+    try:
+        coverage = float(profile.get("coverage"))
+        sparse = math.isfinite(coverage) and coverage < 0.5
+    except (TypeError, ValueError):
+        pass
+    if slow_signal:
+        behavior = "slow_moving"
+    elif event_signal:
+        behavior = "event_driven"
+    elif sparse:
+        behavior = "sparse"
+    elif measurement in {"change", "dispersion"} or concept in {"market_price", "volatility", "liquidity"}:
+        behavior = "signed"
+    elif measurement in {"ratio", "probability"}:
+        behavior = "bounded"
+    elif measurement == "count" or concept in {"event_count", "fundamental"}:
+        behavior = "nonnegative"
+    else:
+        behavior = "unknown"
+
+    if event_signal:
+        update_style = "event_driven"
+    elif slow_signal:
+        update_style = "periodic"
+    elif frequency_fast:
+        update_style = "continuous"
+    else:
+        update_style = "unknown"
+
+    direction_meaning = {
+        "analyst_revision": "information_update",
+        "volatility": "risk_exposure",
+        "event_count": "attention_events",
+        "liquidity": "market_participation",
+        "sentiment": "attention_or_belief",
+        "valuation": "relative_value",
+        "earnings": "operating_expectation",
+        "fundamental": "economic_scale",
+        "market_price": "market_level",
+        "data_quality": "data_availability",
+    }.get(concept, "unknown")
+
+    tags = set()
+    if concept == "market_price" or any(word in text for word in ("price", "close", "open", "high", "low", "vwap")):
+        tags.add("price")
+    if concept == "liquidity" or any(word in text for word in ("volume", "turnover", "liquidity")):
+        tags.add("volume")
+    if concept == "volatility":
+        tags.add("volatility")
+    if "option" in text or "call" in text or "put" in text:
+        tags.add("option")
+    if concept == "analyst_revision" or "analyst" in text:
+        tags.add("analyst")
+    if measurement == "dispersion":
+        tags.add("dispersion")
+    if concept == "event_count":
+        tags.add("event_count")
+    if concept in {"fundamental", "earnings", "valuation"}:
+        tags.add("fundamental_scale")
+    if any(word in text for word in ("revenue", "sales", "earnings", "eps", "profit", "cash flow")):
+        tags.add("earnings")
+    if any(word in text for word in ("assets", "equity", "book value", "debt")):
+        tags.add("asset_scale")
+    if any(word in text for word in ("social", "news", "mention")):
+        tags.add("attention")
+    return {
+        "concept": concept,
+        "measurement": measurement,
+        "behavior": behavior,
+        "direction_meaning": direction_meaning,
+        "update_style": update_style,
+        "tags": sorted(tags),
+        "status": "KNOWN" if concept != "unknown" and direct_concept_hits else "UNKNOWN",
+        "confidence": "HIGH" if direct_concept_hits else "LOW",
+        "evidence": {
+            "concept": concept_hits,
+            "direct_concept": direct_concept_hits,
+            "measurement": measurement_hits,
+            "frequency": frequency,
+        },
+    }
+
+
 class AlphaTemplateRegistry:
     """Immutable-by-default registry for built-in template skeletons."""
 
@@ -544,6 +760,13 @@ class AlphaFactory:
                 for slot in template.required_slots
             ):
                 continue
+            slot_profiles = list(normalized_profiles[:len(template.required_slots)])
+            if len(template.required_slots) > 1:
+                relation = self._relationship_gate(slot_profiles, template)
+                if relation["admission"] == "REJECT":
+                    continue
+            else:
+                relation = None
             try:
                 expression = template.expression.format(**values)
             except (KeyError, ValueError):
@@ -593,7 +816,12 @@ class AlphaFactory:
                     "template_ref": ref,
                     "template_slots": slot_values,
                     "factory_version": "alpha-factory-v1",
-                    "economic_mechanism": template.rationale,
+                    "economic_mechanism": self._field_mechanism(
+                        normalized_profiles[0],
+                        _derive_field_semantic_traits(normalized_profiles[0]),
+                        template,
+                        relation,
+                    ),
                     "direction": (
                         "reversal" if "reversal" in template.family
                         or "reversal" in template.rationale.lower() else "long"
@@ -628,7 +856,214 @@ class AlphaFactory:
         value = profile.get("id")
         return cls._profile_dataset(profile), str(value) if value is not None else None
 
-    def _select_companion_profiles(self, fields, primary, required_count, offset):
+    @staticmethod
+    def derive_field_semantic_traits(profile):
+        """Return a derived semantic view without changing the field profile."""
+        return _derive_field_semantic_traits(profile)
+
+    @staticmethod
+    def _template_semantic_compatibility(template, profile, traits=None):
+        """Score unary template fit; unknown semantics remain explicitly weak."""
+        traits = traits or _derive_field_semantic_traits(profile)
+        family = template.family
+        concept = traits["concept"]
+        measurement = traits["measurement"]
+        behavior = traits["behavior"]
+        known = traits["status"] == "KNOWN"
+        field_type = str(profile.get("type") or "").upper()
+        reasons = []
+        score = 0
+
+        vector_family = family.startswith("vector_") or family == "vector_aggregation"
+        uses_vector = "vec_avg" in template.expression or "vec_sum" in template.expression
+        if uses_vector != (field_type == "VECTOR"):
+            return {"admission": "REJECT", "score": -100, "reasons": ["VECTOR 类型不匹配"]}
+        if field_type == "VECTOR" and not uses_vector:
+            return {"admission": "REJECT", "score": -100, "reasons": ["VECTOR 只能进入向量聚合模板"]}
+
+        if family in {"quality_change", "data_resilient_change", "group_data_repair", "data_quality_penalty", "stale_information"}:
+            if concept != "data_quality":
+                return {"admission": "REJECT", "score": -30, "reasons": ["模板要求 data_quality 语义"]}
+            score += 60
+            reasons.append("字段语义明确指向数据质量")
+        elif family == "event_trigger":
+            if not known or behavior != "event_driven":
+                return {"admission": "REJECT", "score": -30, "reasons": ["缺少事件驱动语义证据"]}
+            score += 65
+            reasons.append("字段以事件驱动方式更新")
+        elif family in {"risk_adjusted_reversal", "downside_risk"}:
+            if concept not in {"volatility", "market_price", "liquidity", "analyst_revision"}:
+                if known:
+                    return {"admission": "REJECT", "score": -20, "reasons": ["风险模板与字段概念不匹配"]}
+            score += 55 if concept == "volatility" else 30
+            reasons.append("模板把字段变化解释为风险或异常暴露")
+        elif family in {"persistent_level", "momentum", "change", "innovation_surprise", "delayed_confirmation",
+                        "accumulated_change", "distribution_regime", "adaptive_scale_change", "trend_residual",
+                        "compounding_pressure", "turnover_control", "distributional_change", "group_relative_change",
+                        "group_relative_extreme", "group_centered_level", "extreme_location", "extreme_low"}:
+            if known and concept == "data_quality":
+                return {"admission": "REJECT", "score": -20, "reasons": ["数据质量不是该模板的经济输入"]}
+            if concept == "analyst_revision":
+                score += 65 if family in {"change", "innovation_surprise", "delayed_confirmation", "persistent_level"} else 45
+                reasons.append("分析师修正体现信息更新或扩散过程")
+            elif measurement in {"change", "dispersion"}:
+                score += 48
+                reasons.append("字段提供可观察的变化或离散程度")
+            elif measurement == "level" and family in {"persistent_level", "distribution_regime", "group_centered_level"}:
+                score += 42
+                reasons.append("字段水平适合检验相对状态与持续性")
+            else:
+                score += 22
+                reasons.append("字段可作为有限的时间序列基线")
+        elif family in {"robust_cross_section", "rank_level", "zscore_level", "group_neutralized", "cross_sectional_rank",
+                        "cross_sectional_standardize"}:
+            score += 32
+            reasons.append("横截面基线不依赖绝对尺度")
+
+        if concept == "volatility":
+            if family in {"risk_adjusted_reversal", "downside_risk"}:
+                score += 30
+                reasons.append("波动率直接支持风险暴露或风险调整机制")
+            elif family == "distribution_regime":
+                score += 24
+                reasons.append("波动率适合风险状态或 regime 表达")
+        if concept == "analyst_revision" and family == "data_quality_penalty":
+            return {"admission": "REJECT", "score": -30, "reasons": ["修正字段不能冒充数据质量"]}
+        if not known:
+            if vector_family or template.required_slots != ("p",):
+                return {"admission": "REVIEW", "score": score - 15, "reasons": ["语义 UNKNOWN，仅可审阅"]}
+            return {"admission": "REVIEW", "score": score - 10, "reasons": ["语义 UNKNOWN，仅可作语法基线"]}
+        if not reasons:
+            return {"admission": "REVIEW", "score": 0, "reasons": ["没有足够的经济兼容证据"]}
+        return {"admission": "ALLOW", "score": score, "reasons": reasons}
+
+    @classmethod
+    def _relationship_labels(cls, left, right):
+        """Infer only explicit economic relationships from two field traits."""
+        left_tags = set(left.get("tags") or [])
+        right_tags = set(right.get("tags") or [])
+        left_concept = left.get("concept")
+        right_concept = right.get("concept")
+        labels = set()
+        if left_concept == right_concept and left_concept != "unknown":
+            labels.add("same_economic_concept")
+        if {left_concept, right_concept} == {"market_price", "liquidity"}:
+            labels.add("price_volume")
+        if "option" in left_tags and "option" in right_tags:
+            labels.add("option_pair")
+        if ("analyst" in left_tags and "dispersion" in right_tags
+                or "analyst" in right_tags and "dispersion" in left_tags):
+            labels.add("revision_dispersion")
+        if {"price", "volatility"}.issubset(left_tags | right_tags):
+            labels.add("complementary_expectations")
+        if {"price", "fundamental_scale"}.issubset(left_tags | right_tags):
+            labels.add("comparable_scale")
+        if {"asset_scale", "earnings"}.issubset(left_tags | right_tags):
+            labels.add("numerator_denominator")
+        if {left_concept, right_concept} in (
+            {"earnings", "valuation"}, {"fundamental", "valuation"},
+        ):
+            labels.add("numerator_denominator")
+        return labels
+
+    @classmethod
+    def _relationship_gate(cls, profiles, template):
+        """Return an auditable relation decision for pair/triple slots."""
+        traits = [_derive_field_semantic_traits(profile) for profile in profiles]
+        if any(item.get("status") != "KNOWN" for item in traits):
+            return {
+                "admission": "REVIEW",
+                "score": 0,
+                "labels": [],
+                "reasons": ["至少一个字段语义 UNKNOWN，不能宣称经济关系"],
+            }
+        pair_labels = [
+            cls._relationship_labels(left, right)
+            for left, right in itertools.combinations(traits, 2)
+        ]
+        labels = set().union(*pair_labels) if pair_labels else set()
+        family = template.family
+        allowed = {
+            "generic_multi_field_spread": {
+                "same_economic_concept", "comparable_scale", "price_volume",
+                "complementary_expectations", "option_pair", "revision_dispersion",
+            },
+            "generic_multi_field_ratio": {
+                "numerator_denominator", "price_volume", "option_pair",
+            },
+            "relative_spread_change": {
+                "same_economic_concept", "comparable_scale", "price_volume",
+                "complementary_expectations", "option_pair", "revision_dispersion",
+            },
+            "relative_ratio": {
+                "numerator_denominator", "price_volume", "option_pair",
+            },
+            "relative_covariance": {
+                "same_economic_concept", "price_volume", "option_pair",
+                "complementary_expectations", "revision_dispersion",
+            },
+            "relative_correlation": {
+                "same_economic_concept", "price_volume", "option_pair",
+                "complementary_expectations", "revision_dispersion",
+            },
+            "generic_multi_field_confirmation": _SEMANTIC_RELATION_LABELS,
+        }.get(family, set())
+        if len(profiles) >= 3:
+            supported_edges = sum(bool(edge & allowed) for edge in pair_labels)
+            if family == "generic_multi_field_confirmation" and supported_edges >= 2:
+                return {
+                    "admission": "ALLOW", "score": 30 + supported_edges * 10,
+                    "labels": sorted(labels), "reasons": ["三个字段至少形成两条可解释关系边"],
+                }
+        matched = labels & allowed
+        if matched:
+            return {
+                "admission": "ALLOW", "score": 30 + len(matched) * 10,
+                "labels": sorted(matched), "reasons": ["字段关系通过语义门"]
+            }
+        return {
+            "admission": "REJECT", "score": -30, "labels": sorted(labels),
+            "reasons": ["没有可证明的经济关系，不能仅凭类型或跨 dataset 组槽"],
+        }
+
+    def rank_compatible_templates(self, profile, templates=None):
+        """Rank a small, deterministic view of templates for one field."""
+        templates = list(templates or self.registry.economic_templates())
+        ranked = []
+        for template in templates:
+            compatibility = self._template_semantic_compatibility(template, profile)
+            if compatibility["admission"] == "REJECT":
+                continue
+            if len(template.required_slots) > 1:
+                compatibility = dict(compatibility)
+                compatibility["admission"] = "REVIEW"
+                compatibility["score"] -= 5
+                compatibility["reasons"] = list(compatibility["reasons"]) + [
+                    "多字段关系需在实际伴侣字段上复核"
+                ]
+            ranked.append({"template": template, **compatibility})
+        ranked.sort(key=lambda item: (-item["score"], item["template"].template_id))
+        return ranked
+
+    @staticmethod
+    def _field_mechanism(profile, traits, template, relation=None):
+        field_id = str(profile.get("id"))
+        if traits.get("status") != "KNOWN":
+            return (
+                f"字段 {field_id} 的语义为 UNKNOWN；当前 profile 只能支持 {template.family} 的语法审阅，"
+                "不能证明该字段具备模板所需的经济机制。"
+            )
+        mechanism = (
+            f"字段 {field_id} 被识别为 {traits['concept']}，测量为 {traits['measurement']}，"
+            f"行为为 {traits['behavior']}；其 {traits['direction_meaning']} 与 {template.family} 的"
+            "结构假设相容，需用独立样本和平台 checks 证伪。"
+        )
+        if relation and relation.get("labels"):
+            mechanism += f" 槽位关系证据为：{', '.join(relation['labels'])}。"
+        return mechanism
+
+    def _select_companion_profiles(self, fields, primary, required_count, offset,
+                                   template=None):
         """Select distinct, type-compatible companion fields for generic slots.
 
         When the discovery pool contains multiple datasets, prefer companions
@@ -656,9 +1091,15 @@ class AlphaFactory:
             candidate_type = str(candidate.get("type") or "").upper()
             if primary_type and candidate_type and candidate_type != primary_type:
                 continue
-            if any(candidate_id == str(item.get("id")) for item in candidates):
+            if any(candidate_id == str(item[1].get("id")) for item in candidates):
                 continue
-            candidates.append(candidate)
+            if template is not None:
+                relation = self._relationship_gate([primary, candidate], template)
+                if relation["admission"] == "REJECT":
+                    continue
+            else:
+                relation = {"admission": "REVIEW", "score": 0, "labels": []}
+            candidates.append((relation, candidate))
         dataset_ids = {
             self._profile_dataset(item) for item in fields
             if isinstance(item, dict) and item.get("id")
@@ -666,13 +1107,21 @@ class AlphaFactory:
         if len(dataset_ids) > 1:
             cross_dataset = [
                 item for item in candidates
-                if self._profile_dataset(item) != self._profile_dataset(primary)
+                if self._profile_dataset(item[1]) != self._profile_dataset(primary)
             ]
             if cross_dataset:
                 candidates = cross_dataset + [
                     item for item in candidates if item not in cross_dataset
                 ]
-        return candidates[:required_count]
+        candidates.sort(
+            key=lambda item: (
+                0 if item[0].get("admission") == "ALLOW" else 1,
+                0 if self._profile_dataset(item[1]) != self._profile_dataset(primary) else 1,
+                -int(item[0].get("score", 0)),
+                str(item[1].get("id")),
+            )
+        )
+        return [item[1] for item in candidates[:required_count]]
 
     def screen_optimization_parents(self, parents, *, excluded_expressions=None,
                                     min_sharpe=0.9, min_fitness=0.6,
@@ -962,6 +1411,7 @@ class AlphaFactory:
             if primary_key in used_fields:
                 continue
             selected = None
+            traits = _derive_field_semantic_traits(profile)
             # If the preferred skeleton was already seen, rotate through the
             # bounded catalog for this field instead of repeatedly emitting an
             # empty round.  This preserves one candidate per field while
@@ -975,6 +1425,11 @@ class AlphaFactory:
                 template = self.registry.get(template_id)
                 if template is None:
                     continue
+                compatibility = self._template_semantic_compatibility(
+                    template, profile, traits
+                )
+                if compatibility["admission"] == "REJECT":
+                    continue
                 family_cap = 4 if economic_mode else MAX_TEMPLATE_FAMILY_PER_BATCH
                 if family_counts.get(template.family, 0) >= family_cap:
                     continue
@@ -984,10 +1439,15 @@ class AlphaFactory:
                 ]
                 slot_profiles = [profile]
                 slot_profiles.extend(self._select_companion_profiles(
-                    fields, profile, len(companion_slots), offset
+                    fields, profile, len(companion_slots), offset, template
                 ))
                 if len(slot_profiles) != len(companion_slots) + 1:
                     continue
+                relation = None
+                if companion_slots:
+                    relation = self._relationship_gate(slot_profiles, template)
+                    if relation["admission"] == "REJECT":
+                        continue
                 generated = self.generate(
                     dict(hypothesis, template_ids=[template_id]),
                     slot_profiles,
@@ -1009,11 +1469,14 @@ class AlphaFactory:
                 actual_ops = list(analyze_expression(generated_expression).operators)
                 if not set(actual_ops).issubset(operators):
                     continue
-                selected = (template, generated_candidate, actual_ops, slot_profiles)
+                selected = (
+                    template, generated_candidate, actual_ops, slot_profiles,
+                    compatibility, relation,
+                )
                 break
             if selected is None:
                 continue
-            template, candidate, actual_ops, slot_profiles = selected
+            template, candidate, actual_ops, slot_profiles, compatibility, relation = selected
             field_source = profile.get("field_source") or source_default
             if not isinstance(field_source, dict):
                 field_source = {"kind": "unknown", "path": None, "snapshot_date": None}
@@ -1056,13 +1519,28 @@ class AlphaFactory:
                     "coverage": profile_by_id[item].get("coverage"),
                     "frequency": profile_by_id[item].get("frequency"),
                     "data_type": profile_by_id[item].get("type"),
+                    "semantic_traits": _derive_field_semantic_traits(
+                        profile_by_id[item]
+                    ),
                 }
+                for item in used_field_ids
+            }
+            mechanisms = {
+                item: self._field_mechanism(
+                    profile_by_id[item],
+                    _derive_field_semantic_traits(profile_by_id[item]),
+                    template,
+                    relation,
+                )
                 for item in used_field_ids
             }
             field_hypothesis_basis = {
                 item: {
                     "description": profile_by_id[item].get("description"),
-                    "mechanism": candidate["rationale"],
+                    "mechanism": mechanisms[item],
+                    "semantic_traits": _derive_field_semantic_traits(
+                        profile_by_id[item]
+                    ),
                     "independent_increment": "该 BASELINE 只检验这些字段组合的独立增量信息。",
                     "direction": "reversal" if "reversal" in template.family else "long",
                 }
@@ -1082,8 +1560,14 @@ class AlphaFactory:
                 "field_analysis": field_analysis,
                 "field_source": field_source,
                 "field_hypothesis_basis": field_hypothesis_basis,
-                "economic_mechanism": candidate["economic_mechanism"],
-                "direction_transform": candidate["direction_transform"],
+                "economic_mechanism": mechanisms[used_field_ids[0]],
+                "semantic_admission": (
+                    relation["admission"] if relation else compatibility["admission"]
+                ),
+                "direction_transform": {
+                    **candidate["direction_transform"],
+                    "reason": mechanisms[used_field_ids[0]],
+                },
                 "operator_mapping": candidate["rationale"],
                 "operator_evidence": {
                     "sha256": operator_reference.get("sha256"),
@@ -1157,6 +1641,14 @@ class AlphaFactory:
         if limit <= 0 or not isinstance(fields, list):
             return []
         result = []
+        seen_slot_scopes = {
+            (
+                proposal.get("template_id"),
+                tuple(sorted(str(field) for field in proposal.get("fields", []))),
+            )
+            for proposal in (optimized or ())
+            if isinstance(proposal, dict)
+        }
         excluded = {
             canonical_expression(value)
             for value in (excluded_expressions or [])
@@ -1190,20 +1682,43 @@ class AlphaFactory:
             and field.get("description", "").strip()
             and str(field.get("semantic_status", "UNKNOWN")).upper() != "UNKNOWN"
         ]
-        # Shuffle independent field/template arms with a stable seed.  This
-        # explores mechanisms and field coverage without scanning numeric
-        # windows, weights, signs, or other overfit parameters.
+        # Explore field order, but derive template order from each field's
+        # semantic compatibility.  Only a small top-ranked pool is explored;
+        # the full catalog is never treated as an interchangeable shuffle.
         rng = random.Random(
             str(seed if seed is not None else hypothesis.get("id", "factory"))
         )
         rng.shuffle(verified)
-        rng.shuffle(templates)
         for offset, profile in enumerate(verified):
             if len(result) >= limit:
                 break
-            for _step, template in enumerate(templates):
+            ranked = self.rank_compatible_templates(profile, templates)
+            if not ranked:
+                continue
+            top_score = ranked[0]["score"]
+            high_score_pool = [
+                item for item in ranked
+                if item["score"] == top_score
+            ]
+            lower_score_pool = [
+                item for item in ranked
+                if item["score"] < top_score
+            ][:7]
+            relationship_pool = [
+                item for item in ranked
+                if len(item["template"].required_slots) > 1
+            ][:6]
+            rng.shuffle(high_score_pool)
+            rng.shuffle(lower_score_pool)
+            rng.shuffle(relationship_pool)
+            pool = []
+            for item in high_score_pool + lower_score_pool + relationship_pool:
+                if item not in pool:
+                    pool.append(item)
+            for ranked_template in pool:
                 if len(result) >= limit:
                     break
+                template = ranked_template["template"]
                 # Pair templates require a semantically reviewed secondary
                 # field.  The normal assemble path remains the single source
                 # of proposal metadata and operator evidence.
@@ -1228,6 +1743,13 @@ class AlphaFactory:
                 if not generated:
                     continue
                 proposal = generated[0]
+                slot_scope = (
+                    proposal.get("template_id"),
+                    tuple(sorted(str(field) for field in proposal.get("fields", []))),
+                )
+                if slot_scope in seen_slot_scopes:
+                    continue
+                seen_slot_scopes.add(slot_scope)
                 proposal["proposal_origin"] = "factory"
                 proposal["research_layer"] = "exploration"
                 proposal["exploration_objective"] = "signal_discovery"

@@ -333,6 +333,14 @@ class TestFactoryBatchContract(unittest.TestCase):
             "fields": [f"field_{index}"],
         }
 
+    def _operator_reference(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        from wqb_agent.proposal_contract import _operator_reference
+
+        return _operator_reference(
+            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+
     def test_factory_batch_requires_exactly_one_hundred_unique_proposals(self):
         ok, errors = validate_factory_batch(
             [self._proposal(index) for index in range(100)]
@@ -452,6 +460,173 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         self.assertTrue(
             all(item["exploration_objective"] == "signal_discovery" for item in first)
+        )
+
+    def test_analyst_revision_traits_prioritize_update_mechanisms(self):
+        factory = AlphaFactory()
+        profile = {
+            "id": "eps_revision",
+            "name": "Analyst EPS estimate revision",
+            "description": "analyst consensus EPS estimate revision",
+            "dataset": "analyst4",
+            "type": "MATRIX",
+            "frequency": "daily",
+            "category": "analyst",
+            "coverage": 0.95,
+            "semantic_status": "KNOWN",
+        }
+
+        traits = factory.derive_field_semantic_traits(profile)
+        self.assertEqual(traits["concept"], "analyst_revision")
+        self.assertEqual(traits["measurement"], "change")
+        self.assertEqual(traits["update_style"], "event_driven")
+
+        proposals = factory.generate_factory_batch(
+            {"id": "revision-semantics"}, [profile],
+            self._operator_reference(), target=4, seed="revision-semantics",
+        )
+        families = {item["template_family"] for item in proposals}
+        self.assertTrue(
+            families.intersection({
+                "quality_change", "persistent_level", "change",
+                "innovation_surprise", "delayed_confirmation",
+            })
+        )
+        self.assertNotIn("data_quality_penalty", {
+            item["template_id"] for item in proposals
+        })
+        mechanism = proposals[0]["field_hypothesis_basis"]["eps_revision"]["mechanism"]
+        self.assertIn("analyst_revision", mechanism)
+        self.assertNotEqual(mechanism, proposals[0]["rationale"])
+
+    def test_slow_moving_fundamental_is_not_event_triggered_by_default(self):
+        profile = {
+            "id": "total_assets",
+            "name": "Total assets",
+            "description": "quarterly total assets on the balance sheet",
+            "dataset": "fundamental6",
+            "type": "MATRIX",
+            "frequency": "quarterly",
+            "category": "fundamental",
+            "coverage": 0.98,
+            "semantic_status": "KNOWN",
+        }
+        proposals = AlphaFactory().generate_factory_batch(
+            {"id": "fundamental-semantics"}, [profile],
+            self._operator_reference(), target=8, seed="fundamental-semantics",
+        )
+        self.assertTrue(proposals)
+        self.assertNotIn(
+            "event_trigger",
+            {item["template_family"] for item in proposals},
+        )
+
+    def test_option_volatility_prefers_risk_regime_or_relative_families(self):
+        profile = {
+            "id": "implied_vol",
+            "name": "Option implied volatility",
+            "description": "option implied volatility",
+            "dataset": "option8",
+            "type": "MATRIX",
+            "frequency": "daily",
+            "category": "options",
+            "coverage": 0.91,
+            "semantic_status": "KNOWN",
+        }
+        proposals = AlphaFactory().generate_factory_batch(
+            {"id": "option-semantics"}, [profile],
+            self._operator_reference(), target=4, seed="option-semantics",
+        )
+        self.assertTrue(proposals)
+        self.assertTrue({
+            "risk_adjusted_reversal", "downside_risk", "distribution_regime",
+            "relative_spread_change", "relative_ratio", "relative_covariance",
+            "relative_correlation",
+        }.intersection(item["template_family"] for item in proposals))
+        self.assertNotIn("data_quality_penalty", {
+            item["template_id"] for item in proposals
+        })
+
+    def test_pair_relationship_gate_rejects_social_count_and_total_assets(self):
+        fields = [
+            {
+                "id": "social_count",
+                "name": "Social mention count",
+                "description": "daily social media mention count",
+                "dataset": "news18",
+                "type": "MATRIX",
+                "frequency": "daily",
+                "category": "social",
+                "coverage": 0.8,
+                "semantic_status": "KNOWN",
+            },
+            {
+                "id": "total_assets",
+                "name": "Total assets",
+                "description": "quarterly total assets on the balance sheet",
+                "dataset": "fundamental6",
+                "type": "MATRIX",
+                "frequency": "quarterly",
+                "category": "fundamental",
+                "coverage": 0.98,
+                "semantic_status": "KNOWN",
+            },
+        ]
+        proposals = AlphaFactory().assemble_proposals(
+            {"id": "invalid-pair", "template_ids": [
+                "relative_ratio_extreme", "relative_spread_change",
+            ]},
+            fields, self._operator_reference(), max_candidates=2,
+        )
+        self.assertEqual(proposals, [])
+
+    def test_unknown_semantics_are_review_only_and_do_not_claim_template_mechanism(self):
+        profile = {
+            "id": "mystery_signal",
+            "name": "Mystery signal",
+            "description": "verified proprietary signal",
+            "dataset": "model16",
+            "type": "MATRIX",
+            "frequency": "daily",
+            "category": "model",
+            "coverage": 0.9,
+            "semantic_status": "KNOWN",
+        }
+        proposals = AlphaFactory().assemble_proposals(
+            {"id": "unknown-semantics", "template_ids": [
+                "event_triggered_signal",
+            ]},
+            [profile], self._operator_reference(), max_candidates=1,
+        )
+        self.assertEqual(proposals, [])
+
+    def test_semantic_matching_is_deterministic_for_a_fixed_seed(self):
+        fields = [
+            {
+                "id": "revision_a", "name": "EPS revision",
+                "description": "analyst EPS estimate revision", "dataset": "analyst4",
+                "type": "MATRIX", "frequency": "daily", "category": "analyst",
+                "coverage": 0.9, "semantic_status": "KNOWN",
+            },
+            {
+                "id": "iv_a", "name": "Implied volatility",
+                "description": "option implied volatility", "dataset": "option8",
+                "type": "MATRIX", "frequency": "daily", "category": "options",
+                "coverage": 0.9, "semantic_status": "KNOWN",
+            },
+        ]
+        factory = AlphaFactory()
+        first = factory.generate_factory_batch(
+            {"id": "semantic-seed"}, fields, self._operator_reference(),
+            target=8, seed="fixed-seed",
+        )
+        repeat = factory.generate_factory_batch(
+            {"id": "semantic-seed"}, fields, self._operator_reference(),
+            target=8, seed="fixed-seed",
+        )
+        self.assertEqual(
+            [(item["expression"], item["template_id"]) for item in first],
+            [(item["expression"], item["template_id"]) for item in repeat],
         )
 
     def test_code_screen_precedes_agent_economic_gate(self):

@@ -341,6 +341,21 @@ class TestFactoryBatchContract(unittest.TestCase):
             os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
         )
 
+    @staticmethod
+    def _semantic_field(field_id, description, *, dataset="research1",
+                        frequency="daily", category=None):
+        return {
+            "id": field_id,
+            "name": description,
+            "description": description,
+            "dataset": dataset,
+            "type": "MATRIX",
+            "frequency": frequency,
+            "category": category or "market",
+            "coverage": 0.9,
+            "semantic_status": "KNOWN",
+        }
+
     def test_factory_batch_requires_exactly_one_hundred_unique_proposals(self):
         ok, errors = validate_factory_batch(
             [self._proposal(index) for index in range(100)]
@@ -689,6 +704,201 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         self.assertEqual(proposals, [])
 
+    def test_relationship_decision_reports_symmetric_slots_and_frequency(self):
+        factory = AlphaFactory()
+        put_iv = self._semantic_field(
+            "put_iv", "put option implied volatility", category="options"
+        )
+        call_iv = self._semantic_field(
+            "call_iv", "call option implied volatility", category="options"
+        )
+        decision = factory._relationship_gate(
+            [put_iv, call_iv], factory.registry.get("relative_spread_change")
+        )
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "option_pair")
+        self.assertTrue(decision["symmetric"])
+        self.assertEqual(
+            decision["preferred_slot_assignment"], {"p": "EITHER", "s": "EITHER"}
+        )
+        self.assertEqual(
+            decision["frequency_compatibility"]["status"], "COMPATIBLE"
+        )
+        self.assertTrue(any("frequency" in reason for reason in decision["reasons"]))
+
+    def test_ratio_requires_directional_earnings_over_assets_assignment(self):
+        factory = AlphaFactory()
+        earnings = self._semantic_field(
+            "earnings", "quarterly earnings per share",
+            dataset="fundamental6", frequency="quarterly", category="fundamental",
+        )
+        assets = self._semantic_field(
+            "assets", "quarterly total assets balance sheet",
+            dataset="fundamental6", frequency="quarterly", category="fundamental",
+        )
+        template = factory.registry.get("relative_ratio_extreme")
+        forward = factory._relationship_gate([earnings, assets], template)
+        reverse = factory._relationship_gate([assets, earnings], template)
+        self.assertEqual(forward["admission"], "ALLOW")
+        self.assertEqual(
+            forward["preferred_slot_assignment"],
+            {"p": "numerator", "s": "denominator"},
+        )
+        self.assertFalse(forward["symmetric"])
+        self.assertNotEqual(reverse["admission"], "ALLOW")
+
+    def test_option_pair_does_not_admit_unrelated_open_interest_and_greek(self):
+        factory = AlphaFactory()
+        open_interest = self._semantic_field(
+            "open_interest", "option open interest", category="options"
+        )
+        greek = self._semantic_field(
+            "iv_delta", "option implied volatility delta greek", category="options"
+        )
+        for template_id in (
+            "relative_spread_change", "relative_ratio_extreme",
+            "relative_covariance", "relative_correlation_regime",
+        ):
+            decision = factory._relationship_gate(
+                [open_interest, greek], factory.registry.get(template_id)
+            )
+            self.assertNotEqual(decision["admission"], "ALLOW", template_id)
+
+    def test_frequency_mismatch_is_incompatible_for_direct_correlation(self):
+        factory = AlphaFactory()
+        daily = self._semantic_field("daily_close", "daily close price")
+        annual = self._semantic_field(
+            "annual_close", "annual close price", frequency="annual"
+        )
+        decision = factory._relationship_gate(
+            [daily, annual], factory.registry.get("relative_correlation_regime")
+        )
+        self.assertEqual(
+            decision["frequency_compatibility"]["status"], "INCOMPATIBLE"
+        )
+        self.assertEqual(decision["admission"], "REJECT")
+
+    def test_frequency_review_pair_is_not_auto_generated(self):
+        fields = [
+            self._semantic_field("daily_close", "daily close price", dataset="pv1"),
+            self._semantic_field(
+                "weekly_close", "weekly close price", dataset="pv13",
+                frequency="weekly",
+            ),
+        ]
+        factory = AlphaFactory()
+        decision = factory._relationship_gate(
+            fields, factory.registry.get("relative_spread_change")
+        )
+        self.assertEqual(decision["frequency_compatibility"]["status"], "REVIEW")
+        self.assertEqual(decision["admission"], "REVIEW")
+        self.assertEqual(
+            factory.generate(
+                {"template_ids": ["relative_spread_change"]}, fields, count=1
+            ),
+            [],
+        )
+        self.assertEqual(
+            factory.assemble_proposals(
+                {"template_ids": ["relative_spread_change"]},
+                fields, self._operator_reference(), max_candidates=1,
+            ),
+            [],
+        )
+        self.assertEqual(
+            factory.generate(
+                {"template_family": "relative_spread_change"}, fields, count=1
+            ),
+            [],
+        )
+        batch = factory.generate_factory_batch(
+            {"id": "frequency-review"}, fields, self._operator_reference(),
+            target=8, seed="frequency-review",
+        )
+        self.assertFalse(any(len(item.get("fields", [])) > 1 for item in batch))
+
+    def test_analyst_triple_requires_one_confirmation_mechanism(self):
+        fields = [
+            self._semantic_field(
+                "revision", "analyst EPS estimate revision", category="analyst"
+            ),
+            self._semantic_field(
+                "dispersion", "analyst EPS estimate dispersion", category="analyst"
+            ),
+            self._semantic_field(
+                "recommendation", "analyst recommendation change", category="analyst"
+            ),
+        ]
+        decision = AlphaFactory()._relationship_gate(
+            fields, AlphaFactory().registry.get("generic_triple_confirmation")
+        )
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(
+            decision["confirmation_mechanism"], "analyst_expectation_update"
+        )
+
+    def test_triple_with_two_unified_pair_edges_is_not_confirmation(self):
+        fields = [
+            self._semantic_field("price", "daily close price"),
+            self._semantic_field(
+                "iv", "daily option implied volatility", category="options"
+            ),
+            self._semantic_field(
+                "open_interest", "daily option open interest", category="options"
+            ),
+        ]
+        decision = AlphaFactory()._relationship_gate(
+            fields, AlphaFactory().registry.get("generic_triple_confirmation")
+        )
+        self.assertNotEqual(decision["admission"], "ALLOW")
+
+    def test_same_concept_with_level_change_mismatch_is_not_spread(self):
+        factory = AlphaFactory()
+        level = self._semantic_field("price_level", "daily close price")
+        change = self._semantic_field("price_return", "daily close price return")
+        decision = factory._relationship_gate(
+            [level, change], factory.registry.get("relative_spread_change")
+        )
+        self.assertNotEqual(decision["admission"], "ALLOW")
+
+    def test_multi_field_proposal_contains_relationship_audit_metadata(self):
+        fields = [
+            self._semantic_field(
+                "put_iv", "put option implied volatility", dataset="option8",
+                category="options",
+            ),
+            self._semantic_field(
+                "call_iv", "call option implied volatility", dataset="option8",
+                category="options",
+            ),
+        ]
+        proposals = AlphaFactory().assemble_proposals(
+            {"template_ids": ["relative_spread_change"]},
+            fields, self._operator_reference(), max_candidates=1,
+        )
+        self.assertEqual(len(proposals), 1)
+        audit = proposals[0]["relationship_audit"]
+        self.assertEqual(audit["relationship_type"], "option_pair")
+        self.assertEqual(audit["relationship_admission"], "ALLOW")
+        self.assertEqual(audit["slot_assignment"], {
+            "p": "put_iv", "s": "call_iv",
+        })
+        self.assertEqual(audit["frequency_compatibility"]["status"], "COMPATIBLE")
+
+    def test_factory_drops_review_multi_field_optimized_prefix(self):
+        optimized = [{
+            "expression": "rank(a - b)",
+            "fields": ["a", "b"],
+            "proposal_origin": "agent_optimizer",
+            "relationship_audit": {
+                "relationship_admission": "REVIEW",
+            },
+        }]
+        batch = AlphaFactory().generate_factory_batch(
+            {"id": "optimized-review"}, [], {}, target=1, optimized=optimized,
+        )
+        self.assertEqual(batch, [])
+
     def test_unknown_semantics_are_review_only_and_do_not_claim_template_mechanism(self):
         profile = {
             "id": "mystery_signal",
@@ -890,8 +1100,9 @@ class TestFactoryBatchContract(unittest.TestCase):
         datasets = ["pv1", "pv13", "option8"]
         fields = [
             {
-                "id": f"field_{index}", "description": f"verified field {index}",
+                "id": f"field_{index}", "description": "daily close price",
                 "type": "MATRIX", "semantic_status": "KNOWN",
+                "frequency": "daily", "category": "market",
                 "dataset": datasets[index % len(datasets)],
             }
             for index in range(30)
@@ -920,24 +1131,31 @@ class TestFactoryBatchContract(unittest.TestCase):
             ),
         ])
         fields = [
-            {"id": "low", "dataset": "pv1"},
-            {"id": "implied_vol", "dataset": "option8"},
-            {"id": "target_price", "dataset": "analyst4"},
+            {"id": "revision", "dataset": "analyst4", "type": "MATRIX",
+             "description": "analyst EPS estimate revision", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
+            {"id": "dispersion", "dataset": "analyst4", "type": "MATRIX",
+             "description": "analyst EPS estimate dispersion", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
+            {"id": "recommendation", "dataset": "analyst4", "type": "MATRIX",
+             "description": "analyst recommendation change", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
         ]
         candidates = AlphaFactory(registry=registry).generate(
             {"template_ids": ["generic_triple_confirmation"]}, fields, count=1
         )
         self.assertEqual(len(candidates), 1)
         candidate = candidates[0]
-        self.assertIn("low", candidate["expression"])
-        self.assertIn("implied_vol", candidate["expression"])
-        self.assertIn("target_price", candidate["expression"])
-        self.assertEqual(candidate["template_slots"]["data_field"], "low")
-        self.assertEqual(candidate["template_slots"]["s"], "implied_vol")
-        self.assertEqual(candidate["template_slots"]["t"], "target_price")
+        self.assertIn("revision", candidate["expression"])
+        self.assertIn("dispersion", candidate["expression"])
+        self.assertIn("recommendation", candidate["expression"])
+        self.assertEqual(candidate["template_slots"]["data_field"], "revision")
+        self.assertEqual(candidate["template_slots"]["s"], "dispersion")
+        self.assertEqual(candidate["template_slots"]["t"], "recommendation")
         self.assertEqual(
             [(item["dataset"], item["id"]) for item in candidate["field_refs"]],
-            [("pv1", "low"), ("option8", "implied_vol"), ("analyst4", "target_price")],
+            [("analyst4", "revision"), ("analyst4", "dispersion"),
+             ("analyst4", "recommendation")],
         )
 
     def test_assemble_connects_dual_field_template_across_datasets(self):
@@ -949,12 +1167,14 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         fields = [
             {
-                "id": "low", "dataset": "pv1", "type": "MATRIX",
-                "description": "daily low price", "semantic_status": "KNOWN",
+                "id": "put_iv", "dataset": "pv1", "type": "MATRIX",
+                "description": "put option implied volatility", "frequency": "daily",
+                "category": "options", "semantic_status": "KNOWN",
             },
             {
-                "id": "implied_vol", "dataset": "option8", "type": "MATRIX",
-                "description": "option implied volatility", "semantic_status": "KNOWN",
+                "id": "call_iv", "dataset": "option8", "type": "MATRIX",
+                "description": "call option implied volatility", "frequency": "daily",
+                "category": "options", "semantic_status": "KNOWN",
             },
         ]
         proposals = AlphaFactory().assemble_proposals(
@@ -968,14 +1188,14 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         self.assertEqual(len(proposals), 1)
         proposal = proposals[0]
-        self.assertEqual(proposal["fields"], ["low", "implied_vol"])
+        self.assertEqual(proposal["fields"], ["put_iv", "call_iv"])
         self.assertEqual(proposal["datasets"], ["pv1", "option8"])
         self.assertEqual(
             [(item["dataset"], item["id"]) for item in proposal["field_refs"]],
-            [("pv1", "low"), ("option8", "implied_vol")],
+            [("pv1", "put_iv"), ("option8", "call_iv")],
         )
-        self.assertEqual(proposal["template_slots"]["p"], "low")
-        self.assertEqual(proposal["template_slots"]["s"], "implied_vol")
+        self.assertEqual(proposal["template_slots"]["p"], "put_iv")
+        self.assertEqual(proposal["template_slots"]["s"], "call_iv")
 
     def test_assemble_connects_generic_triple_template_and_records_all_slots(self):
         root = os.path.dirname(os.path.dirname(__file__))
@@ -985,12 +1205,15 @@ class TestFactoryBatchContract(unittest.TestCase):
             os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
         )
         fields = [
-            {"id": "low", "dataset": "pv1", "type": "MATRIX",
-             "description": "daily low price", "semantic_status": "KNOWN"},
-            {"id": "implied_vol", "dataset": "option8", "type": "MATRIX",
-             "description": "option implied volatility", "semantic_status": "KNOWN"},
-            {"id": "target_price", "dataset": "analyst4", "type": "MATRIX",
-             "description": "analyst target price", "semantic_status": "KNOWN"},
+            {"id": "revision", "dataset": "pv1", "type": "MATRIX",
+             "description": "analyst EPS estimate revision", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
+            {"id": "dispersion", "dataset": "option8", "type": "MATRIX",
+             "description": "analyst EPS estimate dispersion", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
+            {"id": "recommendation", "dataset": "analyst4", "type": "MATRIX",
+             "description": "analyst recommendation change", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
         ]
         proposals = AlphaFactory().assemble_proposals(
             {
@@ -1003,13 +1226,15 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         self.assertEqual(len(proposals), 1)
         proposal = proposals[0]
-        self.assertEqual(proposal["fields"], ["low", "implied_vol", "target_price"])
+        self.assertEqual(
+            proposal["fields"], ["revision", "dispersion", "recommendation"]
+        )
         self.assertEqual(
             {item["dataset"] for item in proposal["field_refs"]},
             {"pv1", "option8", "analyst4"},
         )
-        self.assertEqual(proposal["template_slots"]["data_field"], "low")
-        self.assertEqual(proposal["template_slots"]["t"], "target_price")
+        self.assertEqual(proposal["template_slots"]["data_field"], "revision")
+        self.assertEqual(proposal["template_slots"]["t"], "recommendation")
 
     def test_agent_runtime_keeps_results_and_trajectory_out_of_disk(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -171,3 +171,14 @@
 - [x] 统一 coverage normalization 并让 Discovery/Factory 共用同一 contract
 - [x] 复核动态 dataset bounded selection 与 incomplete catalog 生命周期；只修有测试证明的问题
 - [x] 完成 full quality gate、doctor/state audit、fresh diff review，并提交推送
+
+## 2026-09-09 multi-field relationship contract 收紧
+
+- [x] 审计所有 multi-field template 入口、relationship gate、companion selection 与 proposal validation
+- [x] 用失败测试锁定 slot assignment、frequency compatibility、template-specific relationship contract 与 triple confirmation
+- [x] 让 Factory 自动路径对 relationship REVIEW/UNKNOWN fail-closed，并补齐 audit metadata
+- [x] 完成 bounded companion/performance、绕过审查、完整质量门、提交与推送
+
+## 本阶段当前下一步
+
+已完成关系契约实现、绕过入口回归、完整质量门、只读状态审计，并提交推送；真实工作区仍按既有 BLOCKED checkpoint 保持暂停。

@@ -175,3 +175,17 @@
 - Discovery/Factory 共用派生 `normalize_coverage()`，fraction/percentage 形式统一到 0..1，非法值保守为 `None`，不修改原始 BRAIN metadata。
 - 动态 dataset universe 在 field pagination 前固定上限 12 个，并记录 full universe 与 active pool；不完整 catalog reload 保持 provenance 且不重复大分页。
 - 定向 Factory/Discovery 87 tests、全量 626 tests、compileall、mypy、Ruff 通过；coverage report 总覆盖 77.4%。doctor/audit 通过，preflight 仍因既有 `round_11.checkpoint.json` 与 `SUBMIT_UNKNOWN` 为 BLOCKED，本阶段未做远端写入。
+
+## 2026-09-09 multi-field relationship contract 初始审计
+
+- pasted objective 要求所有 multi-field 入口统一收紧：relationship 必须提供方向/slot contract，spread/ratio/correlation/covariance/triple 使用不同 admission 规则，frequency compatibility 保守判定，Factory 自动路径拒绝 REVIEW/UNKNOWN。
+- 尚未修改 production code；先读取当前 `alpha_factory.py`、proposal contract、diversity、架构约束和相关测试，下一步记录可复现的关系/槽位/频率缺口并写红灯测试。
+- 红灯证据：新增 9 项 relationship contract 测试，结果 `3 failures / 6 errors`；当前 decision 缺少 relationship type/slot/frequency metadata，任意 option open-interest + IV Greek、同概念 level/change、triple 两条 pair edge 仍可 ALLOW，且 REVIEW pair 仍可进入生成路径。
+
+## 2026-09-10 multi-field relationship contract 结果
+
+- 语义关系现在先于 diversity 偏好判定；option pair 仅接受 put/call implied-volatility 对，ratio 只在 earnings→fundamental 方向具备 numerator/denominator 证据，triple 只有 analyst revision + dispersion + analyst sentiment 的共同 expectation-update 机制才 ALLOW。
+- frequency bucket 统一为 intraday/daily/weekly/monthly/quarterly/annual/unknown；未知频率为 REVIEW，直接 co-movement 的明显跨频率组合为 INCOMPATIBLE，所有非 ALLOW 自动路径均停止生成。
+- `field_hypothesis_basis.mechanism` 继续由字段 traits 与 fit reason 组合，不复制 template rationale；semantic UNKNOWN/REVIEW 不宣称强 economic mechanism。
+- 固定 seed 的字段顺序与兼容模板探索保持稳定；companion selection 仍是 bounded linear scan，无 Cartesian product。
+- 关系契约红灯已转绿；新增优化前缀 REVIEW 绕过测试验证 `generate_factory_batch` 也 fail-closed。

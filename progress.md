@@ -172,4 +172,19 @@
 - 已完成只读审计与 TDD 回归：analyst estimate/target/revision、option activity/skew、semantic admission、coverage normalization、动态 dataset bounded selection 与 incomplete catalog reload 均有测试证据。
 - 已将模板选择改为字段兼容集合内的固定分数排序与 seed/offset 探索；保留 VECTOR/MATRIX、operator evidence、dedupe、family cap 和禁止参数扫描边界。
 - 质量门已通过：626 tests、compileall、mypy 9 frontier、Ruff；coverage report 总覆盖 77.4%。doctor/audit 正常；preflight 只读结果为 BLOCKED（既有 round_11 checkpoint），未修改真实研究状态。
+
+## 2026-09-09 multi-field relationship contract
+
+- 已读取 pasted objective；本阶段仅处理 multi-field relationship/slot/frequency/REVIEW fail-closed，不重做上一阶段 semantic、coverage、Discovery 工作。
+- 当前工作树从 `825dfb1` 干净开始；下一步是审计 `generate`、`assemble_proposals`、`generate_factory_batch`、companion fallback 与所有重点 multi-field template。
+- 已完成入口审计并先写红灯测试；失败集中在 `_relationship_gate` 缺方向/频率/confirmation contract，以及 `generate`/`assemble_proposals` 未对 multi-field REVIEW fail-closed。
 - 当前动作：读取 Factory、Discovery、proposal contract、diversity、SuggestionWorkflow、架构文档及相关测试的关键实现段，定位可复现缺口。
+
+## 2026-09-10 multi-field relationship contract 验收
+
+- 已将 pair/triple relationship gate 收紧为带 `relationship_type`、evidence strength、reasons、preferred slot assignment、symmetric/asymmetric、frequency compatibility 的可审计结果；spread、ratio、covariance/correlation、triple 使用不同契约。
+- 已让 `generate`、`assemble_proposals`、companion selection 和 `generate_factory_batch` 的优化前缀对多字段 `REVIEW`/缺失 admission fail-closed；多字段 proposal 写入 slot→field、关系理由与频率审计元数据。
+- 已保留 VECTOR/MATRIX、operator evidence、dedupe、family cap、线性 bounded companion scan 和禁止参数扫描边界；未新增 workflow/state/config abstraction 或第二套字段真相。
+- 定向 Factory 边界测试为 `59 tests OK`；新增的优化前缀绕过测试先红后绿。
+- 最终 fresh 验证已通过：compileall、Ruff、9 个 typed frontier 的 mypy、全量 `636 tests OK`、configured coverage `77.6%`；doctor/audit 正常，preflight/context 明确保留既有 `round_11.checkpoint.json` 与 `SUBMIT_UNKNOWN` 的 BLOCKED 状态，未启动 Simulation。
+- `git diff --check` 通过，当前仅包含本阶段 `alpha_factory.py`、Factory 边界测试和规划证据文件；下一步提交 `fix：收紧多字段Alpha关系与槽位约束` 并推送后核对远端 SHA。

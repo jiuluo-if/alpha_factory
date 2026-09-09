@@ -508,6 +508,14 @@ def _derive_field_semantic_traits(profile):
             measurement_hits = ["revision"] + measurement_hits
     if concept == "event_count":
         measurement = "count"
+    if (
+        measurement == "dispersion"
+        and "analyst" in direct_text
+        and concept != "analyst_revision"
+    ):
+        concept = "analyst_dispersion"
+        concept_hits = ["analyst", "dispersion"]
+        direct_concept_hits = ["analyst", "dispersion"]
 
     frequency_slow = any(
         marker in frequency for marker in ("quarter", "monthly", "month", "annual", "year", "weekly", "week")
@@ -515,7 +523,9 @@ def _derive_field_semantic_traits(profile):
     frequency_fast = any(
         marker in frequency for marker in ("intraday", "minute", "hour", "daily", "day")
     )
-    event_signal = concept in {"analyst_revision", "event_count", "sentiment"}
+    event_signal = concept in {
+        "analyst_revision", "analyst_dispersion", "event_count", "sentiment"
+    }
     slow_signal = frequency_slow or concept in {"fundamental", "earnings", "valuation"} and not frequency_fast
     sparse = False
     coverage = normalize_coverage(profile)
@@ -561,6 +571,7 @@ def _derive_field_semantic_traits(profile):
 
     direction_meaning = {
         "analyst_revision": "information_update",
+        "analyst_dispersion": "expectation_dispersion",
         "option_relative": "relative_option_position",
         "option": "option_measurement",
         "volatility": "risk_exposure",
@@ -575,7 +586,7 @@ def _derive_field_semantic_traits(profile):
     }.get(concept, "unknown")
 
     tags = set()
-    if concept == "market_price" or any(word in text for word in ("price", "close", "open", "high", "low", "vwap")):
+    if concept == "market_price" or any(word in text for word in ("price", "close", "high", "low", "vwap")):
         tags.add("price")
     if concept == "liquidity" or any(word in text for word in ("volume", "turnover", "liquidity")):
         tags.add("volume")
@@ -585,6 +596,10 @@ def _derive_field_semantic_traits(profile):
         tags.add("relative")
     if "option" in text or "call" in text or "put" in text:
         tags.add("option")
+    if "put" in text:
+        tags.add("option_put")
+    if "call" in text:
+        tags.add("option_call")
     if concept == "analyst_revision" or "analyst" in text:
         tags.add("analyst")
     if measurement == "dispersion":
@@ -801,7 +816,7 @@ class AlphaFactory:
             slot_profiles = list(normalized_profiles[:len(template.required_slots)])
             if len(template.required_slots) > 1:
                 relation = self._relationship_gate(slot_profiles, template)
-                if relation["admission"] == "REJECT":
+                if relation["admission"] != "ALLOW":
                     continue
             else:
                 relation = None
@@ -824,6 +839,21 @@ class AlphaFactory:
             for slot in ("s", "t"):
                 if values.get(slot):
                     slot_values[slot] = values[slot]
+            relationship_audit = None
+            if relation is not None:
+                relationship_audit = {
+                    "slot_assignment": {
+                        slot: values[slot]
+                        for slot in template.required_slots
+                        if slot in values and values[slot]
+                    },
+                    "relationship_type": relation["relationship_type"],
+                    "relationship_admission": relation["admission"],
+                    "relationship_reason": list(relation["reasons"]),
+                    "slot_assignment_reason": relation["slot_assignment_reason"],
+                    "frequency_compatibility": relation["frequency_compatibility"],
+                    "symmetric": relation["symmetric"],
+                }
             used_ids = extract_fields(expression, normalized)
             profile_by_id = {}
             for profile in normalized_profiles:
@@ -853,6 +883,7 @@ class AlphaFactory:
                     "template_stage_path": template.stage_path,
                     "template_ref": ref,
                     "template_slots": slot_values,
+                    "relationship_audit": relationship_audit,
                     "factory_version": "alpha-factory-v1",
                     "economic_mechanism": self._field_mechanism(
                         normalized_profiles[0],
@@ -1013,7 +1044,12 @@ class AlphaFactory:
             labels.add("same_economic_concept")
         if {left_concept, right_concept} == {"market_price", "liquidity"}:
             labels.add("price_volume")
-        if "option" in left_tags and "option" in right_tags:
+        if (
+            left_concept == right_concept == "volatility"
+            and {"option_put", "option_call"}.issubset(left_tags | right_tags)
+            and bool(left_tags & {"option_put", "option_call"})
+            and bool(right_tags & {"option_put", "option_call"})
+        ):
             labels.add("option_pair")
         if ("analyst" in left_tags and "dispersion" in right_tags
                 or "analyst" in right_tags and "dispersion" in left_tags):
@@ -1030,65 +1066,252 @@ class AlphaFactory:
             labels.add("numerator_denominator")
         return labels
 
+    @staticmethod
+    def _frequency_bucket(value):
+        text = str(value or "").lower()
+        if any(marker in text for marker in ("intraday", "minute", "hour")):
+            return "intraday"
+        if any(marker in text for marker in ("daily", "day")):
+            return "daily"
+        if any(marker in text for marker in ("weekly", "week")):
+            return "weekly"
+        if any(marker in text for marker in ("monthly", "month")):
+            return "monthly"
+        if "quarter" in text:
+            return "quarterly"
+        if any(marker in text for marker in ("annual", "year")):
+            return "annual"
+        return "unknown"
+
+    @classmethod
+    def _frequency_compatibility(cls, traits, family):
+        """Classify only obvious frequency conflicts for a relation."""
+        buckets = [cls._frequency_bucket(item.get("frequency")) for item in traits]
+        if any(bucket == "unknown" for bucket in buckets):
+            return {
+                "status": "REVIEW",
+                "buckets": buckets,
+                "reasons": ["frequency evidence is incomplete; relationship needs review"],
+            }
+        if len(set(buckets)) == 1:
+            return {
+                "status": "COMPATIBLE",
+                "buckets": buckets,
+                "reasons": [f"frequency compatible: {buckets[0]}"],
+            }
+        rank = {
+            "intraday": 0, "daily": 1, "weekly": 2,
+            "monthly": 3, "quarterly": 4, "annual": 5,
+        }
+        spread = max(rank[bucket] for bucket in buckets) - min(
+            rank[bucket] for bucket in buckets
+        )
+        direct_dependence = family in {"relative_covariance", "relative_correlation"}
+        if direct_dependence and spread >= 2:
+            return {
+                "status": "INCOMPATIBLE",
+                "buckets": buckets,
+                "reasons": [
+                    "frequency incompatible for direct co-movement: "
+                    + " vs ".join(buckets)
+                ],
+            }
+        if direct_dependence and any(
+            item.get("concept") == "event_count" for item in traits
+        ) and any(
+            item.get("concept") in {"fundamental", "earnings", "valuation"}
+            for item in traits
+        ) and spread >= 1:
+            return {
+                "status": "INCOMPATIBLE",
+                "buckets": buckets,
+                "reasons": [
+                    "frequency incompatible for event-to-fundamental co-movement: "
+                    + " vs ".join(buckets)
+                ],
+            }
+        return {
+            "status": "REVIEW",
+            "buckets": buckets,
+            "reasons": [
+                "frequency requires review: " + " vs ".join(buckets)
+            ],
+        }
+
+    @staticmethod
+    def _relationship_type(labels):
+        for label in (
+            "option_pair", "revision_dispersion", "numerator_denominator",
+            "same_economic_concept", "comparable_scale", "price_volume",
+            "complementary_expectations",
+        ):
+            if label in labels:
+                return label
+        return "unknown"
+
     @classmethod
     def _relationship_gate(cls, profiles, template):
         """Return an auditable relation decision for pair/triple slots."""
         traits = [_derive_field_semantic_traits(profile) for profile in profiles]
-        if any(item.get("semantic_admission") != "ALLOW" for item in traits):
+        family = template.family
+        frequency = cls._frequency_compatibility(traits, family)
+
+        def result(admission, score, labels, relationship_type="unknown",
+                   *, symmetric=False, preferred=None, assignment_reason="",
+                   evidence_strength="LOW", confirmation_mechanism=None,
+                   reasons=()):
+            all_reasons = list(reasons) + list(frequency["reasons"])
             return {
-                "admission": "REVIEW",
-                "score": 0,
-                "labels": [],
-                "reasons": ["至少一个字段语义 UNKNOWN，不能宣称经济关系"],
+                "admission": admission,
+                "score": score,
+                "evidence_strength": evidence_strength,
+                "labels": sorted(labels),
+                "relationship_type": relationship_type,
+                "reasons": all_reasons,
+                "preferred_slot_assignment": preferred or "UNRESOLVED",
+                "slot_assignment_reason": assignment_reason,
+                "symmetric": bool(symmetric),
+                "asymmetric": not bool(symmetric),
+                "frequency_compatibility": frequency,
+                "confirmation_mechanism": confirmation_mechanism,
             }
+
+        if any(item.get("semantic_admission") != "ALLOW" for item in traits):
+            return result(
+                "REVIEW", 0, [], reasons=(
+                    "至少一个字段语义 UNKNOWN/REVIEW，不能宣称经济关系",
+                )
+            )
+
         pair_labels = [
             cls._relationship_labels(left, right)
             for left, right in itertools.combinations(traits, 2)
         ]
         labels = set().union(*pair_labels) if pair_labels else set()
-        family = template.family
-        allowed = {
-            "generic_multi_field_spread": {
-                "same_economic_concept", "comparable_scale", "price_volume",
-                "complementary_expectations", "option_pair", "revision_dispersion",
-            },
-            "generic_multi_field_ratio": {
-                "numerator_denominator", "price_volume", "option_pair",
-            },
-            "relative_spread_change": {
-                "same_economic_concept", "comparable_scale", "price_volume",
-                "complementary_expectations", "option_pair", "revision_dispersion",
-            },
-            "relative_ratio": {
-                "numerator_denominator", "price_volume", "option_pair",
-            },
-            "relative_covariance": {
-                "same_economic_concept", "price_volume", "option_pair",
-                "complementary_expectations", "revision_dispersion",
-            },
-            "relative_correlation": {
-                "same_economic_concept", "price_volume", "option_pair",
-                "complementary_expectations", "revision_dispersion",
-            },
-            "generic_multi_field_confirmation": _SEMANTIC_RELATION_LABELS,
-        }.get(family, set())
+
         if len(profiles) >= 3:
-            supported_edges = sum(bool(edge & allowed) for edge in pair_labels)
-            if family == "generic_multi_field_confirmation" and supported_edges >= 2:
-                return {
-                    "admission": "ALLOW", "score": 30 + supported_edges * 10,
-                    "labels": sorted(labels), "reasons": ["三个字段至少形成两条可解释关系边"],
-                }
-        matched = labels & allowed
-        if matched:
-            return {
-                "admission": "ALLOW", "score": 30 + len(matched) * 10,
-                "labels": sorted(matched), "reasons": ["字段关系通过语义门"]
+            if family != "generic_multi_field_confirmation":
+                return result(
+                    "REJECT", -30, labels, reasons=(
+                        "该模板只支持两个字段，不能把三条槽位压成 pair 关系",
+                    )
+                )
+            concepts = {item.get("concept") for item in traits}
+            analyst_confirmation = (
+                "analyst_revision" in concepts
+                and "analyst_dispersion" in concepts
+                and any(
+                    item.get("concept") == "sentiment"
+                    and "analyst" in (item.get("tags") or [])
+                    for item in traits
+                )
+            )
+            if analyst_confirmation and frequency["status"] == "COMPATIBLE":
+                return result(
+                    "ALLOW", 80, labels,
+                    "analyst_expectation_update",
+                    symmetric=True,
+                    preferred={
+                        "data_field": "EITHER", "s": "EITHER", "t": "EITHER",
+                    },
+                    assignment_reason="三条字段共同表达分析师预期更新、离散与推荐变化",
+                    evidence_strength="HIGH",
+                    confirmation_mechanism="analyst_expectation_update",
+                    reasons=("三条 leg 映射到同一 analyst expectation update mechanism",),
+                )
+            return result(
+                "REVIEW", 0, labels,
+                "unknown_confirmation",
+                symmetric=True,
+                reasons=("pair edges do not prove one shared confirmation mechanism",),
+            )
+
+        relationship_type = cls._relationship_type(labels)
+        preferred = {"p": "EITHER", "s": "EITHER"}
+        symmetric = True
+        assignment_reason = "relationship is symmetric under this template contract"
+        if frequency["status"] == "INCOMPATIBLE":
+            return result(
+                "REJECT", -40, labels, relationship_type,
+                reasons=("frequency incompatibility blocks this relationship",),
+            )
+        if family in {"relationship_spread", "relative_spread_change", "generic_multi_field_spread"}:
+            if relationship_type == "same_economic_concept":
+                if traits[0].get("measurement") != traits[1].get("measurement"):
+                    return result(
+                        "REJECT", -30, labels, relationship_type,
+                        reasons=("same concept has incompatible level/change measurements",),
+                    )
+            allowed = {"same_economic_concept", "option_pair", "revision_dispersion"}
+            if relationship_type not in allowed:
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("spread requires comparable quantities or an explicit differential",),
+                )
+        elif family in {"relative_ratio", "generic_multi_field_ratio"}:
+            if relationship_type == "option_pair":
+                preferred = {"p": "EITHER", "s": "EITHER"}
+                symmetric = True
+                assignment_reason = "put/call implied volatility pair is symmetric for ratio testing"
+            elif relationship_type == "numerator_denominator":
+                if not (
+                    traits[0].get("concept") == "earnings"
+                    and traits[1].get("concept") == "fundamental"
+                ):
+                    return result(
+                        "REJECT", -35, labels, relationship_type,
+                        reasons=("ratio direction is only proven for earnings over assets",),
+                    )
+                preferred = {"p": "numerator", "s": "denominator"}
+                symmetric = False
+                assignment_reason = "earnings is the numerator and assets is the scale denominator"
+            else:
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("ratio requires a directional numerator/denominator or put/call pair",),
+                )
+        elif family in {"relative_covariance", "relative_correlation"}:
+            allowed = {
+                "same_economic_concept", "option_pair", "revision_dispersion",
+                "price_volume", "complementary_expectations",
             }
-        return {
-            "admission": "REJECT", "score": -30, "labels": sorted(labels),
-            "reasons": ["没有可证明的经济关系，不能仅凭类型或跨 dataset 组槽"],
-        }
+            if relationship_type not in allowed:
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("co-movement requires a shared or explicitly complementary mechanism",),
+                )
+        else:
+            return result(
+                "REJECT", -30, labels, relationship_type,
+                reasons=("no relationship contract is defined for this template family",),
+            )
+
+        if frequency["status"] == "REVIEW":
+            return result(
+                "REVIEW", 20, labels, relationship_type,
+                symmetric=symmetric,
+                preferred=preferred,
+                assignment_reason=assignment_reason,
+                reasons=("frequency compatibility is REVIEW; auto Factory cannot use it",),
+            )
+        if family in {"relative_ratio", "generic_multi_field_ratio"}:
+            return result(
+                "ALLOW", 70 if relationship_type == "numerator_denominator" else 60,
+                labels, relationship_type,
+                symmetric=symmetric,
+                preferred=preferred,
+                assignment_reason=assignment_reason,
+                evidence_strength="HIGH",
+                reasons=("directional ratio contract passed",),
+            )
+        return result(
+            "ALLOW", 60, labels, relationship_type,
+            symmetric=True,
+            preferred={"p": "EITHER", "s": "EITHER"},
+            assignment_reason="relationship is symmetric under this template contract",
+            evidence_strength="HIGH" if relationship_type in {"option_pair", "revision_dispersion"} else "MEDIUM",
+            reasons=("template-specific relationship contract passed",),
+        )
 
     def rank_compatible_templates(self, profile, templates=None):
         """Rank a small, deterministic view of templates for one field."""
@@ -1155,6 +1378,7 @@ class AlphaFactory:
         primary_key = self._profile_key(primary)
         primary_id = str(primary.get("id"))
         primary_type = str(primary.get("type") or "").upper()
+        primary_traits = _derive_field_semantic_traits(primary)
         candidates = []
         for candidate in list(fields[offset + 1:]) + list(fields[:offset]):
             if not isinstance(candidate, dict) or not candidate.get("id"):
@@ -1166,16 +1390,38 @@ class AlphaFactory:
                 continue
             if str(candidate.get("semantic_status", "UNKNOWN")).upper() == "UNKNOWN":
                 continue
+            if template is not None:
+                candidate_traits = _derive_field_semantic_traits(candidate)
+                if template.family == "generic_multi_field_confirmation":
+                    analyst_family = {
+                        "analyst_revision", "analyst_dispersion", "sentiment",
+                    }
+                    frequency = self._frequency_compatibility(
+                        [primary_traits, candidate_traits], template.family
+                    )
+                    relation = {
+                        "admission": (
+                            "ALLOW"
+                            if {
+                                primary_traits.get("concept"),
+                                candidate_traits.get("concept"),
+                            } <= analyst_family
+                            and frequency["status"] == "COMPATIBLE"
+                            else "REJECT"
+                        ),
+                        "score": 40,
+                        "labels": [],
+                    }
+                else:
+                    relation = self._relationship_gate([primary, candidate], template)
+                if relation["admission"] != "ALLOW":
+                    continue
             candidate_type = str(candidate.get("type") or "").upper()
             if primary_type and candidate_type and candidate_type != primary_type:
                 continue
             if any(candidate_id == str(item[1].get("id")) for item in candidates):
                 continue
-            if template is not None:
-                relation = self._relationship_gate([primary, candidate], template)
-                if relation["admission"] == "REJECT":
-                    continue
-            else:
+            if template is None:
                 relation = {"admission": "REVIEW", "score": 0, "labels": []}
             candidates.append((relation, candidate))
         dataset_ids = {
@@ -1528,7 +1774,7 @@ class AlphaFactory:
                 relation = None
                 if companion_slots:
                     relation = self._relationship_gate(slot_profiles, template)
-                    if relation["admission"] == "REJECT":
+                    if relation["admission"] != "ALLOW":
                         continue
                 generated = self.generate(
                     dict(hypothesis, template_ids=[template_id]),
@@ -1693,7 +1939,7 @@ class AlphaFactory:
                 key: candidate[key]
                 for key in ("mutation", "template_id", "template_family",
                             "template_stage_path", "template_ref", "template_slots",
-                            "factory_version")
+                            "relationship_audit", "factory_version")
             })
             proposal["proposal_origin"] = "factory"
             assembled.append(proposal)
@@ -1742,6 +1988,16 @@ class AlphaFactory:
             expression = proposal.get("expression")
             if not isinstance(expression, str) or not expression.strip():
                 continue
+            fields_used = proposal.get("fields") or proposal.get("fields_used") or []
+            if isinstance(fields_used, (list, tuple)) and len(fields_used) > 1:
+                relationship_audit = proposal.get("relationship_audit") or {}
+                admission = str(
+                    proposal.get("relationship_admission")
+                    or relationship_audit.get("relationship_admission")
+                    or ""
+                ).upper()
+                if admission != "ALLOW":
+                    continue
             identity = canonical_expression(expression)
             if identity in excluded:
                 continue

@@ -63,6 +63,12 @@ RuntimeComponents
 - `OptimizerWorkflow` 只消费既有 trajectory、weekly cache 和 AlphaFactory；它按 evidence → code screen → Agent-authored semantic gate 编排 CHILD proposal，不能生成 `child_economic_hypothesis`、扫描参数、刷新 Alpha Feed、写 proposals 或触发 Simulation。
 - 不引入 DI/IoC 框架，不创建 `Workflow(agent=self)` 或 `hooks.get_attr` 逃生通道；hooks 必须是窄的、按操作定义的显式回调。
 
+### 配置边界
+
+- 外部 `config.json` 仍使用 `simulation` / `agent`；这两个 key 只允许在 `wqb_agent/config.py` 的 `parse_config()` / `normalize_config()` 输入边界读取。
+- `normalize_config()` 之后的 `AppConfig` 只包含 typed sections（包括 `simulation_config` 和 `runtime`），不得保留 raw 配置 shadow copy；生产模块只能读取 typed fields。
+- `config.agent.*` 与 `config.simulation.*` 错误路径描述的是用户输入 schema，应保持不变；不要把外部 key 改成 `runtime` 或 `simulation_config`。
+
 ## Alpha 经济含义与自相关硬约束
 
 - 不生成固定多腿 `权重 * rank(ts_decay_linear(ts_zscore(...)))` 参数堆叠，不把窗口/权重/符号扫描包装成新发现。

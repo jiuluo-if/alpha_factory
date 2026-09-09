@@ -47,6 +47,27 @@ trajectory 侧同样以 `observed_submitted` 表示 cumulative 状态，以
 - **Research State**：由现有 trajectory、checkpoint、`TrialLedger` 和压缩 workspace 视图承担；facade 不创建第二个 store。
 - **Evaluation**：由 metrics、checks、yearly、correlation、robustness 和 statistical diagnostics 组成，描述证据，不替 Agent 选方向。
 
+### 配置输入与 typed boundary
+
+外部配置文件和内部运行时模型是两个有意不同的命名层：
+
+```text
+config.json / raw dict
+  {"simulation": {...}, "agent": {...}}
+        ↓ parse_config() / normalize_config()
+typed AppConfig
+  ├── simulation_config
+  ├── runtime
+  ├── search / research_allocation / factory
+  └── validation / statistical / robustness / incremental_value
+        ↓ runtime policy / components / workflows
+```
+
+`simulation` 和 `agent` 是外部 schema key，不是 `AppConfig` 的运行时字段。只有
+`config.py` 的 parser 可以读取它们；normalize 完成后不得保留 raw shadow mapping，
+其他生产模块必须消费 typed sections。错误信息仍使用 `config.agent.*` 或
+`config.simulation.*`，因为它们指向用户提交的外部配置路径。
+
 运行时对象图如下：
 
 ```text

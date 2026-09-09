@@ -44,9 +44,8 @@ def main(argv=None):
         )
         sys.exit(1)
 
-    # Validate once before any client construction.  The legacy mapping is
-    # retained for Agent compatibility; typed policy objects are exposed by
-    # wqb_agent.config and are not reparsed by read-only commands.
+    # Validate raw JSON once before any client construction.  All subsequent
+    # commands consume the typed AppConfig boundary and are not reparsed.
     from wqb_agent.config import apply_cli_overrides, normalize_config
     try:
         typed_config = normalize_config(config)

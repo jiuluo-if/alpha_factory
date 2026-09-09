@@ -1,9 +1,12 @@
 """Static architecture guards for the production module boundaries."""
 
 import ast
+import dataclasses
 import os
 import re
 import unittest
+
+from wqb_agent.config import AppConfig
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,6 +51,40 @@ class TestArchitectureBoundaries(unittest.TestCase):
         "submission",
         "validation",
     )
+
+    def test_app_config_has_no_raw_compatibility_fields(self):
+        field_names = {field.name for field in dataclasses.fields(AppConfig)}
+        self.assertNotIn("agent", field_names)
+        self.assertNotIn("simulation", field_names)
+
+    def test_production_modules_do_not_read_raw_app_config_mappings(self):
+        forbidden = (
+            r"\b(?:config|app_config|typed_config)\.(?:agent|simulation)(?:\b|[.(])",
+            *(
+                f'hasattr({name}, "{section}")'
+                for name in ("config", "app_config", "typed_config")
+                for section in ("agent", "simulation")
+            ),
+        )
+        for filename in os.listdir(PACKAGE_ROOT):
+            if not filename.endswith(".py") or filename == "config.py":
+                continue
+            path = os.path.join(PACKAGE_ROOT, filename)
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            for expression in forbidden:
+                if expression.startswith(r"\b"):
+                    matched = re.search(expression, source)
+                    self.assertIsNone(
+                        matched,
+                        f"{filename} 不得读取 AppConfig raw compatibility mapping: {matched.group(0) if matched else expression}",
+                    )
+                    continue
+                self.assertNotIn(
+                    expression,
+                    source,
+                    f"{filename} 不得读取 AppConfig raw compatibility mapping: {expression}",
+                )
 
     def test_domain_modules_do_not_reverse_import_agent(self):
         for module_name in self.DOMAIN_MODULES:

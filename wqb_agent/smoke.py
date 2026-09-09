@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
+from .config import AppConfig
 
-def run_readonly_smoke(client, config):
-    if hasattr(config, "agent"):
-        agent_cfg = config.agent
-    else:
-        agent_cfg = (config or {}).get("agent") if isinstance(config, dict) else {}
-    agent_cfg = agent_cfg if isinstance(agent_cfg, dict) else {}
+def run_readonly_smoke(client, config: AppConfig):
+    if not isinstance(config, AppConfig):
+        raise TypeError("run_readonly_smoke 需要已 normalize 的 AppConfig")
     result = {
         "network_write": False,
         "datasets": {"status": "UNAVAILABLE", "count": None},
@@ -24,7 +22,7 @@ def run_readonly_smoke(client, config):
         result["datasets"] = {"status": "PASS", "count": len(datasets)}
     except (AttributeError, OSError, TypeError, ValueError):
         return result
-    dataset_id = agent_cfg.get("smoke_dataset")
+    dataset_id = config.runtime.smoke_dataset
     if not dataset_id and datasets and isinstance(datasets[0], dict):
         dataset_id = datasets[0].get("id")
     if dataset_id:

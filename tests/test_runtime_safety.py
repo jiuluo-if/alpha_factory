@@ -31,6 +31,28 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertIsInstance(typed, AppConfig)
         self.assertIs(normalize_config(typed), typed)
 
+    def test_normalized_config_has_typed_sections_only_and_is_copy_isolated(self):
+        raw = {
+            "simulation": {"neutralization": "SUBINDUSTRY"},
+            "agent": {
+                "smoke_dataset": "pv1",
+                "quality": {"promising_sharpe": 0.9},
+            },
+        }
+        typed = normalize_config(raw)
+        self.assertFalse(hasattr(typed, "agent"))
+        self.assertFalse(hasattr(typed, "simulation"))
+        self.assertEqual(typed.runtime.smoke_dataset, "pv1")
+        self.assertEqual(
+            typed.simulation_config.settings["neutralization"], "SUBINDUSTRY"
+        )
+        raw["agent"]["quality"]["promising_sharpe"] = 99
+        raw["simulation"]["neutralization"] = "GLOBAL"
+        self.assertEqual(typed.runtime.quality["promising_sharpe"], 0.9)
+        self.assertEqual(
+            typed.simulation_config.settings["neutralization"], "SUBINDUSTRY"
+        )
+
     def test_main_state_dir_override_reports_config_error_before_agent_access(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = os.path.join(tmp, "invalid.json")
@@ -60,7 +82,7 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertIsInstance(overridden, AppConfig)
         self.assertEqual(overridden.runtime.state_dir, "override-state")
         self.assertEqual(typed.runtime.state_dir, "original-state")
-        self.assertEqual(typed.agent["state_dir"], "original-state")
+        self.assertFalse(hasattr(typed, "agent"))
 
     def test_runtime_scalar_max_concurrent_sims_must_be_positive(self):
         with self.assertRaisesRegex(

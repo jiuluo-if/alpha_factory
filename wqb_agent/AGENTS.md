@@ -31,6 +31,12 @@
 - 优化题案标记 `research_layer=optimization`、`research_role=EXPLOIT`；来源按 `cloud`、`current_run` 审计。探索题案由 `AlphaFactory.generate_factory_batch()` 以稳定种子随机化已核验字段和经济模板，标记 `research_layer=exploration`、`research_role=EXPLORE`、`experiment_stage=BASELINE`、`exploration_objective=signal_discovery`。
 - 双层不增加执行入口：完整批次仍须通过 100 题案 gate、正常 Agent preflight 和 `Agent.run_proposals()`；代码/Agent 任一层不足或失败都不能用重复题案填充。
 
+## 配置边界
+
+- `config.py` 是唯一允许解释外部 raw `agent` / `simulation` key 的 package 模块。
+- `normalize_config()` 之后的 `AppConfig` 只包含 typed sections；其他 package 模块不得读取 `config.agent` 或 `config.simulation`。
+- 用户可见的 parser 错误路径（例如 `config.agent.*` 和 `config.simulation.*`）必须保持不变。
+
 研究空间轮换、搜索分配和候选优先级属于 `RESEARCH_POLICY`，不是 BRAIN 机制。
 
 ## 验证

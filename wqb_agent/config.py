@@ -93,6 +93,7 @@ class AgentRuntimeConfig:
     """
 
     state_dir: str = ".wqb_state"
+    smoke_dataset: str | None = None
     max_rounds: int = 5
     candidates_per_round: int = 6
     max_proposals_per_round: int = 18
@@ -145,10 +146,6 @@ class FactoryConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    # Compatibility-only raw mappings. New runtime code consumes the typed
-    # ``simulation_config`` and ``runtime`` fields below.
-    simulation: dict = field(default_factory=dict)
-    agent: dict = field(default_factory=dict)
     search: SearchConfig = field(default_factory=SearchConfig)
     research_allocation: ResearchAllocation = field(default_factory=ResearchAllocation)
     factory: FactoryConfig = field(default_factory=FactoryConfig)
@@ -487,6 +484,11 @@ def parse_config(raw):
         )
     runtime = AgentRuntimeConfig(
         state_dir=str(agent.get("state_dir", ".wqb_state")),
+        smoke_dataset=(
+            str(agent["smoke_dataset"])
+            if agent.get("smoke_dataset") is not None
+            else None
+        ),
         max_rounds=_int_in_range(
             agent.get("max_rounds", 5),
             key="config.agent.max_rounds",
@@ -581,8 +583,6 @@ def parse_config(raw):
         yearly_policy=copy.deepcopy(yearly_policy),
     )
     return AppConfig(
-        simulation=copy.deepcopy(raw.get("simulation", {})),
-        agent=copy.deepcopy(agent),
         search=search,
         research_allocation=allocation,
         factory=factory,

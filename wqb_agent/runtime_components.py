@@ -10,7 +10,6 @@ from .candidate import CandidateBuilder
 from .checkpoints import CheckpointStore
 from .discovery import FieldDiscovery
 from .memory import ExperienceMemory
-from .evidence import load_evidence_cache
 from .reflection import Reflector
 from .simulator import Simulator
 from .search_policy import SearchPolicy
@@ -62,12 +61,16 @@ def build_runtime_components(client, config):
         max_lineages=runtime.memory["max_lineages"],
         max_seen_expressions=runtime.memory["max_seen_expressions"],
         max_used_hypotheses=runtime.memory["max_used_hypotheses"],
+        persist=False,
     )
     trajectory = Trajectory(
         max_len=runtime.trajectory_window,
         path=os.path.join(state_dir, "trajectory.jsonl"),
+        persist=False,
     )
-    trial_ledger = TrialLedger(os.path.join(state_dir, "trial_ledger.jsonl"))
+    trial_ledger = TrialLedger(
+        os.path.join(state_dir, "trial_ledger.jsonl"), persist=False
+    )
     builder = CandidateBuilder(
         neutralization=config.simulation_config.settings["neutralization"]
     )
@@ -77,10 +80,17 @@ def build_runtime_components(client, config):
         max_pages=runtime.max_pagination_pages,
         cache_path=os.path.join(state_dir, "fields_cache.json"),
         cache_ttl_sec=runtime.fields_cache_ttl_sec,
+        catalog_root=state_dir,
         max_alpha_count=runtime.max_field_alpha_count,
         selection_mode=runtime.field_selection["mode"],
         random_fraction=runtime.field_selection["random_fraction"],
         random_seed=runtime.field_selection["random_seed"],
+        platform_usage_refresh=runtime.field_selection["platform_usage_refresh"],
+        require_platform_alpha_count=runtime.field_selection["require_platform_alpha_count"],
+        dataset_sampling=runtime.field_selection["dataset_sampling"],
+        min_datasets=runtime.field_selection["min_datasets"],
+        dataset_pool=runtime.field_selection["dataset_pool"],
+        persist_catalog=runtime.field_selection["persist_catalog"],
     )
     simulator = Simulator(
         client,
@@ -110,7 +120,10 @@ def build_runtime_components(client, config):
         **{target: runtime.quality[key] for key, target in reflector_keys.items()
            if key in runtime.quality},
     )
-    reflector.evidence_cache = load_evidence_cache(state_dir)
+    # Simulation/Alpha result evidence is ephemeral.  A new process must not
+    # resurrect an old local result sidecar; unresolved remote work is resumed
+    # only from checkpoint state.
+    reflector.evidence_cache = {}
     lock = threading.Lock()
     return RuntimeComponents(
         search_policy=search_policy,

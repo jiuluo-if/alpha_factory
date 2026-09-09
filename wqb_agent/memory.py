@@ -74,8 +74,10 @@ class ExperienceMemory:
         max_lineages=256,
         max_seen_expressions=4096,
         max_used_hypotheses=256,
+        persist=True,
     ):
         self.state_dir = state_dir
+        self.persist = bool(persist)
         self.max_lessons = self._cap(max_lessons, 20)
         self.max_avoid = self._cap(max_avoid, 30)
         self.max_next = self._cap(max_next, 15)
@@ -113,7 +115,8 @@ class ExperienceMemory:
     # ------------------------------------------------------------------ I/O
 
     def _ensure_dir(self):
-        os.makedirs(self.state_dir, exist_ok=True)
+        if self.state_dir and self.persist:
+            os.makedirs(self.state_dir, exist_ok=True)
 
     @staticmethod
     def _cap(value, fallback):
@@ -131,14 +134,16 @@ class ExperienceMemory:
         return value if math.isfinite(value) else default
 
     def memory_path(self):
-        return os.path.join(self.state_dir, "experience.json")
+        return os.path.join(self.state_dir, "experience.json") if self.state_dir else None
 
     def garbage_path(self):
-        return os.path.join(self.state_dir, "garbage.json")
+        return os.path.join(self.state_dir, "garbage.json") if self.state_dir else None
 
     def load(self):
+        if not self.persist:
+            return self
         path = self.memory_path()
-        if not os.path.exists(path):
+        if not path or not os.path.exists(path):
             return self
         try:
             with open(path, encoding="utf-8") as f:
@@ -223,8 +228,11 @@ class ExperienceMemory:
         return self
 
     def _load_garbage(self):
+        if not self.persist:
+            self.garbage = []
+            return
         path = self.garbage_path()
-        if not os.path.exists(path):
+        if not path or not os.path.exists(path):
             self.garbage = []
             return
         try:
@@ -243,6 +251,8 @@ class ExperienceMemory:
         return [item for item in value if isinstance(item, dict)]
 
     def save(self):
+        if not self.state_dir or not self.persist:
+            return None
         self.compress()
         data = {
             "schema_version": MEMORY_VERSION,

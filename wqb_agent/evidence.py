@@ -5,7 +5,7 @@ payload 中该检查通常仍为 PENDING（``pass`` 三态 None），导致 Refl
 DONE 实验判为 RECONCILE，VALIDATION 角色的 parent 资格门
 （SUCCESS / SUSPICIOUS_HIGH_SIGNAL）永远无法通过——晋升与提交池管线被结构性阻塞。
 
-本模块提供一个**独立侧车文件** ``.wqb_state/evidence_cache.json``：
+本模块提供一个可选的证据缓存接口；生产 Agent 默认只使用进程内缓存：
 - 只读平台（GET /alphas/{id}），把已结算的 checks 缓存下来；
 - 不修改 trajectory.jsonl、checkpoint、sims_results 等任何 append-only 状态；
 - Reflector 在分类时把缓存中已结算（bool pass）的检查叠加到存储指标之上，
@@ -145,15 +145,17 @@ def _correlation_values(payload):
 
 
 def refresh_self_correlation_cache(client, state_dir, alpha_ids,
-                                   timeout_sec=20, correlation_limit=None):
+                                   timeout_sec=20, correlation_limit=None,
+                                   *, persist=True, cache=None):
     """Read-only refresh of settled BRAIN SELF_CORRELATION checks.
 
     ``GET /alphas/{id}`` commonly exposes the check as PENDING even after the
     simulation is complete.  The platform settles the value on the separate
     ``correlations/self`` endpoint.  Cache only resolved checks; unresolved or
     failed reads remain absent and therefore fail closed in promotion gates.
+    ``persist=False`` is the production mode and keeps the cache in memory.
     """
-    cache = load_evidence_cache(state_dir)
+    cache = cache if isinstance(cache, dict) else load_evidence_cache(state_dir)
     try:
         correlation_limit = float(
             SELF_CORRELATION_LIMIT if correlation_limit is None
@@ -218,10 +220,10 @@ def refresh_self_correlation_cache(client, state_dir, alpha_ids,
         # The cache is advisory and fully re-fetchable. Batch writes reduce
         # atomic rewrites during an 18-candidate round while retaining a
         # bounded crash-loss window.
-        if refreshed % EVIDENCE_SAVE_BATCH == 0:
+        if persist and refreshed % EVIDENCE_SAVE_BATCH == 0:
             save_evidence_cache(state_dir, cache)
             dirty = False
-    if dirty:
+    if persist and dirty:
         save_evidence_cache(state_dir, cache)
     return refreshed
 

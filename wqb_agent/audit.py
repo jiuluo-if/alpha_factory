@@ -7,7 +7,15 @@ from .schema import ARTIFACT_SCHEMAS
 from .workspace_snapshot import read_workspace_snapshot
 
 
-def audit_state(state_dir, *, snapshot=None):
+def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
+    """Audit durable state and, when enabled, durable lifecycle projections.
+
+    Production Agent runs intentionally keep trajectory and TrialLedger in
+    memory.  In that mode the checkpoint is the only durable recovery
+    boundary, so absence of a local ledger is expected rather than evidence
+    of a broken checkpoint.  The default remains strict for callers auditing
+    a workspace that explicitly uses durable lifecycle artifacts.
+    """
     snapshot = snapshot or read_workspace_snapshot(state_dir)
     errors = []
     warnings = []
@@ -162,15 +170,16 @@ def audit_state(state_dir, *, snapshot=None):
         if missing_projection:
             record("ledger_lifecycle_missing_trajectory", "trial_ledger→trajectory",
                    phase=phase, proposal_ids=missing_projection)
-    if checkpoint_terminal and not snapshot.inventory.info("trial_ledger.jsonl").exists:
-        record("ledger_missing", "checkpoint+trial_ledger")
-    mismatch = sorted(
-        proposal_id for proposal_id in checkpoint_terminal
-        if proposal_id not in ledger_simulation_settled
-    )
-    if mismatch:
-        record("checkpoint_ledger_mismatch", "checkpoint+trial_ledger",
-               proposal_ids=mismatch)
+    if lifecycle_persistent:
+        if checkpoint_terminal and not snapshot.inventory.info("trial_ledger.jsonl").exists:
+            record("ledger_missing", "checkpoint+trial_ledger")
+        mismatch = sorted(
+            proposal_id for proposal_id in checkpoint_terminal
+            if proposal_id not in ledger_simulation_settled
+        )
+        if mismatch:
+            record("checkpoint_ledger_mismatch", "checkpoint+trial_ledger",
+                   proposal_ids=mismatch)
 
     for parent_id in sorted(snapshot.validation.parent_ids):
         if parent_id not in trajectory_ids:
@@ -207,7 +216,8 @@ def audit_state(state_dir, *, snapshot=None):
     unique_errors = list(dict.fromkeys(errors))
     return {"ok": not unique_errors, "errors": unique_errors,
             "warnings": list(dict.fromkeys(warnings)),
-            "blocking": bool(unique_errors), "findings": findings,
+             "blocking": bool(unique_errors), "findings": findings,
+             "lifecycle_persistent": bool(lifecycle_persistent),
             "committed": len(ledger_committed), "submitted": len(ledger_submitted),
             "simulation_submitted": len(ledger_simulation_submitted),
             "settled": len(ledger_research_settled),

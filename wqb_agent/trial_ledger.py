@@ -54,8 +54,10 @@ class TrialLedger:
 
     SCHEMA_VERSION = TRIAL_LEDGER_VERSION
 
-    def __init__(self, path):
+    def __init__(self, path, persist=True):
         self.path = path
+        self.persist = bool(persist)
+        self._events = []
 
     @staticmethod
     def _trial_id(trial):
@@ -124,6 +126,11 @@ class TrialLedger:
             "settlement": settlement,
             "recorded_at": timestamp if timestamp is not None else time.time(),
         }
+        if not self.path or not self.persist:
+            if any(item.get("event_id") == row["event_id"] for item in self._events):
+                return False
+            self._events.append(row)
+            return True
         return append_jsonl_if_unique(self.path, row, ("event_id",))
 
     def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
@@ -182,7 +189,8 @@ class TrialLedger:
         unique_proposals = set()
         lifecycle_rows = defaultdict(list)
         settlement_rows = {}
-        for row in iter_jsonl_objects(self.path):
+        rows = self._events if not self.path or not self.persist else iter_jsonl_objects(self.path)
+        for row in rows:
             events += 1
             trial_id = row.get("trial_id")
             if trial_id:
@@ -298,6 +306,8 @@ class TrialLedger:
 
     def summarize_cached(self, cache_path):
         """Use a bounded disposable summary projection keyed by ledger signature."""
+        if not self.path or not self.persist:
+            return self.summarize()
         try:
             stat = os.stat(self.path)
             signature = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}

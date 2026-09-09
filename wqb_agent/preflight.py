@@ -214,7 +214,11 @@ def run_takeover_preflight(raw_config):
     state_dir = config.runtime.state_dir
     snapshot = read_workspace_snapshot(state_dir)
     doctor = run_doctor(config, offline=True, snapshot=snapshot)
-    state = audit_state(state_dir, snapshot=snapshot)
+    # RuntimeComponents deliberately constructs trajectory/TrialLedger with
+    # persist=False.  Checkpoint is therefore the sole durable recovery
+    # boundary; do not reject a clean terminal checkpoint because its
+    # in-memory lifecycle projection is absent after takeover.
+    state = audit_state(state_dir, snapshot=snapshot, lifecycle_persistent=False)
     unfinished = list(snapshot.unfinished_checkpoint_paths)
     blocking = list(unfinished)
     if not state.get("ok"):

@@ -32,12 +32,30 @@ class CheckpointStore:
         """Atomically persist one checkpoint and return whether bytes changed."""
         path = self.path(round_no)
         os.makedirs(self.state_dir, exist_ok=True)
+        checkpoint_experiments = []
+        for exp in experiments:
+            row = exp.to_dict()
+            # A checkpoint is a recovery/dedupe boundary, not a local result
+            # archive.  This applies to unfinished checkpoints too: retain
+            # only enough identity and known progress URL to continue a
+            # transport recovery, while metrics, checks, Alpha IDs, and
+            # result-side evidence remain in the process-local daily cache.
+            keep = {
+                "schema_version", "created_by_version", "id", "round",
+                "hypothesis_id", "expression", "settings", "fields_used",
+                "status", "proposal_id", "submission_fingerprint",
+                "submission_started_at", "progress_url", "experiment_stage",
+                "research_role", "change_type", "lineage_id", "template_id",
+                "template_family", "proposal_origin",
+            }
+            row = {key: value for key, value in row.items() if key in keep}
+            checkpoint_experiments.append(row)
         data = {
             "schema_version": CHECKPOINT_VERSION,
             "created_by_version": CREATED_BY_VERSION,
             "round_no": int(round_no),
             "hypothesis": hypothesis,
-            "experiments": [exp.to_dict() for exp in experiments],
+            "experiments": checkpoint_experiments,
             "complete": bool(complete),
             "updated_at": time.time(),
         }

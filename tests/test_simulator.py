@@ -351,6 +351,31 @@ class TestSimulator(unittest.TestCase):
         self.assertEqual(exp.status, "DONE", exp.error)
         self.assertEqual(len(client.sim_calls), 1)
 
+    def test_known_progress_unknown_does_not_pause_new_submissions(self):
+        """已知远程作业只需只读恢复，不应阻塞独立待派发题案。"""
+        import requests
+
+        class PollFailingClient(FakeClient):
+            def poll_progress(self, progress_url, timeout_sec=900,
+                              progress_callback=None):
+                if progress_url.endswith("known"):
+                    raise requests.exceptions.ConnectionError("proxy down")
+                return super().poll_progress(progress_url, timeout_sec)
+
+        client = PollFailingClient(latency=0)
+        known = Experiment(1, "h", "rank(known_field)", {}, [])
+        known.progress_url = "https://api.worldquantbrain.com/simulations/known"
+        pending = Experiment(1, "h", "rank(new_field)", {}, [])
+
+        Simulator(
+            client, max_concurrent=1, poll_timeout_sec=30,
+            replace_attempts=1, replace_backoff_sec=0,
+        ).run([known, pending])
+
+        self.assertEqual(known.status, "UNKNOWN")
+        self.assertEqual(pending.status, "DONE")
+        self.assertEqual(len(client.sim_calls), 1)
+
 
 
 if __name__ == "__main__":

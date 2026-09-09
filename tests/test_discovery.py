@@ -328,6 +328,180 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
         self.assertEqual([field["id"] for field in fields], ["fresh_volume"])
         self.assertEqual(discovery.last_excluded_high_usage[0]["id"], "overused_volume")
 
+    def test_platform_alpha_count_refresh_overrides_local_field_cache(self):
+        class CurrentUsageClient(FakeClient):
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                self.datafield_calls.append((dataset_id, limit, offset, field_type))
+                if dataset_id != "pv1" or offset:
+                    return [], 2
+                return [
+                    {"id": "overused_volume", "description": "volume", "type": "MATRIX",
+                     "alphaCount": 99},
+                    {"id": "fresh_volume", "description": "volume", "type": "MATRIX",
+                     "alphaCount": 2},
+                ], 2
+
+        client = CurrentUsageClient()
+        discovery = FieldDiscovery(
+            client, max_alpha_count=10, platform_usage_refresh=True,
+        )
+        discovery._disk_cache["pv1"] = [
+            {"id": "overused_volume", "description": "volume", "type": "MATRIX",
+             "alphaCount": 1},
+            {"id": "fresh_volume", "description": "volume", "type": "MATRIX",
+             "alphaCount": 1},
+        ]
+
+        fields = discovery.discover(
+            {"statement": "volume", "tags": ["volume"], "datasets": ["pv1"]}, 2
+        )
+
+        self.assertEqual([field["id"] for field in fields], ["fresh_volume"])
+        self.assertEqual(discovery.last_excluded_high_usage[0]["alpha_count"], 99)
+        self.assertEqual(fields[0]["platform_dedupe"]["source"], "brain_api")
+        self.assertEqual(fields[0]["platform_dedupe"]["status"], "KNOWN")
+
+    def test_required_platform_alpha_count_fails_closed_when_missing(self):
+        class MissingUsageClient(FakeClient):
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                return [
+                    {"id": "volume_without_usage", "description": "volume",
+                     "type": "MATRIX"}
+                ], 1
+
+        discovery = FieldDiscovery(
+            MissingUsageClient(), max_alpha_count=10,
+            platform_usage_refresh=True, require_platform_alpha_count=True,
+        )
+        fields = discovery.discover(
+            {"statement": "volume", "tags": ["volume"], "datasets": ["pv1"]}, 1
+        )
+        self.assertEqual(fields, [])
+        self.assertEqual(discovery.platform_dedupe_view()["status_by_dataset"]["pv1"], "UNKNOWN")
+        self.assertEqual(discovery.last_excluded_unknown_usage[0]["id"], "volume_without_usage")
+
+    def test_platform_usage_is_scoped_by_dataset_and_field_id(self):
+        discovery = FieldDiscovery(FakeClient(), platform_usage_refresh=True)
+        discovery._cache = {
+            "pv1": [{"id": "low", "alphaCount": 63765}],
+            "univ1": [{"id": "low", "alphaCount": 85437}],
+        }
+        discovery._platform_usage_status = {"pv1": "KNOWN", "univ1": "KNOWN"}
+
+        usage = discovery.platform_usage_by_field(["pv1", "univ1"])
+
+        self.assertEqual(usage["pv1"]["low"]["alpha_count"], 63765)
+        self.assertEqual(usage["univ1"]["low"]["alpha_count"], 85437)
+
+    def test_stratified_sampling_covers_multiple_datasets_and_persists_catalog(self):
+        discovery = FieldDiscovery(
+            self.client,
+            pagination_limit=2,
+            max_pages=20,
+            catalog_root=self._tmp,
+            cache_path=os.path.join(self._tmp, "fields_cache.json"),
+            dataset_sampling="stratified",
+            min_datasets=3,
+            persist_catalog=True,
+            selection_mode="semantic_random",
+            random_seed="coverage-seed",
+        )
+        fields = discovery.discover(
+            {
+                "statement": "price volume option",
+                "tags": ["price", "volume", "option"],
+                "datasets": ["pv1", "pv13", "option8"],
+                "_round": 4,
+            },
+            target_count=6,
+        )
+        counts = {}
+        for field in fields:
+            counts[field["dataset"]] = counts.get(field["dataset"], 0) + 1
+        self.assertEqual(set(counts), {"pv1", "pv13", "option8"})
+        self.assertTrue(all(value >= 1 for value in counts.values()))
+        self.assertEqual(discovery.last_dataset_selection["selected_counts"], counts)
+
+        catalog_dirs = [
+            name for name in os.listdir(self._tmp)
+            if name.startswith("platform_field_catalog_")
+        ]
+        self.assertEqual(len(catalog_dirs), 1)
+        with open(os.path.join(self._tmp, catalog_dirs[0], "manifest.json"),
+                  encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        self.assertEqual(
+            set(manifest["datasets"]), {"pv1", "pv13", "option8"}
+        )
+        self.assertEqual(manifest["scope"]["region"], "USA")
+
+        reloaded_client = FakeClient()
+        reloaded = FieldDiscovery(
+            reloaded_client,
+            catalog_root=self._tmp,
+            cache_path=os.path.join(self._tmp, "reloaded_cache.json"),
+            dataset_sampling="stratified",
+            min_datasets=3,
+            random_seed="coverage-seed",
+        )
+        reloaded.discover(
+            {"datasets": ["pv1", "pv13", "option8"], "_round": 4},
+            target_count=3,
+        )
+        self.assertEqual(reloaded_client.datafield_calls, [])
+
+    def test_same_field_id_from_two_datasets_is_not_collapsed_by_discovery(self):
+        class SharedFieldClient(FakeClient):
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                if dataset_id not in {"pv1", "pv13"}:
+                    return [], 0
+                fields = [{
+                    "id": "low",
+                    "description": f"{dataset_id} low price",
+                    "type": "MATRIX",
+                }]
+                return fields[offset:offset + limit], len(fields)
+
+        discovery = FieldDiscovery(
+            SharedFieldClient(),
+            pagination_limit=2,
+            dataset_sampling="stratified",
+            min_datasets=2,
+            selection_mode="random",
+            random_seed="shared-id",
+        )
+        fields = discovery.discover(
+            {"datasets": ["pv1", "pv13"], "_round": 1}, target_count=2
+        )
+        self.assertEqual(
+            {(field["dataset"], field["id"]) for field in fields},
+            {("pv1", "low"), ("pv13", "low")},
+        )
+
+    def test_catalog_scope_mismatch_is_not_used_as_current_platform_evidence(self):
+        catalog = os.path.join(self._tmp, "platform_field_catalog_20260908")
+        os.makedirs(catalog)
+        with open(os.path.join(catalog, "pv1.json"), "w", encoding="utf-8") as handle:
+            json.dump({"fields": [{"id": "stale", "description": "stale"}]}, handle)
+        with open(os.path.join(catalog, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({
+                "schema": 1,
+                "fetched_at": "2026-09-08T00:00:00Z",
+                "scope": {
+                    "instrument_type": "EQUITY", "region": "EUR",
+                    "delay": 1, "universe": "TOP3000",
+                },
+                "datasets": {"pv1": {"file": "pv1.json"}},
+            }, handle)
+        discovery = FieldDiscovery(
+            self.client,
+            catalog_root=self._tmp,
+            cache_path=os.path.join(self._tmp, "fields_cache.json"),
+        )
+        self.assertIsNone(discovery._catalog_provenance)
+        discovery._fields_for("pv1")
+        self.assertTrue(self.client.datafield_calls)
+
     def test_no_fake_fields(self):
         hypothesis = {
             "statement": "option volatility.",

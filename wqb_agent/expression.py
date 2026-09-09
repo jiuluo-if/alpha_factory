@@ -22,7 +22,7 @@ _NON_FIELD_IDENTIFIERS = {
     "vec_sum", "winsorize", "zscore", "driver", "gaussian", "cauchy",
     "uniform", "filter", "dense", "constant", "longscale", "shortscale",
     "std", "rate", "hump", "ignore", "range", "sigma", "subindustry",
-    "industry", "sector", "market", "lookback",
+    "industry", "sector", "market", "lookback", "true", "false", "null",
 }
 
 

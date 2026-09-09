@@ -120,8 +120,13 @@ class Simulator:
 
     @staticmethod
     def _pauses_dispatch(exp):
+        # A known progress URL is a durable remote identity.  A polling
+        # failure for that job can be reconciled read-only on the next pass;
+        # it must not block unrelated proposals that have not been submitted.
+        # Submission ambiguity without a URL still pauses dispatch because a
+        # second POST could duplicate an unknown remote job.
         if exp.status in UNKNOWN_STATUSES:
-            return True
+            return exp.status == "SUBMIT_UNKNOWN" or not exp.progress_url
         if exp.status == "FAILED" and exp.error and (
             "401" in exp.error or "403" in exp.error
         ):

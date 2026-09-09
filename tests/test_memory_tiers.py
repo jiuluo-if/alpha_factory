@@ -222,6 +222,23 @@ class TestBackwardCompat(TmpStateMixin, unittest.TestCase):
 
 
 class TestContextDigest(TmpStateMixin, unittest.TestCase):
+    def test_context_exposes_bounded_mechanism_learning_views(self):
+        m = ExperienceMemory(state_dir=self._tmp)
+        for index in range(5):
+            m.add_lesson(
+                f"mechanism learning {index}", 1, evidence=5,
+                metadata={
+                    "hypothesis_outcome": "SUPPORTED",
+                    "mechanism_learning": f"supported mechanism {index}",
+                    "evidence_refs": [f"exp-{index}"],
+                },
+            )
+        ctx = m.context()
+        self.assertLessEqual(len(ctx["supported_mechanisms"]), 3)
+        self.assertLessEqual(len(ctx["contradicted_mechanisms"]), 3)
+        self.assertLessEqual(len(ctx["unresolved_questions"]), 5)
+        self.assertLessEqual(len(ctx["next_discriminating_questions"]), 5)
+
     def test_context_contains_short_term_and_garbage(self):
         m = ExperienceMemory(state_dir=self._tmp)
         m.updated_round = 3

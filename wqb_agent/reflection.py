@@ -25,6 +25,17 @@ from .failures import (
     is_research_relevant,
 )
 from .metrics import check_pass, checks_passed, normalized_metrics, score_of
+from .research_guard import (
+    is_direction_only_change,
+    overfit_expression_reason,
+    parameter_only_change_reason,
+)
+
+HYPOTHESIS_OUTCOMES = frozenset({"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"})
+_LEARNING_METADATA_KEYS = (
+    "unresolved_question", "competing_explanations",
+    "next_discriminating_question", "evidence_needed",
+)
 
 # Failed-check names from BRAIN payloads -> diagnosis category.
 CHECK_DIAGNOSIS = [
@@ -74,15 +85,21 @@ class Reflector:
         old_best_id = (self.memory.current_best or {}).get("id")
         best = self._update_best(results, validation_candidates=validation_candidates)
         self._update_lineages(round_no, results)
+        hypothesis_outcome = self._mark_hypothesis_outcome(hypothesis, results)
+        self._record_mechanism_learning(
+            round_no, hypothesis, results, hypothesis_outcome
+        )
         self._generate_next(round_no, hypothesis, results)
-        self._mark_hypothesis_outcome(hypothesis, results)
         self._recap(round_no, hypothesis, results, best, old_best_id)
         self.memory.expire_short_term(now_round=round_no)
         self.memory.updated_round = round_no
         self.memory.compress()
         self.memory.save()
 
-        return self._summary(round_no, hypothesis, results, best)
+        return self._summary(
+            round_no, hypothesis, results, best,
+            hypothesis_outcome=hypothesis_outcome,
+        )
 
     # ----------------------------------------------------------- classify
 
@@ -356,24 +373,6 @@ class Reflector:
                     "lineage": exp.hypothesis_id,
                 },
             )
-            if verdict["label"] == "SUSPICIOUS_HIGH_SIGNAL":
-                self.memory.add_next(
-                    f"Validate suspicious high signal with one window perturbation and one field swap: {exp.expression}",
-                    priority=6,
-                    source=round_no,
-                    round_no=round_no,
-                    fields=fields,
-                    datasets=exp.datasets,
-                )
-            elif verdict["label"] == "PROMISING":
-                self.memory.add_next(
-                    f"Test one alternative explanation for [{field_label}] (not a parameter sweep).",
-                    priority=4,
-                    source=round_no,
-                    round_no=round_no,
-                    fields=fields,
-                    datasets=exp.datasets,
-                )
         else:
             self.memory.add_avoid(
                 self._direction_key(exp),
@@ -469,75 +468,221 @@ class Reflector:
                 )
 
     def _generate_next(self, round_no, hypothesis, results):
-        # A one-off pass is observation-only, so it cannot schedule an
-        # automatic deepening branch. Promotion needs independent evidence.
-        successes = []
-        promising = [r for r in results if r["verdict"]["label"] == "PROMISING"]
-        failed_all = all(r["verdict"]["label"] == "FAIL" for r in results)
+        """Persist only an Agent-authored, discriminating next experiment."""
+        candidate = hypothesis.get("next_experiment")
+        if not isinstance(candidate, dict):
+            return
+        required = (
+            "change_reason", "unresolved_question",
+            "next_discriminating_question",
+        )
+        if not all(
+            isinstance(candidate.get(key), str) and candidate[key].strip()
+            for key in required
+        ):
+            return
+        competing = candidate.get("competing_explanations")
+        evidence_needed = candidate.get("evidence_needed")
+        if (
+            not isinstance(competing, list)
+            or len(competing) < 2
+            or not all(isinstance(item, str) and item.strip() for item in competing)
+            or not isinstance(evidence_needed, list)
+            or not evidence_needed
+            or not all(isinstance(item, str) and item.strip() for item in evidence_needed)
+        ):
+            return
 
-        if successes:
-            for r in successes[:2]:
-                exp = r["experiment"]
-                self.memory.add_next(
-                    f"Deepen successful expression: {exp.expression}",
-                    priority=5,
-                    source=round_no,
-                    round_no=round_no,
-                    fields=exp.fields_used,
-                    datasets=exp.datasets,
-                )
-        if promising:
-            for r in promising[:2]:
-                exp = r["experiment"]
-                self.memory.add_next(
-                    f"Improve promising expression: {exp.expression} "
-                    f"(fixing {r['verdict'].get('diagnosis')})",
-                    priority=4,
-                    source=round_no,
-                    round_no=round_no,
-                    fields=exp.fields_used,
-                    datasets=exp.datasets,
-                )
-        if failed_all:
-            # UNKNOWN experiments exist -> not a clean all-fail round.
-            if any(r["experiment"].status == "UNKNOWN" for r in results):
+        source = next(
+            (result["experiment"] for result in results if result["experiment"].fields_used),
+            results[0]["experiment"] if results else None,
+        )
+        if source is None:
+            return
+        parent_expression = candidate.get("parent_expression") or source.expression
+        candidate_expression = candidate.get("expression")
+        if isinstance(candidate_expression, str) and candidate_expression.strip():
+            if parameter_only_change_reason(parent_expression, candidate_expression):
                 return
-            # 系统级失败（auth/rate-limit/timeout/infra）不证明方向失败，
-            # 只有全部是研究级失败才触发方向切换。
-            research_fails = [
-                r for r in results
-                if classify_experiment(r["experiment"]) is None
-                or is_research_relevant(classify_experiment(r["experiment"]))
-            ]
-            if len(research_fails) != len(results):
+            if is_direction_only_change(parent_expression, candidate_expression):
                 return
-            tags = hypothesis.get("tags", [])
-            # No fields/datasets on purpose: a "switch direction" idea must
-            # not be picked as an actionable field-bearing next idea.
-            self.memory.add_next(
-                f"Switch research direction away from tags {tags}",
-                priority=3,
-                source=round_no,
-                round_no=round_no,
+            if overfit_expression_reason(candidate_expression):
+                return
+
+        fields = candidate.get("fields") or source.fields_used
+        datasets = candidate.get("datasets") or source.datasets
+        metadata = {
+            "parent_hypothesis": hypothesis.get("id"),
+            "parent_expression": parent_expression,
+            "change_reason": candidate["change_reason"],
+            "unresolved_question": candidate["unresolved_question"],
+            "competing_explanations": list(competing),
+            "next_discriminating_question": candidate["next_discriminating_question"],
+            "evidence_needed": list(evidence_needed),
+            "change_type": candidate.get("change_type"),
+            "candidate_expression": candidate_expression,
+        }
+        self.memory.add_next(
+            candidate.get("idea") or candidate["next_discriminating_question"],
+            priority=candidate.get("priority", 4),
+            source=round_no,
+            round_no=round_no,
+            fields=fields,
+            datasets=datasets,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _interpretation(hypothesis):
+        value = hypothesis.get("agent_interpretation")
+        if not isinstance(value, dict):
+            return None
+        outcome = str(value.get("outcome") or "").upper()
+        learning = value.get("mechanism_learning")
+        refs = value.get("evidence_refs")
+        if (
+            outcome not in HYPOTHESIS_OUTCOMES
+            or not isinstance(learning, str)
+            or not learning.strip()
+            or not isinstance(refs, list)
+            or not refs
+            or not all(isinstance(ref, (str, int)) and str(ref).strip() for ref in refs)
+        ):
+            return None
+        normalized = dict(value)
+        normalized["outcome"] = outcome
+        normalized["evidence_refs"] = [str(ref) for ref in refs]
+        for key in _LEARNING_METADATA_KEYS:
+            if key not in normalized:
+                continue
+            expected = list if key in {"competing_explanations", "evidence_needed"} else str
+            if expected is list:
+                if (
+                    not isinstance(normalized[key], list)
+                    or not all(isinstance(item, str) and item.strip() for item in normalized[key])
+                ):
+                    return None
+            elif not isinstance(normalized[key], str) or not normalized[key].strip():
+                return None
+        return normalized
+
+    def _metrics_view(self, exp):
+        metrics = exp.metrics or {}
+        cached = (self.evidence_cache or {}).get(getattr(exp, "alpha_id", None))
+        if cached:
+            metrics = overlay_cached_checks(
+                metrics, cached, self.self_correlation_limit
             )
+        return normalized_metrics(metrics)
+
+    def _evidence_complete(self, result):
+        exp = result["experiment"]
+        label = result["verdict"]["label"]
+        if exp.status != "DONE" or label == "RECONCILE":
+            return False
+        if label == "SUSPICIOUS_HIGH_SIGNAL":
+            report = getattr(exp, "validation_report", None)
+            if (
+                getattr(exp, "validation_status", None) != "STABLE"
+                or not isinstance(report, dict)
+                or report.get("status") != "PASS"
+            ):
+                return False
+        metrics = self._metrics_view(exp)
+        required = ("sharpe", "fitness", "turnover", "returns", "drawdown", "margin")
+        if any(metrics.get(key) is None for key in required):
+            return False
+        if checks_passed(metrics) is not True:
+            return False
+        health = getattr(exp, "health", None)
+        if isinstance(health, dict):
+            reasons = [str(reason).lower() for reason in health.get("reasons") or []]
+            if health.get("ok") is False or any(
+                "concentrated_weight" in reason
+                or "longcount=" in reason
+                or "shortcount=" in reason
+                for reason in reasons
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _references_results(interpretation, results):
+        refs = set(interpretation["evidence_refs"])
+        for result in results:
+            exp = result["experiment"]
+            identifiers = {
+                str(value)
+                for value in (exp.id, exp.alpha_id, exp.proposal_id)
+                if value is not None and str(value).strip()
+            }
+            if not identifiers or not identifiers.intersection(refs):
+                return False
+        return True
 
     def _mark_hypothesis_outcome(self, hypothesis, results):
         hyp_id = hypothesis.get("id")
         if not hyp_id:
-            return
-        if (any(r["experiment"].status == "UNKNOWN" for r in results)
-                or any(r["verdict"]["label"] == "RECONCILE" for r in results)):
-            # 有不确定结果：保持 active，先对账再定论。
-            self.memory.mark_hypothesis(hyp_id, "active", hypothesis.get("_round", 0))
-            return
+            return "INCONCLUSIVE"
         labels = [r["verdict"]["label"] for r in results]
-        if "SUCCESS" in labels:
-            verdict = "success"
+        unresolved = any(
+            result["experiment"].status in {"UNKNOWN", "SUBMIT_UNKNOWN", "PENDING", "RUNNING", "SUBMITTING"}
+            or result["verdict"]["label"] == "RECONCILE"
+            for result in results
+        )
+        if unresolved:
+            legacy_verdict = "active"
+        elif "SUCCESS" in labels:
+            legacy_verdict = "success"
         elif "PROMISING" in labels:
-            verdict = "promising"
+            legacy_verdict = "promising"
         else:
-            verdict = "failed"
-        self.memory.mark_hypothesis(hyp_id, verdict, hypothesis.get("_round", 0))
+            legacy_verdict = "failed"
+
+        outcome = "INCONCLUSIVE"
+        interpretation = self._interpretation(hypothesis)
+        complete = bool(results) and all(self._evidence_complete(item) for item in results)
+        testable = isinstance(hypothesis.get("statement"), str) and bool(hypothesis["statement"].strip())
+        if complete and testable and interpretation and self._references_results(interpretation, results):
+            requested = interpretation["outcome"]
+            if requested == "SUPPORTED" and all(
+                item["verdict"]["label"] in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}
+                for item in results
+            ):
+                outcome = "SUPPORTED"
+            elif requested == "CONTRADICTED" and any(
+                item["verdict"]["label"] in {"FAIL", "PROMISING"}
+                for item in results
+            ) and isinstance(hypothesis.get("falsification"), str) and hypothesis["falsification"].strip():
+                outcome = "CONTRADICTED"
+        self.memory.mark_hypothesis(
+            hyp_id, legacy_verdict, hypothesis.get("_round", 0), outcome=outcome
+        )
+        return outcome
+
+    def _record_mechanism_learning(self, round_no, hypothesis, results, outcome):
+        interpretation = self._interpretation(hypothesis)
+        if outcome not in {"SUPPORTED", "CONTRADICTED"} or not interpretation:
+            return
+        if not all(self._evidence_complete(item) for item in results):
+            return
+        if not self._references_results(interpretation, results):
+            return
+        for result in results:
+            source = result["experiment"]
+            detail = {
+                "hypothesis_outcome": outcome,
+                "mechanism_learning": interpretation["mechanism_learning"],
+                "evidence_refs": interpretation["evidence_refs"],
+                "lineage": getattr(source, "lineage_id", None) or source.hypothesis_id,
+            }
+            for key in _LEARNING_METADATA_KEYS:
+                if key in interpretation:
+                    detail[key] = interpretation[key]
+            self.memory.add_short_term(
+                "observation", interpretation["mechanism_learning"], round_no,
+                evidence=1, detail=detail,
+            )
 
     # ------------------------------------------------------------ recap
 
@@ -574,13 +719,15 @@ class Reflector:
 
     # ------------------------------------------------------------ summary
 
-    def _summary(self, round_no, hypothesis, results, best):
+    def _summary(self, round_no, hypothesis, results, best,
+                 hypothesis_outcome=None):
         labels = {}
         for r in results:
             labels[r["verdict"]["label"]] = labels.get(r["verdict"]["label"], 0) + 1
         return {
             "round": round_no,
             "hypothesis": hypothesis.get("statement", ""),
+            "hypothesis_outcome": hypothesis_outcome or "INCONCLUSIVE",
             "experiment_count": len(results),
             "verdicts": labels,
             "best": (

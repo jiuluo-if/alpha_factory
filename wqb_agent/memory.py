@@ -302,6 +302,7 @@ class ExperienceMemory:
                     entry["lineages"] = sorted(
                         set(entry.get("lineages") or []) | {lineage}
                     )
+                self._merge_learning_metadata(entry, detail)
                 return entry
         entry = {
             "id": uuid.uuid4().hex[:8],
@@ -315,8 +316,23 @@ class ExperienceMemory:
             "created": time.time(),
             "updated": time.time(),
         }
+        self._merge_learning_metadata(entry, detail)
         self.short_term.append(entry)
         return entry
+
+    @staticmethod
+    def _merge_learning_metadata(entry, detail):
+        """Copy the small structured learning projection to its owner row."""
+        if not isinstance(detail, dict):
+            return
+        for key in (
+            "hypothesis_outcome", "mechanism_learning", "unresolved_question",
+            "competing_explanations", "next_discriminating_question",
+            "evidence_needed", "evidence_refs", "parent_hypothesis",
+            "parent_expression", "change_reason",
+        ):
+            if key in detail:
+                entry[key] = detail[key]
 
     def recent_short_term(self, n=5):
         ordered = sorted(
@@ -374,7 +390,17 @@ class ExperienceMemory:
         evidence = entry.get("evidence", 1) * min(entry.get("hits", 1), 3)
         confidence = min(0.6, 0.2 + 0.1 * entry.get("hits", 0))
         return self.add_lesson(
-            entry["text"], now_round, evidence=evidence, confidence=confidence
+            entry["text"], now_round, evidence=evidence, confidence=confidence,
+            metadata={
+                key: entry[key]
+                for key in (
+                    "hypothesis_outcome", "mechanism_learning", "unresolved_question",
+                    "competing_explanations", "next_discriminating_question",
+                    "evidence_needed", "evidence_refs", "parent_hypothesis",
+                    "parent_expression", "change_reason",
+                )
+                if key in entry
+            },
         )
 
     def _expire_note(self, entry):
@@ -487,7 +513,8 @@ class ExperienceMemory:
 
     # ------------------------------------------------------------- lessons
 
-    def add_lesson(self, claim, source_round, evidence, confidence=0.5):
+    def add_lesson(self, claim, source_round, evidence, confidence=0.5,
+                   metadata=None):
         for lesson in self.lessons:
             if self._similar(lesson["claim"], claim, threshold=0.8):
                 lesson["source_round"] = source_round
@@ -495,6 +522,8 @@ class ExperienceMemory:
                 lesson["confidence"] = min(1.0, lesson.get("confidence", 0.5) + 0.15)
                 lesson["last_used"] = time.time()
                 lesson["updated"] = time.time()
+                if isinstance(metadata, dict) and metadata:
+                    lesson["metadata"] = dict(metadata)
                 return lesson
         entry = {
             "id": uuid.uuid4().hex[:8],
@@ -506,6 +535,8 @@ class ExperienceMemory:
             "updated": time.time(),
             "last_used": time.time(),
         }
+        if isinstance(metadata, dict) and metadata:
+            entry["metadata"] = dict(metadata)
         self.lessons.append(entry)
         return entry
 
@@ -562,7 +593,8 @@ class ExperienceMemory:
 
     # ---------------------------------------------------------------- next
 
-    def add_next(self, idea, priority, source, round_no, fields=None, datasets=None):
+    def add_next(self, idea, priority, source, round_no, fields=None, datasets=None,
+                 metadata=None):
         """Register a next experiment idea. fields/datasets make the idea
         directly actionable: the next round fetches these fields first."""
         for item in self.next:
@@ -575,6 +607,7 @@ class ExperienceMemory:
                     item["datasets"] = sorted(
                         set(item.get("datasets") or []) | set(datasets)
                     )
+                self._merge_next_metadata(item, metadata)
                 return item
         entry = {
             "id": uuid.uuid4().hex[:8],
@@ -588,8 +621,22 @@ class ExperienceMemory:
             entry["fields"] = sorted(set(fields))
         if datasets:
             entry["datasets"] = sorted(set(datasets))
+        self._merge_next_metadata(entry, metadata)
         self.next.append(entry)
         return entry
+
+    @staticmethod
+    def _merge_next_metadata(entry, metadata):
+        if not isinstance(metadata, dict):
+            return
+        for key in (
+            "parent_hypothesis", "parent_expression", "change_reason",
+            "unresolved_question", "competing_explanations",
+            "next_discriminating_question", "evidence_needed", "change_type",
+            "candidate_expression",
+        ):
+            if key in metadata:
+                entry[key] = metadata[key]
 
     def top_next(self, n=5):
         ordered = sorted(self.next, key=lambda x: -self._number(x.get("priority")))
@@ -675,18 +722,21 @@ class ExperienceMemory:
             "direction": hypothesis.get("direction"),
             "datasets": list(hypothesis.get("datasets") or hypothesis.get("dataset_hints") or []),
             "status": "active",
+            "outcome": "INCONCLUSIVE",
             "last_round": hypothesis.get("_round"),
             "last_verdict": None,
         }
         self.active_hypotheses.append(entry)
         return entry
 
-    def mark_hypothesis(self, hyp_id, verdict, round_no):
-        """verdict: 'success' | 'promising' | 'failed'"""
+    def mark_hypothesis(self, hyp_id, verdict, round_no, outcome=None):
+        """Keep legacy execution status and a separate research outcome."""
         for entry in self.active_hypotheses:
             if entry["id"] == hyp_id:
                 entry["status"] = verdict
                 entry["last_verdict"] = verdict
+                if outcome in {"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"}:
+                    entry["outcome"] = outcome
                 entry["last_round"] = round_no
                 return entry
         return None
@@ -766,10 +816,11 @@ class ExperienceMemory:
         avoid = sorted(self.avoid, key=lambda x: -x.get("updated", 0))[: self.max_avoid]
         next_ideas = self.top_next(self.max_next)
         garbage = self.garbage[-garbage_n:] if self.garbage else []
+        supported, contradicted, unresolved, discriminating = self._learning_context()
         return {
             "current_best": self.current_best,
             "active_hypotheses": [
-                {k: e[k] for k in ("id", "statement", "status", "last_round", "last_verdict") if k in e}
+                {k: e[k] for k in ("id", "statement", "status", "outcome", "last_round", "last_verdict") if k in e}
                 for e in self.active_hypotheses
             ][: self.max_hypotheses],
             "recent_key_experiments": recent_experiments or [],
@@ -781,7 +832,44 @@ class ExperienceMemory:
             "lessons": lessons,
             "avoid": avoid,
             "next": next_ideas,
+            "supported_mechanisms": supported,
+            "contradicted_mechanisms": contradicted,
+            "unresolved_questions": unresolved,
+            "next_discriminating_questions": discriminating,
         }
+
+    def _learning_context(self):
+        """Project bounded mechanism learning without copying raw evidence."""
+        rows = []
+        for item in self.lessons + self.short_term:
+            metadata = item.get("metadata") if isinstance(item, dict) else None
+            if not isinstance(metadata, dict):
+                metadata = item if isinstance(item, dict) else {}
+            learning = metadata.get("mechanism_learning")
+            outcome = metadata.get("hypothesis_outcome")
+            if not isinstance(learning, str) or not learning.strip():
+                continue
+            rows.append({
+                "learning": learning,
+                "outcome": outcome,
+                "evidence_refs": list(metadata.get("evidence_refs") or []),
+                "round": item.get("source_round", item.get("round")),
+            })
+        supported = [row for row in rows if row.get("outcome") == "SUPPORTED"][:3]
+        contradicted = [row for row in rows if row.get("outcome") == "CONTRADICTED"][:3]
+
+        unresolved = []
+        discriminating = []
+        for item in self.lessons + self.short_term + self.next:
+            if not isinstance(item, dict):
+                continue
+            question = item.get("unresolved_question")
+            if isinstance(question, str) and question.strip() and question not in unresolved:
+                unresolved.append(question)
+            question = item.get("next_discriminating_question")
+            if isinstance(question, str) and question.strip() and question not in discriminating:
+                discriminating.append(question)
+        return supported, contradicted, unresolved[:5], discriminating[:5]
 
     # ----------------------------------------------------------- compress
 

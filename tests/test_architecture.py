@@ -146,7 +146,7 @@ class TestArchitectureBoundaries(unittest.TestCase):
                 self.assertIn("wqb_agent.metrics", source)
 
     def test_only_transport_modules_can_submit_simulations(self):
-        allowed = {"client.py", "simulator.py", "agent.py"}
+        allowed = {"client.py", "simulator.py"}
         for filename in os.listdir(PACKAGE_ROOT):
             if not filename.endswith(".py") or filename in allowed:
                 continue
@@ -154,6 +154,50 @@ class TestArchitectureBoundaries(unittest.TestCase):
                 source = handle.read()
             self.assertNotIn("submit_simulation(", source,
                              f"{filename} 创建了第二条 Simulation POST 路径")
+
+    def test_production_simulation_calls_stay_on_canonical_owner_chain(self):
+        simulator = Path(PACKAGE_ROOT, "simulator.py").read_text(encoding="utf-8")
+        self.assertIn("self.client.submit_simulation(", simulator)
+        for filename in os.listdir(PACKAGE_ROOT):
+            if not filename.endswith(".py") or filename in {"client.py", "simulator.py"}:
+                continue
+            source = Path(PACKAGE_ROOT, filename).read_text(encoding="utf-8")
+            self.assertNotIn("submit_simulation(", source, filename)
+        for path in [Path(ROOT, "main.py"), *Path(ROOT, "scripts").glob("*.py")]:
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn(".run_simulation(", source, str(path))
+
+    def test_workflows_do_not_reverse_import_agent(self):
+        for module_name in (
+            "suggestion_workflow", "proposal_execution", "alpha_feed_workflow",
+            "optimizer_workflow", "alpha_color_workflow",
+        ):
+            imports = _direct_imports(module_name)
+            self.assertNotIn(".agent", imports, module_name)
+            self.assertNotIn("wqb_agent.agent", imports, module_name)
+
+    def test_non_execution_surfaces_have_no_simulation_write_path(self):
+        for filename in (
+            "suggestion_workflow.py", "alpha_feed_workflow.py",
+            "optimizer_workflow.py", "alpha_color_workflow.py",
+            "research_api.py", "doctor.py", "audit.py", "preflight.py",
+        ):
+            path = Path(PACKAGE_ROOT, filename)
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("submit_simulation(", source, filename)
+            self.assertNotIn("submit_alpha(", source, filename)
+        optimizer = Path(PACKAGE_ROOT, "optimizer_workflow.py").read_text(encoding="utf-8")
+        for forbidden in (
+            "trajectory.add(", "trajectory.write(", "weekly_cache.refresh(",
+            "get_all_user_alphas(", "set_alpha_color(",
+        ):
+            self.assertNotIn(forbidden, optimizer, forbidden)
+
+    def test_agent_run_remains_a_retired_safety_tombstone(self):
+        from wqb_agent.agent import Agent
+
+        with self.assertRaisesRegex(RuntimeError, "自动候选路径已退役"):
+            Agent.__new__(Agent).run()
 
     def test_no_production_alpha_submission_endpoint(self):
         for filename in os.listdir(PACKAGE_ROOT):

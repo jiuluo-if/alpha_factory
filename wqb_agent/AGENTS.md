@@ -2,6 +2,10 @@
 
 先读根 `AGENTS.md`、`docs/ARCHITECTURE_AGENT.md` 和 `research_api.py`。其他模块是 facade 所组合的现有运行时能力。
 
+## Architecture Freeze（2026-09-09）
+
+当前 package 边界已冻结：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。后续只因具体 feature/bug 或新的证据触碰边界，并同步测试、架构文档和完整质量门；不要新增 workflow/state/config abstraction 或继续拆 Agent 私有层。
+
 ## 职责
 
 - `client.py`、`discovery.py`、`simulator.py`、`state.py`、`proposal_contract.py` 是核心机制边界。

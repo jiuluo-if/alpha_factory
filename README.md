@@ -90,6 +90,20 @@ public attributes，以保持兼容 facade 和现有研究方法不变。`AlphaF
 `get_all_user_alphas`，维护 `America/New_York` 七个自然日的轻量元数据，不发送 Simulation
 POST、不 PATCH Alpha，也不写入指标或研究证据。
 
+## 架构冻结（2026-09-09）
+
+当前 owner、状态和远端写路径已经冻结：配置经 `parse_config/normalize_config` 进入 typed `AppConfig`，再经过 `AgentRuntimePolicy`、`RuntimeComponents` 和 `Agent` 组合四个 workflow；远端颜色写入由显式 `alpha sync-colors` 独占。生产研究闭环仍只有：
+
+```text
+python main.py suggest
+        ↓
+审阅 .wqb_state/proposals.json
+        ↓
+python main.py run-proposals
+```
+
+后续默认进入 feature、bug fixing 和 evidence-driven local maintenance，不再开展连续架构重构。完整对象图、owner/state/write matrix、冻结不变量和变更规则见 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)。
+
 ## 文档入口
 
 - [`AGENTS.md`](AGENTS.md)：coding/research agent 的最高优先级说明

@@ -2,6 +2,13 @@
 
 本仓库是面向 AI Agents 的 WorldQuant BRAIN Alpha 研究工具。仓库是研究仪器，不是研究员：Agent 做研究判断，Python 保证真实执行、证据、恢复和安全边界。
 
+## 架构冻结（2026-09-09）
+
+- 当前稳定对象图是 `raw config → parse_config/normalize_config → typed AppConfig → AgentRuntimePolicy → RuntimeComponents → Agent → 四个 AgentWorkflows`，另有独立 `AlphaColorWorkflow` 显式写路径。
+- 当前唯一生产 Simulation 写链是 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`；`WQBClient.run_simulation()` 仅保留旧库兼容且无生产调用。
+- `Trajectory`、`TrialLedger`、`CheckpointStore`、`ExperienceMemory`、`DailyResearchCache`、`WeeklyAlphaFeedCache` 各自只有一个 owner；`SUBMIT_UNKNOWN`、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、手工 Alpha submission 和 deterministic credentials 均为冻结 contract。
+- 后续仅接受具体 feature、bug fix 或有证据的局部维护。触碰冻结边界必须增加行为/回归测试、更新 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)、通过完整质量门并说明 owner 变化；不得新增 workflow/state model/config abstraction 或让编排重新堆回 Agent。
+
 ## 30 秒安全接管
 
 - 先读：`AGENTS.md` → `wqb_agent/research_api.py` → 当前任务目标 → 一个直接依赖和一个测试；不要递归扫描仓库。

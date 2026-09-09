@@ -130,3 +130,91 @@ Alpha 颜色有意分成两个边界：`alpha_colors.py` 是纯 evidence-derived
 不要默认阅读整个 package：先读 facade，再读目标模块、一个直接依赖、一个相关测试和一份必要的 policy。
 
 `factory_runner.py`、历史 phase 文档和 `docs/superpowers/**` 不属于默认认知模型。`.wqb_state/` 是 live research state，不能作为普通清理对象。
+
+## Architecture Freeze（2026-09-09）
+
+本节是当前稳定架构的冻结声明。连续架构优化在此阶段结束；后续工作进入 feature、bug fixing 和有证据的局部维护。除非出现已证明的 Critical 架构回归或安全 bug，不新增 workflow、state model、config abstraction，不重设计 API，也不继续拆 Agent 私有方法。
+
+### 最终对象图
+
+```text
+Raw config
+   ↓
+config.py: parse_config / normalize_config
+   ↓
+typed AppConfig
+   ↓
+AgentRuntimePolicy
+   ↓
+RuntimeComponents
+   ↓
+Agent（研究规划、兼容 facade、显式 hooks）
+   ├── SuggestionWorkflow
+   ├── ProposalExecutionWorkflow
+   │       ↓
+   │     Simulator
+   │       ↓
+   │     WQBClient
+   ├── AlphaFeedWorkflow
+   └── OptimizerWorkflow
+
+explicit CLI: alpha sync-colors
+   ↓
+AlphaColorWorkflow
+   ↓
+WQBClient.set_alpha_color(..., verify=True)
+```
+
+`RuntimeComponents` 只构造并持有基础领域对象；`runtime_composition.py` 只连接既有对象和窄 hooks 并构造四个 workflow。五个 workflow 都不得反向导入 `Agent`。`WQBClient.run_simulation()` 是保留给旧库调用者的兼容 helper；当前生产源码无调用者，不能作为生产研究入口，生产入口仍只有 `Agent.run_proposals()`。
+
+### Owner matrix
+
+| Concern | Owner | Allowed dependencies / boundary |
+|---|---|---|
+| External config parsing | `config.py` | 唯一读取 raw `simulation` / `agent` keys 的边界 |
+| Runtime config projection | `runtime_policy.py` | 从 typed `AppConfig` 生成 `AgentRuntimePolicy` |
+| Base runtime objects | `runtime_components.py` | `SearchPolicy`、`ExperienceMemory`、`Trajectory`、`TrialLedger`、`CandidateBuilder`、`FieldDiscovery`、`Simulator`、`Reflector`、`CheckpointStore`、`SubmissionPool` |
+| Suggestion/discovery orchestration | `SuggestionWorkflow` | discovery、context、research-space、suggestion bundle；无 Simulation/checkpoint/远端写入 |
+| Proposal execution/recovery | `ProposalExecutionWorkflow` | preflight、预算、checkpoint、恢复、终态结算；经 `Simulator` 执行 |
+| Alpha metadata read sync | `AlphaFeedWorkflow` | `GET /users/self/alphas`、纽约七日窗口、dedupe、bucket、cache refresh |
+| Optimization candidate orchestration | `OptimizerWorkflow` | 既有 evidence、代码初筛、Agent-authored child hypothesis、CHILD proposal |
+| Remote color sync | `AlphaColorWorkflow` | 仅显式 CLI control/write，ownership fail-closed、dry-run、verified PATCH |
+| Simulation transport | `Simulator` → `WQBClient` | 唯一生产 `submit_simulation` owner chain |
+| Credentials discovery | `credentials.py` | deterministic local-only source resolution |
+
+### State ownership matrix
+
+| State | Single owner | Contract |
+|---|---|---|
+| Trajectory | `Trajectory` | append-only research evidence and dedupe source |
+| Trial lifecycle | `TrialLedger` | canonical lifecycle phase projection |
+| Checkpoint | `CheckpointStore` | exactly-once recovery boundary |
+| Memory | `ExperienceMemory` | lessons, hypotheses and bounded research memory |
+| Weekly Alpha metadata | `WeeklyAlphaFeedCache` | only lightweight ID/status/time metadata, New York seven-day window |
+| Daily process view | `DailyResearchCache` | in-process view; not remote ownership or evidence |
+
+Runtime identity is tested: Agent, ProposalExecutionWorkflow and OptimizerWorkflow share the same trajectory; Agent and AlphaFeedWorkflow share the daily/weekly caches; RuntimeComponents creates one Simulator, CheckpointStore and TrialLedger instance.
+
+### Remote write matrix
+
+| Operation | Module chain | Explicit user action | Verification / safety |
+|---|---|---|---|
+| Simulation POST | `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient.submit_simulation` | `python main.py run-proposals` after proposal review | preflight, checkpoint before POST, budget, idempotency and `SUBMIT_UNKNOWN` recovery |
+| Alpha color PATCH | `main.py alpha sync-colors` → `AlphaColorWorkflow` → `WQBClient.set_alpha_color` | explicit `alpha sync-colors` only | `verify=True`; dry-run has zero PATCH; unknown ownership returns `OWNERSHIP_CONFLICT` |
+| Production Alpha submission | none | manual platform action | no automated endpoint owner |
+| Legacy `WQBClient.run_simulation` | compatibility helper only | old library caller, not production CLI/factory | retained for compatibility; no production callers and no checkpoint bypass in the canonical flow |
+
+### Frozen safety invariants
+
+- `SUBMIT_UNKNOWN` never triggers an automatic resend; a known progress URL may only be polled read-only.
+- The same complete checkpoint is never redispatched; checkpoint persistence has one owner, `CheckpointStore`.
+- `SuggestionWorkflow` and `OptimizerWorkflow` cannot submit Simulation; Optimizer cannot invent `child_economic_hypothesis`, scan parameters, refresh Alpha Feed or write trajectory.
+- `AlphaFeedWorkflow` is read-only against BRAIN and only refreshes bounded lightweight caches; submitted and unsubmitted queries remain separate (`dateSubmitted` vs `dateCreated`).
+- `AlphaColorWorkflow` is the sole remote color write owner; dry-run performs GET only, and unknown ownership cannot overwrite a non-empty remote color.
+- `UNKNOWN` and `UNAVAILABLE` never become `PASS`; production Alpha submission remains manual.
+- Credentials resolve deterministically from complete explicit pair, environment pair, explicit absolute env file, or home credentials file; no cwd/parent/package search or source mixing.
+- Quality gates remain Python 3.11, the nine-module mypy frontier, selected Ruff rules, branch coverage `fail_under=76.0`, offline doctor and audit.
+
+### Change rules after freeze
+
+Any future change touching a frozen boundary must include: (1) an observable characterization or regression test, (2) an owner/dependency update here, (3) the full local/CI quality gates, and (4) an explicit explanation of the owner change. New orchestration must not accumulate back into `Agent`; structural changes require a concrete feature or bug justification rather than a continuous refactoring objective.

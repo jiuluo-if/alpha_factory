@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .metrics import num
 from .evidence_status import annotate_evidence
+from .metrics import num
 
 
 def _yearly_rows(payload):

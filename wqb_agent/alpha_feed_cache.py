@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
 import json
 import os
+from datetime import UTC, date, datetime, timedelta
 
 from .artifacts import atomic_write_json_if_changed
 from .daily_cache import NEW_YORK
-
 
 SCHEMA_VERSION = 1
 WEEKLY_SIMULATION_CAP = 7 * 1600
@@ -16,7 +15,7 @@ TEMP_RESOURCE_TTL_SEC = 7 * 24 * 60 * 60
 
 
 def _local_date(timestamp):
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone(
+    return datetime.fromtimestamp(timestamp, tz=UTC).astimezone(
         NEW_YORK
     ).date()
 
@@ -27,7 +26,7 @@ def _week_start(local_day):
 
 
 def _utc_iso(timestamp):
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace(
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat().replace(
         "+00:00", "Z"
     )
 
@@ -167,7 +166,7 @@ class WeeklyAlphaFeedCache:
         next_day = local_day + timedelta(days=1)
         expires_at = datetime.combine(
             next_day, datetime.min.time(), tzinfo=NEW_YORK
-        ).astimezone(timezone.utc).timestamp()
+        ).astimezone(UTC).timestamp()
         payload = {
             "schema_version": SCHEMA_VERSION,
             "timezone": "America/New_York",

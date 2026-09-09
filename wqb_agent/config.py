@@ -9,7 +9,6 @@ from dataclasses import dataclass, field, replace
 from .incremental_policy import IncrementalValuePolicy
 from .search_policy import validate_budget_hierarchy
 
-
 _MEMORY_DEFAULTS = {
     "max_lessons": 20,
     "max_avoid": 30,

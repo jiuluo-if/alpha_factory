@@ -19,7 +19,7 @@ import time
 from .artifacts import atomic_write_json_if_changed
 from .client import WQBError
 from .metrics import check_pass, checks_passed
-from .schema import EVIDENCE_CACHE_VERSION, CREATED_BY_VERSION
+from .schema import CREATED_BY_VERSION, EVIDENCE_CACHE_VERSION
 
 EVIDENCE_FILE = "evidence_cache.json"
 SELF_CORRELATION_LIMIT = 0.5

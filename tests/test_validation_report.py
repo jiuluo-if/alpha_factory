@@ -1,8 +1,8 @@
+import os
 import random
 import statistics
-import unittest
 import tempfile
-import os
+import unittest
 
 from wqb_agent.agent import Agent
 from wqb_agent.pnl import PnlAdapter

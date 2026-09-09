@@ -6,9 +6,8 @@ results, Alpha identifiers, and evidence must never enter this object.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
-
 
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -55,7 +54,7 @@ class WeeklySimulationQuota:
         return normalized
 
     def _local_now(self):
-        return datetime.fromtimestamp(self._clock(), tz=timezone.utc).astimezone(
+        return datetime.fromtimestamp(self._clock(), tz=UTC).astimezone(
             NEW_YORK
         )
 

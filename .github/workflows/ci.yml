@@ -16,12 +16,24 @@ jobs:
         run: python -m pip install ".[dev]"
       - name: Syntax layer
         run: python -m compileall -q wqb_agent scripts tests
+      - name: Type layer
+        run: >-
+          python -m mypy
+          wqb_agent/config.py
+          wqb_agent/runtime_policy.py
+          wqb_agent/runtime_components.py
+          wqb_agent/runtime_composition.py
+          wqb_agent/credentials.py
+          wqb_agent/suggestion_workflow.py
+          wqb_agent/alpha_feed_workflow.py
+          wqb_agent/optimizer_workflow.py
+          wqb_agent/alpha_color_workflow.py
       - name: Unit layer
         run: python -m unittest discover -s tests
       - name: Ruff
         run: python -m ruff check .
       - name: Coverage report
-        run: coverage run -m unittest discover -s tests && coverage report
+        run: coverage erase && coverage run --branch -m unittest discover -s tests && coverage report
       - name: Offline doctor
         run: python main.py --state-dir tests/fixtures state doctor
       - name: Offline state audit

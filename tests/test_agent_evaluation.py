@@ -7,10 +7,11 @@ import threading
 import time
 import unittest
 from unittest import mock
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wqb_agent.agent import (
-    Agent,
     SEED_HYPOTHESES,
+    Agent,
     validate_proposal,
     validate_vector_inputs,
 )
@@ -22,6 +23,7 @@ from wqb_agent.reflection import Reflector
 from wqb_agent.simulator import Simulator
 from wqb_agent.state import Experiment, Trajectory
 from wqb_agent.submission import SubmissionPool, self_correlation_evidence
+
 FAKE_FIELDS = {
     "pv1": [
         {"id": "close", "name": "Close price", "description": "daily close price of the stock"},
@@ -222,7 +224,7 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
         memory = ExperienceMemory(state_dir=self._tmp)
         reflector = Reflector(memory)
         exps = []
-        for i, expr in enumerate(
+        for _, expr in enumerate(
             ["rank(close)", "rank(ts_mean(returns, 5))", "rank(ts_rank(returns, 20))"]
         ):
             e = Experiment(1, "h", expr, {}, ["returns"])

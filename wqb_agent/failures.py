@@ -13,6 +13,7 @@
 
 import re
 
+
 # 失败类别
 class FailureKind:
     RESEARCH = "RESEARCH"        # 假设/方向/表达式错误，可学习

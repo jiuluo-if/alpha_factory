@@ -6,9 +6,9 @@ DO NOT USE FOR: treating heuristic policy as a BRAIN invariant.
 
 Pure search policy, diversity evidence, and bounded arm allocation."""
 
-from collections import Counter, defaultdict
 import math
 import re
+from collections import Counter, defaultdict
 
 from .evidence_status import annotate_evidence
 
@@ -39,7 +39,7 @@ def validate_budget_hierarchy(*, factory_max_simulations, search_max_simulations
         try:
             parsed[name] = int(value)
         except (TypeError, ValueError):
-            raise ValueError(f"{name} 必须是非负整数")
+            raise ValueError(f"{name} 必须是非负整数") from None
         if parsed[name] < 0:
             raise ValueError(f"{name} 必须是非负整数")
     if parsed["search_policy.max_simulations"] > parsed["factory.max_simulations"]:

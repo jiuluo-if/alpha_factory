@@ -11,50 +11,56 @@ import json
 import os
 import time
 
-from .artifacts import iter_jsonl_objects
-from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
-from .research_evidence import classify_research
-from .search_snapshot import SearchSnapshot
-from .evidence import overlay_cached_checks, refresh_self_correlation_cache
 from .alpha_colors import classify_alpha_color
+from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
+from .alpha_feed_workflow import AlphaFeedHooks, remote_local_date
+from .alpha_pool import build_pool_snapshot
+from .artifacts import iter_jsonl_objects
+from .behavior import extract_behavior_series
+from .config import normalize_config
+from .daily_cache import DailyResearchCache
+from .evidence import overlay_cached_checks, refresh_self_correlation_cache
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
+from .incremental_value import build_incremental_value
 from .metrics import (
     check_pass,
     checks_passed,
     checks_ready_for_self_correlation_refresh,
     num,
 )
+from .optimizer_workflow import OptimizerHooks
 from .proposal_contract import (
     SETTING_OVERRIDES,
     _operator_reference,
     validate_proposal,  # noqa: F401 - compatibility export for legacy callers/tests
     validate_vector_inputs,  # noqa: F401 - compatibility export for legacy callers/tests
 )
+from .proposal_execution import ProposalExecutionHooks
+from .research_evidence import ResearchEvidenceBundle, classify_research
+from .runtime_components import build_runtime_components
+from .runtime_composition import AgentWorkflowHooks, build_agent_workflows
+from .runtime_policy import build_agent_runtime_policy
+from .search_outcome import (
+    SearchOutcome,
+    extract_statistical_decision,
+    settle_search_outcome,
+)
+from .search_snapshot import SearchSnapshot
 from .state import (
     RECOVERABLE_STATUSES,  # noqa: F401 - compatibility export and architecture guard
     UNRESOLVED_STATUSES,
 )
-from .submission import latest_active_snapshot, self_correlation_evidence
-from .submission import submission_eligibility
-from .alpha_feed_workflow import AlphaFeedHooks, remote_local_date
-from .optimizer_workflow import OptimizerHooks
-from .runtime_components import build_runtime_components
-from .proposal_execution import ProposalExecutionHooks
+from .submission import (
+    latest_active_snapshot,
+    self_correlation_evidence,
+    submission_eligibility,
+)
 from .suggestion_workflow import SuggestionHooks
-from .runtime_composition import AgentWorkflowHooks, build_agent_workflows
-from .runtime_policy import build_agent_runtime_policy
-from .behavior import extract_behavior_series
-from .alpha_pool import build_pool_snapshot
-from .incremental_value import build_incremental_value
 from .validation_report import (
     build_validation_report,
     default_validation_plan,
 )
-from .config import normalize_config
-from .research_evidence import ResearchEvidenceBundle
-from .daily_cache import DailyResearchCache
-from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
 
 SEED_HYPOTHESES = [
     {
@@ -510,7 +516,7 @@ class Agent:
             try:
                 value = float(overrides["truncation"])
             except (TypeError, ValueError):
-                raise ValueError("truncation 必须是数值")
+                raise ValueError("truncation 必须是数值") from None
             if not 0.02 <= value <= 0.15:
                 raise ValueError("truncation 必须在 0.02 至 0.15 之间")
             merged["truncation"] = value
@@ -1070,7 +1076,7 @@ class Agent:
             corr_cap = 0.5
         eligible_records = []
         candidates = list(experiments)
-        for parent, report in getattr(self, "_validation_candidates", []) or []:
+        for parent, _report in getattr(self, "_validation_candidates", []) or []:
             if all(existing.id != parent.id for existing in candidates):
                 candidates.append(parent)
         for exp in candidates:

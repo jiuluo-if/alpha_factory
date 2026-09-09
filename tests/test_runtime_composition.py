@@ -21,7 +21,6 @@ from wqb_agent.runtime_components import (
 from wqb_agent.runtime_composition import AgentWorkflows, build_agent_workflows
 from wqb_agent.runtime_policy import AgentRuntimePolicy, build_agent_runtime_policy
 
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_ROOT = os.path.join(ROOT, "wqb_agent")
 

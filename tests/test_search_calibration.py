@@ -2,14 +2,23 @@ import os
 import tempfile
 import unittest
 
-from wqb_agent.search_policy import BudgetAllocator, SearchPolicy, validate_budget_hierarchy
-from wqb_agent.search_outcome import SearchOutcome, parent_relative_delta, reward_v1, staged_promotion
+from wqb_agent.evidence_status import evidence_status
 from wqb_agent.search_calibration import (
     SearchPolicyReplay,
     build_search_calibration,
     calibrate_replay,
 )
-from wqb_agent.evidence_status import evidence_status
+from wqb_agent.search_outcome import (
+    SearchOutcome,
+    parent_relative_delta,
+    reward_v1,
+    staged_promotion,
+)
+from wqb_agent.search_policy import (
+    BudgetAllocator,
+    SearchPolicy,
+    validate_budget_hierarchy,
+)
 from wqb_agent.search_snapshot import SearchSnapshot
 from wqb_agent.trial_ledger import TrialLedger
 
@@ -65,7 +74,7 @@ class TestSearchRecovery(unittest.TestCase):
 
 class TestSearchOutcome(unittest.TestCase):
     def test_raw_fitness_extremes_cannot_escape_reward_bounds(self):
-        for fitness in (-10**12, 10**12, float("inf"), float("nan")):
+        for _fitness in (-10**12, 10**12, float("inf"), float("nan")):
             reward = reward_v1(status="DONE", infrastructure_failure=False,
                                base_quality="PROMISING", robustness="",
                                parent_delta=None)

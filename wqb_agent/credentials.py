@@ -109,7 +109,9 @@ def resolve_credentials(
         source="WQB credentials in environment",
     )
     if pair is not None:
-        return CredentialSource(*pair, source="environment")
+        return CredentialSource(
+            username=pair[0], password=pair[1], source="environment"
+        )
 
     selected_env_file = (
         env_file_path
@@ -126,7 +128,11 @@ def resolve_credentials(
             username_env=username_env,
             password_env=password_env,
         )
-        return CredentialSource(*pair, source="explicit environment file")
+        return CredentialSource(
+            username=pair[0],
+            password=pair[1],
+            source="explicit environment file",
+        )
 
     selected_credentials_file = (
         DEFAULT_CREDENTIALS_FILE
@@ -135,5 +141,7 @@ def resolve_credentials(
     )
     if os.path.exists(selected_credentials_file):
         pair = _read_credentials_file(selected_credentials_file)
-        return CredentialSource(*pair, source="home credentials file")
+        return CredentialSource(
+            username=pair[0], password=pair[1], source="home credentials file"
+        )
     return None

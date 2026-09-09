@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .config import AppConfig
 
+
 def run_readonly_smoke(client, config: AppConfig):
     if not isinstance(config, AppConfig):
         raise TypeError("run_readonly_smoke 需要已 normalize 的 AppConfig")

@@ -21,12 +21,10 @@ import re
 import statistics
 import time
 
-from .metrics import checks_passed, num, score_of
 from .evidence_status import annotate_evidence
+from .metrics import checks_passed, num, score_of
 from .robustness import evaluate_robustness
-from .schema import (CREATED_BY_VERSION, VALIDATION_VERSION,
-                      VALIDATION_PLAN_VERSION)
-
+from .schema import CREATED_BY_VERSION, VALIDATION_PLAN_VERSION, VALIDATION_VERSION
 
 REQUIRED_VARIABLES = (
     "window_locality",

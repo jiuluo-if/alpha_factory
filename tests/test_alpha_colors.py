@@ -11,8 +11,8 @@ from wqb_agent.alpha_colors import (
     load_color_candidates,
     sync_alpha_colors,
 )
-from wqb_agent.state import Experiment
 from wqb_agent.client import WQBClient
+from wqb_agent.state import Experiment
 
 
 def _experiment(*, quality="SUCCESS", self_result=True, self_value=0.2,

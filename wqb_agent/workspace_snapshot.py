@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 import re
+from dataclasses import dataclass
 
 from .artifacts import iter_jsonl_objects
 from .checkpoints import CheckpointStore
 from .schema import TRAJECTORY_VERSION, TRIAL_LEDGER_VERSION, VALIDATION_VERSION
 from .state import Trajectory
 from .trial_ledger import LIFECYCLE_PHASE_INDEX, PHASES
-
 
 _CHECKPOINT_NAME = re.compile(r"round_\d+\.checkpoint\.json")
 _FIXED_ARTIFACT_NAMES = (

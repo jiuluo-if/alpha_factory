@@ -8,7 +8,6 @@ reuse deterministic string helpers.
 
 import re
 
-
 # Knowledge-backed windows only; this is a finite mutation vocabulary rather
 # than a parameter sweep.
 WINDOW_STEPS = [5, 10, 20, 60, 63, 84, 126, 252]

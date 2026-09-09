@@ -22,17 +22,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.client import (
     WQBAuthError,
+    WQBClient,
     WQBNotFoundError,
+    WQBQueryTooBroadError,
     WQBRateLimitError,
     WQBRejectedError,
-    WQBQueryTooBroadError,
     WQBSimulationError,
     WQBTimeoutError,
-    WQBClient,
 )
-from wqb_agent.failures import FailureKind, classify_experiment, classify_error
-from wqb_agent.state import Experiment, Trajectory
 from wqb_agent.discovery import FieldDiscovery
+from wqb_agent.failures import FailureKind, classify_error, classify_experiment
+from wqb_agent.state import Experiment, Trajectory
 
 
 class FakeResponse:

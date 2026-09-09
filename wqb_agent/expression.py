@@ -5,7 +5,6 @@ import json
 import re
 from dataclasses import dataclass
 
-
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 _OPERATOR_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _NON_FIELD_IDENTIFIERS = {

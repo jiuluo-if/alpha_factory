@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Callable
+from typing import Any
 
 from .artifacts import append_jsonl_if_unique, iter_jsonl_objects
 from .diversity import extract_fields, is_redundant
@@ -29,11 +30,11 @@ from .proposal_contract import (
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
 from .state import (
-    Experiment,
     RECOVERABLE_STATUSES,
-    ResearchState,
-    UNRESOLVED_STATUSES,
     UNKNOWN_STATUSES,
+    UNRESOLVED_STATUSES,
+    Experiment,
+    ResearchState,
 )
 
 

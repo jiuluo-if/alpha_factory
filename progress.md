@@ -132,3 +132,23 @@
 - fresh architecture review 发现 1 个 Important：抽离遗漏 `_last_round_skipped` 与 `memory.best_exhausted` 的 Agent-owned iteration state 更新；已增加显式 hooks、回归测试，并保留旧分支的更新顺序/语义。
 - 修复后 focused proposal execution 为 10 tests OK，Ruff 通过；新增直接 Workflow checkpoint recovery 与 Agent facade 等价性断言，确认 SUBMIT_UNKNOWN 无 URL 不产生 POST 且 checkpoint 仍未完成。
 - 阶段提交 `c79a3cd13bbf01d7000eb0557826266a125ad082` 已推送并与 `origin/main` 对齐；首个 TLS 重试失败后第二次推送成功。
+
+## 2026-09-09 渐进式工程质量门
+
+- 已读用户指定 pasted text，并确认本阶段目标是 static typing baseline、适度 Ruff、Coverage fail-under 和统一 CI；禁止业务大改。
+- 已重新读取 `origin/main`：`d49287436ad23978bf4ba4b250c16e95290a2ed95`；未跟踪质量门设计 spec 保留不动。
+- 已完成 fresh baseline：595 tests OK；`wqb_agent` statement 80.83%、branch 69.00%、branch-aware 77.54%。
+- 已完成 Ruff dry-run 与 typed frontier 初测，证据写入 `findings.md`，实施计划保存为 `docs/superpowers/plans/2026-09-09-quality-gates.md`。
+- 配置生效后的首次 coverage gate 为 `76.7% < fail-under=77.0`，根因是 source 模式纳入 0% 的 `wqb_agent/validation.py`；未排除模块或添加垃圾测试，已依据实际 configured baseline 将阈值改为 `76.0`，待重新复测。
+- 配置后执行 `python -m pip install ".[dev]"`，因当前镜像对隔离构建的 `setuptools` wheel 返回 HTTP 403；已记录并切换到单独安装/当前环境验证路径。
+- 读取 mypy 错误上下文的首个 PowerShell 命令发生变量插值 ParserError，已改为显式变量边界，未影响代码。
+- 最终清理的批量删除命令被策略拒绝，未删除任何文件；将使用逐个已核验路径。
+
+## 2026-09-09 渐进式工程质量门完成
+
+- 已完成 `pyproject.toml` 的 mypy/types-requests、Coverage source/branch/fail-under 和选定 Ruff 规则配置。
+- 已完成 9 个 typed frontier 的最小类型修复、Ruff import sorting/安全现代化和局部 B007/B904 修复；没有新增 coverage 垃圾测试。
+- 最终 fresh verification：`595 tests OK`、compileall 0、mypy 0、Ruff 0、configured coverage 76.7% > 76.0 且 report 0、fixture doctor/audit 0、context 0、diff check 0。
+- 代码审查无 Critical/Important；已确认 `SUBMIT_UNKNOWN`、Simulation path、credentials、Alpha Feed/Color、研究策略未变化。
+- 清理了本轮明确生成的 `coverage-baseline.json`、`coverage-current.json`、`.coverage`；未触碰 `.wqb_state`。默认真实 context 仍为 `BLOCKED`（round 11 checkpoint + 1 SUBMIT_UNKNOWN），按项目规则保持暂停。
+- 当前工作树保留质量门实现、文档/计划和 Ruff 机械 diff；未 commit、未 push，待用户明确授权。

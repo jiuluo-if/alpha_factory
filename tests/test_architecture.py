@@ -8,7 +8,6 @@ import unittest
 
 from wqb_agent.config import AppConfig
 
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_ROOT = os.path.join(ROOT, "wqb_agent")
 

@@ -28,7 +28,6 @@ from .research_guard import (
 )
 from .validation_report import validate_plan
 
-
 PROPOSAL_EXPERIMENT_QS = {
     "field_understanding": "字段含义及其信息含义（必须基于本轮 discovery）",
     "operator_mapping": "算子如何表达该经济机制",

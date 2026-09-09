@@ -11,11 +11,11 @@ import math
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from .artifacts import atomic_write_json_if_changed
-from .schema import FIELDS_CACHE_VERSION, CREATED_BY_VERSION
+from .schema import CREATED_BY_VERSION, FIELDS_CACHE_VERSION
 
 DATASET_CATEGORIES = {
     "analyst": ["analyst4"],
@@ -348,7 +348,7 @@ class FieldDiscovery:
         normalized = self._normalize_dataset_ids(dataset_ids)
         if not normalized:
             return None
-        local_day = datetime.now(timezone.utc).astimezone(
+        local_day = datetime.now(UTC).astimezone(
             ZoneInfo("America/New_York")
         ).strftime("%Y%m%d")
         directory = os.path.join(
@@ -358,7 +358,7 @@ class FieldDiscovery:
             os.makedirs(directory, exist_ok=True)
         except OSError:
             return None
-        fetched_at = datetime.now(timezone.utc).isoformat()
+        fetched_at = datetime.now(UTC).isoformat()
         manifest_datasets = {}
         for dataset_id in normalized:
             fields = self._cache.get(dataset_id, self._disk_cache.get(dataset_id, []))
@@ -619,7 +619,7 @@ class FieldDiscovery:
         ordered_datasets = sorted(
             dataset_ids,
             key=lambda dataset_id: hashlib.sha256(
-                f"{self.random_seed}|{round_no}|{dataset_id}".encode("utf-8")
+                f"{self.random_seed}|{round_no}|{dataset_id}".encode()
             ).hexdigest(),
         )
         available = [dataset_id for dataset_id in ordered_datasets

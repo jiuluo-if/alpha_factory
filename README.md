@@ -102,9 +102,16 @@ POST、不 PATCH Alpha，也不写入指标或研究证据。
 ## 测试
 
 ```powershell
-python -m unittest discover -s tests
 python -m compileall -q wqb_agent scripts tests
+python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
+python -m unittest discover -s tests
+python -m ruff check .
+coverage erase
+coverage run --branch -m unittest discover -s tests
+coverage report
 ```
+
+本地验证与 CI 使用同一质量门：Coverage 只统计 `wqb_agent` 并开启 branch coverage，初始 `fail_under=76.0`（依据 2026-09-09 配置生效后的 fresh baseline：statement `79.99%`、branch `68.31%`、branch-aware `76.74%`）；mypy 只检查九个 typed frontier 模块，Ruff 启用现有规则、import sorting、选定安全 UP 规则及 `B007/B904`。质量检查保持离线，不执行 live BRAIN、Simulation 或 Alpha submission。
 
 ## 颜色、Agent 优化与阶段配额
 

@@ -48,6 +48,13 @@
 代码修改后运行：
 
 ```powershell
-python -m unittest discover -s tests
 python -m compileall -q wqb_agent scripts tests
+python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
+python -m unittest discover -s tests
+python -m ruff check .
+coverage erase
+coverage run --branch -m unittest discover -s tests
+coverage report
 ```
+
+typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。Coverage 只统计 `wqb_agent` production package，安全关键模块不得通过 omit 排除。

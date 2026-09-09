@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
-
 
 DEFAULT_PROPOSALS_PATH = ".wqb_state/proposals.json"
 

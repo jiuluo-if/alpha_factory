@@ -2,8 +2,8 @@
 
 from collections import Counter, defaultdict
 
-from .search_policy import BudgetAllocator, structural_fingerprint
 from .schema import CREATED_BY_VERSION, SEARCH_SNAPSHOT_VERSION
+from .search_policy import BudgetAllocator, structural_fingerprint
 
 
 class SearchSnapshot(dict):

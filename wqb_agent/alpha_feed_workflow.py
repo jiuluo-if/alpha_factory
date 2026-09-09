@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
-from typing import Callable
+from datetime import UTC, date, datetime, timedelta
 
 from .client import WQBQueryTooBroadError
 from .daily_cache import NEW_YORK
@@ -20,7 +20,7 @@ def remote_local_date(value):
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(NEW_YORK).date().isoformat()
 
 
@@ -62,7 +62,7 @@ class AlphaFeedWorkflow:
         local_date = self._local_date_provider()
         current_day = date.fromisoformat(local_date)
         week_start = current_day - timedelta(days=6)
-        days = {}
+        days: dict[str, dict[str, list[dict[str, object]]]] = {}
 
         def fetch_window(status, field):
             start = datetime.combine(

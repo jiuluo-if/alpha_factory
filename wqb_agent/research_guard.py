@@ -5,8 +5,8 @@ already-resolved structural action that has repeated without material gain;
 the caller can still try a different change category or research family.
 """
 
-from collections import defaultdict
 import re
+from collections import defaultdict
 
 from .expression import canonical_expression
 from .metrics import score_of

@@ -5,29 +5,37 @@ Other modules are implementation details unless a task explicitly requires
 them.  Legacy exports below remain available for compatibility and tests.
 """
 
-from .diversity import deduplicate, extract_fields, is_redundant
-from .search_policy import BudgetAllocator, SearchPolicy
-from .search_snapshot import SearchSnapshot
-from .search_outcome import (
-    SearchOutcome, extract_statistical_decision, parent_relative_delta,
-    resolve_reward,
-    reward_v1, settle_search_outcome, staged_promotion,
-)
-from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
-from .robustness import RobustnessEvidence, evaluate_robustness, retention
-from .incremental_value import IncrementalValueEvidence, build_incremental_value, select_trusted_pool
-from .incremental_policy import IncrementalValuePolicy, incremental_gate
 from .alpha_pool import AlphaPoolSnapshot, build_pool_snapshot
 from .behavior import extract_behavior_series
 from .diagnostics import DiagnosticEvent
-from .research_evidence import ResearchEvidenceBundle, classify_research
-from .identity import candidate_identity
+from .diversity import deduplicate, extract_fields, is_redundant
 from .failures import (
     FailureKind,
     classify_error,
     classify_experiment,
     is_research_relevant,
 )
+from .identity import candidate_identity
+from .incremental_policy import IncrementalValuePolicy, incremental_gate
+from .incremental_value import (
+    IncrementalValueEvidence,
+    build_incremental_value,
+    select_trusted_pool,
+)
+from .research_evidence import ResearchEvidenceBundle, classify_research
+from .robustness import RobustnessEvidence, evaluate_robustness, retention
+from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
+from .search_outcome import (
+    SearchOutcome,
+    extract_statistical_decision,
+    parent_relative_delta,
+    resolve_reward,
+    reward_v1,
+    settle_search_outcome,
+    staged_promotion,
+)
+from .search_policy import BudgetAllocator, SearchPolicy
+from .search_snapshot import SearchSnapshot
 
 __all__ = [
     "Agent",

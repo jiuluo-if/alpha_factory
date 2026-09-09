@@ -13,15 +13,13 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wqb_agent.artifacts import atomic_write_json_if_changed, iter_jsonl_objects
 from wqb_agent.expression import canonical_expression
 from wqb_agent.metrics import num
-
 
 iter_jsonl = iter_jsonl_objects
 
@@ -295,7 +293,7 @@ def main():
         "generated_at": datetime.fromtimestamp(
             max((Path(path).stat().st_mtime for path in input_paths if Path(path).exists()),
                 default=0),
-            tz=timezone.utc,
+            tz=UTC,
         ).isoformat() if any(Path(path).exists() for path in input_paths) else "unknown",
         "integrity_checks": {
             "memory_traceability": {

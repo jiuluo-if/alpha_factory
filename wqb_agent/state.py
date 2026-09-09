@@ -9,11 +9,11 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass, field, fields as dataclass_fields
+from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 
 from .expression import canonical_expression
-from .schema import TRAJECTORY_VERSION, CREATED_BY_VERSION
-
+from .schema import CREATED_BY_VERSION, TRAJECTORY_VERSION
 
 ACTIVE_EXECUTION_STATUSES = frozenset({"PENDING", "RUNNING", "SUBMITTING"})
 UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})

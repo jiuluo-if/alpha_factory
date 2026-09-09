@@ -8,7 +8,6 @@ import time
 
 from .artifacts import atomic_write_json_if_changed
 
-
 _LOCK_HANDLES = {}
 
 

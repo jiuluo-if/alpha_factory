@@ -6,9 +6,8 @@ import unittest
 from dataclasses import replace
 from unittest import mock
 
-from wqb_agent.suggestion_workflow import SuggestionWorkflow
-
 from tests.test_agent_flow import BASE_CONFIG, make_agent
+from wqb_agent.suggestion_workflow import SuggestionWorkflow
 
 
 class TestSuggestionWorkflow(unittest.TestCase):

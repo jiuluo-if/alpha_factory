@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
 from .context import key_experiments
@@ -160,7 +161,7 @@ class SuggestionWorkflow:
         ]
         if not observed:
             return research_space
-        counts = {}
+        counts: dict[str, int] = {}
         for dataset in observed:
             counts[dataset] = counts.get(dataset, 0) + 1
         dominant, dominant_count = max(counts.items(), key=lambda item: item[1])

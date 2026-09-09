@@ -8,10 +8,11 @@ import time
 import unittest
 from dataclasses import is_dataclass
 from unittest import mock
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wqb_agent.agent import (
-    Agent,
     SEED_HYPOTHESES,
+    Agent,
     validate_proposal,
     validate_vector_inputs,
 )
@@ -23,6 +24,7 @@ from wqb_agent.reflection import Reflector
 from wqb_agent.simulator import Simulator
 from wqb_agent.state import Experiment, Trajectory
 from wqb_agent.submission import SubmissionPool, self_correlation_evidence
+
 FAKE_FIELDS = {
     "pv1": [
         {"id": "close", "name": "Close price", "description": "daily close price of the stock"},
@@ -203,7 +205,8 @@ class TestTrajectory(TmpStateMixin, unittest.TestCase):
     def test_datasets_dict_entries_normalized(self):
         """proposal datasets 允许 {"id":...} 字典形态；Experiment 入口必须
         归一化为字符串 id，保证 trajectory/ResearchState 聚合可哈希。"""
-        from wqb_agent.state import Experiment as Exp, dataset_ref
+        from wqb_agent.state import Experiment as Exp
+        from wqb_agent.state import dataset_ref
         exp = Exp(1, "h", "rank(x)", {}, ["x"],
                   datasets=[{"id": "pv1", "name": "Price Volume"},
                             "option8", {"name": "news18"}, None])

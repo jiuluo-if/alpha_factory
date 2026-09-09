@@ -11,11 +11,10 @@ experiment.  It does not submit work, read state, or interpret the complete
 ValidationReport schema.
 """
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from .state import UNKNOWN_STATUSES, UNRESOLVED_STATUSES
-
 
 REWARD_VERSION = "reward_v1"
 

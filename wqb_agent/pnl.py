@@ -11,8 +11,8 @@ import math
 import random
 import statistics
 
-from .metrics import num
 from .evidence_status import annotate_evidence
+from .metrics import num
 
 
 def _series(payload):
@@ -40,7 +40,7 @@ def _dated_series(payload):
                 payload = payload[key]
                 break
     result = {}
-    for index, row in enumerate(payload or ()):
+    for _, row in enumerate(payload or ()):
         if not isinstance(row, dict):
             continue
         date = row.get("date") or row.get("timestamp") or row.get("time")

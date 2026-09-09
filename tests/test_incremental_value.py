@@ -3,21 +3,30 @@ import os
 import tempfile
 import unittest
 
+from wqb_agent.alpha_pool import build_pool_snapshot
+from wqb_agent.behavior import extract_behavior_series
+from wqb_agent.incremental_policy import incremental_gate
 from wqb_agent.incremental_value import (
+    behavior_clusters,
     build_incremental_value,
     select_trusted_pool,
-    behavior_clusters,
 )
-from wqb_agent.alpha_pool import build_pool_snapshot
-from wqb_agent.incremental_policy import incremental_gate
-from wqb_agent.behavior import extract_behavior_series
 from wqb_agent.research_evidence import ResearchEvidenceBundle, classify_research
 from wqb_agent.robustness import evaluate_robustness, retention
-from wqb_agent.search_calibration import SearchPolicyReplay, reward_v2, build_search_calibration
-from wqb_agent.search_outcome import SearchOutcome, extract_statistical_decision, reward_v1, resolve_reward
+from wqb_agent.search_calibration import (
+    SearchPolicyReplay,
+    build_search_calibration,
+    reward_v2,
+)
+from wqb_agent.search_outcome import (
+    SearchOutcome,
+    extract_statistical_decision,
+    resolve_reward,
+    reward_v1,
+)
 from wqb_agent.search_policy import SearchPolicy
-from wqb_agent.submission import SubmissionPool, submission_eligibility
 from wqb_agent.state import Experiment
+from wqb_agent.submission import SubmissionPool, submission_eligibility
 from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.validation_report import build_validation_report, default_validation_plan
 from wqb_agent.yearly import build_yearly_evidence

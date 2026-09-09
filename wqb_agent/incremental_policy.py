@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 VALID_MODES = frozenset({"advisory", "required_when_available", "required"})
 
 
@@ -34,9 +33,9 @@ def incremental_gate(evidence, mode):
     decision = str(evidence.get("decision") or "INCONCLUSIVE").upper()
     reasons = []
     if availability != "AVAILABLE":
-        reasons.append("incremental_value:%s" % availability)
+        reasons.append(f"incremental_value:{availability}")
     elif decision != "PASS":
-        reasons.append("incremental_value:%s" % decision)
+        reasons.append(f"incremental_value:{decision}")
     if mode == "advisory":
         return {"eligible": True, "status": decision, "reasons": reasons, "mode": mode}
     if availability != "AVAILABLE":

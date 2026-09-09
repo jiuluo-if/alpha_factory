@@ -135,8 +135,15 @@ python main.py run-proposals
 修改代码后运行：
 
 ```powershell
-python -m unittest discover -s tests
 python -m compileall -q wqb_agent scripts tests
+python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
+python -m unittest discover -s tests
+python -m ruff check .
+coverage erase
+coverage run --branch -m unittest discover -s tests
+coverage report
 ```
+
+质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，以 2026-09-09 配置生效后的 fresh baseline（statement `79.99%`、branch `68.31%`、branch-aware `76.74%`）为依据设置初始 `fail_under=76.0`；阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
 
 提交或推送必须得到用户明确授权；获授权时 Git 邮箱必须为 `2966684515@qq.com`，提交信息必须以 `fix：` 或其他前缀加中文内容。

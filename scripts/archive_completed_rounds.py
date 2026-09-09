@@ -17,7 +17,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wqb_agent.locking import acquire_os_owner_lock, release_os_owner_lock
 
-
 SUMMARY_RE = re.compile(r"round_(\d+)\.json$")
 CHECKPOINT_RE = re.compile(r"round_(\d+)\.checkpoint\.json$")
 
@@ -115,7 +114,7 @@ def main(argv=None):
     try:
         ensure_archive_dir_safe(state_dir, archive_dir)
     except ValueError as exc:
-        raise SystemExit(str(exc))
+        raise SystemExit(str(exc)) from None
 
     # The metadata file can be stale after a crashed process.  The OS owner
     # lock is authoritative; hold it across planning and moves so the

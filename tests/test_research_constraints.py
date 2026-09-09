@@ -1,17 +1,16 @@
-import unittest
-import tempfile
 import os
+import tempfile
+import unittest
 
-from wqb_agent.metrics import checks_ready_for_self_correlation_refresh
+from scripts.refresh_self_correlation import _timestamp, select_alpha_ids
 from wqb_agent.alpha_factory import AlphaFactory
-from wqb_agent.proposal_contract import _operator_reference
-from wqb_agent.proposal_contract import validate_proposal
+from wqb_agent.metrics import checks_ready_for_self_correlation_refresh
+from wqb_agent.preflight import run_takeover_preflight
+from wqb_agent.proposal_contract import _operator_reference, validate_proposal
 from wqb_agent.research_guard import (
     is_direction_only_change,
     overfit_expression_reason,
 )
-from wqb_agent.preflight import run_takeover_preflight
-from scripts.refresh_self_correlation import _timestamp, select_alpha_ids
 
 
 class TestResearchConstraints(unittest.TestCase):

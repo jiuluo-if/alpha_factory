@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
+from typing import TypedDict
 
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 from .state import Experiment
@@ -19,6 +20,13 @@ class OptimizerHooks:
 
     ensure_loaded: Callable[[], None]
     terminal_expressions: Callable[[], set]
+
+
+class OptimizerGateReport(TypedDict):
+    parent_count: int
+    done_parent_count: int
+    ready_parent_count: int
+    blocked_reasons: dict[str, int]
 
 
 class OptimizerWorkflow:
@@ -117,7 +125,7 @@ class OptimizerWorkflow:
                 experiment.to_dict()
                 for experiment in self.trajectory.recent(128)
             ]
-        report = {
+        report: OptimizerGateReport = {
             "parent_count": 0,
             "done_parent_count": 0,
             "ready_parent_count": 0,

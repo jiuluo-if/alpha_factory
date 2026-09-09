@@ -4,8 +4,8 @@ PURPOSE: Compute conservative parent/child robustness retention evidence.
 READ WHEN: changing robustness diagnostics.
 DO NOT USE FOR: submitting experiments or inventing unavailable evidence."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 
 def _num(value):

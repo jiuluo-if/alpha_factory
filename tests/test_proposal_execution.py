@@ -8,8 +8,8 @@ import unittest
 from unittest.mock import Mock
 
 from wqb_agent.agent import Agent
-from wqb_agent.state import Experiment
 from wqb_agent.proposal_execution import ProposalExecutionWorkflow
+from wqb_agent.state import Experiment
 
 
 class CountingClient:

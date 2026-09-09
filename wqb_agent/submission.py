@@ -16,10 +16,9 @@ import re
 import time
 
 from .artifacts import atomic_write_json_if_changed
-from .metrics import check_pass
 from .incremental_policy import incremental_gate
+from .metrics import check_pass
 from .schema import CREATED_BY_VERSION, SUBMISSION_POOL_VERSION, migrate_artifact
-
 
 _SELF_CORRELATION = re.compile(r"self[-_ ]?correlation", re.I)
 
@@ -31,11 +30,11 @@ def submission_eligibility(*, platform_pass, health, validation, yearly,
     for name, value in (("platform", platform_pass), ("health", health),
                         ("validation", validation), ("yearly", yearly)):
         if value is not True:
-            reasons.append("%s:FAIL" % name)
+            reasons.append(f"{name}:FAIL")
     gate = incremental_gate(incremental, incremental_mode)
     reasons.extend(gate["reasons"])
     if not gate["eligible"]:
-        reasons.append("incremental_policy:%s" % incremental_mode)
+        reasons.append(f"incremental_policy:{incremental_mode}")
     normalized_mode = str(incremental_mode).lower()
     blocking = [reason for reason in reasons
                 if not (

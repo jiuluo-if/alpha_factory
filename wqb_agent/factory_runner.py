@@ -22,12 +22,12 @@ from contextlib import redirect_stdout
 
 from .artifacts import atomic_write_json_if_changed
 from .expression import canonical_expression
-from .schema import CREATED_BY_VERSION, CHECKPOINT_VERSION
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
     factory_batch_stats,
     validate_factory_batch,
 )
+from .schema import CHECKPOINT_VERSION, CREATED_BY_VERSION
 from .weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 

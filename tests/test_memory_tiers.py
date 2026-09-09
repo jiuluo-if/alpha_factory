@@ -14,9 +14,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from wqb_agent.context import _safe_text, write_context  # noqa: E402
 from wqb_agent.memory import ExperienceMemory  # noqa: E402
 from wqb_agent.reflection import Reflector  # noqa: E402
-from wqb_agent.context import _safe_text, write_context  # noqa: E402
 from wqb_agent.state import Experiment  # noqa: E402
 
 

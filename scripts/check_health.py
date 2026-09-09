@@ -17,7 +17,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.client import WQBClient
-from wqb_agent.metrics import check_health as evaluate_health, num
+from wqb_agent.metrics import check_health as evaluate_health
+from wqb_agent.metrics import num
+
 
 def check(alpha_id, verbose=False):
     c = WQBClient()

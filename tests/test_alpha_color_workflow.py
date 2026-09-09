@@ -1,13 +1,12 @@
 import ast
 import inspect
 import os
-from pathlib import Path
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from wqb_agent.alpha_color_workflow import AlphaColorWorkflow
 from wqb_agent.alpha_colors import classify_alpha_color, sync_alpha_colors
-
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

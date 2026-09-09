@@ -1,10 +1,11 @@
 import re
 
-from .diversity import extract_fields
 from .alpha_factory import AlphaFactory
+from .diversity import extract_fields
 from .expression import canonical_expression
 from .mutations import _swap_field, _window_change
 from .research_guard import is_direction_only_change, overfit_expression_reason
+
 
 # Bounded, knowledge-backed single-step changes only. No random operator
 # stacking, no arbitrary "special window" hunting.

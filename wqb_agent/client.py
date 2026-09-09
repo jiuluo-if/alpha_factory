@@ -34,15 +34,16 @@ import math
 import random
 import threading
 import time
+
 import requests
 
-from .failures import FailureKind, classify_error
-from .protocol import retry_after_seconds
 from .credentials import (
-    CredentialError,
     DEFAULT_CREDENTIALS_FILE,
+    CredentialError,
     resolve_credentials,
 )
+from .failures import FailureKind, classify_error
+from .protocol import retry_after_seconds
 
 BASE_URL = "https://api.worldquantbrain.com"
 

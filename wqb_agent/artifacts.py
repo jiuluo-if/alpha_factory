@@ -7,8 +7,8 @@ already validated payload and get a no-op when the durable content is
 unchanged.
 """
 
-import json
 import hashlib
+import json
 import os
 import threading
 import time

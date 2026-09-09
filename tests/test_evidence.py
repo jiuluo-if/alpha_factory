@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """证据缓存侧车（evidence_cache.json）与 Reflector 叠加判定的回归测试。"""
 import os
 import sys

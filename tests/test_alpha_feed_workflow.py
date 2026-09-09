@@ -14,16 +14,15 @@ from wqb_agent.alpha_feed_workflow import (
     AlphaFeedWorkflow,
     remote_local_date,
 )
-from wqb_agent.daily_cache import DailyResearchCache
 from wqb_agent.client import WQBQueryTooBroadError
-
+from wqb_agent.daily_cache import DailyResearchCache
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_ROOT = os.path.join(ROOT, "wqb_agent")
 
 
 def _timestamp(value):
-    return value.replace(tzinfo=dt.timezone.utc).timestamp()
+    return value.replace(tzinfo=dt.UTC).timestamp()
 
 
 class FeedReader:

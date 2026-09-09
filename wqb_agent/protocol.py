@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import Enum
+
 from .evidence_status import EvidenceStatus
 
 
@@ -114,8 +115,8 @@ def retry_after_seconds(response_or_headers, now=None, default=5.0):
         try:
             dt = parsedate_to_datetime(value)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            reference = now or datetime.now(timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
+            reference = now or datetime.now(UTC)
             delay = (dt - reference).total_seconds()
             return max(1.0, delay) if math.isfinite(delay) else float(default)
         except (TypeError, ValueError, OverflowError):

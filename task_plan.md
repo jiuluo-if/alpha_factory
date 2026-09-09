@@ -120,3 +120,26 @@
 ## 本阶段当前下一步
 
 已完成调用图、红绿 characterization 测试、workflow 迁移、兼容边界复核、文档更新和独立审查；全量门已通过，下一步提交并推送后核对远端 SHA。
+
+## 2026-09-09 渐进式工程质量门
+
+- [x] 重新读取 `origin/main`，确认 baseline SHA 为 `d49287436ad23978bf4ba4b250c16e95290a2ed95`
+- [x] 测量 fresh baseline：`wqb_agent` statement `80.83%`、branch `69.00%`、branch-aware `77.54%`；595 tests OK
+- [x] 完成 Ruff dry-run：`I=85`、选定安全 UP 子集 `33`、`B007/B904=11`
+- [x] 确定 9 个 typed frontier 模块；mypy 初测仅被缺少 `types-requests` 阻断
+- [x] 保存设计与实施计划：`docs/superpowers/specs/2026-09-09-quality-gates-design.md`、`docs/superpowers/plans/2026-09-09-quality-gates.md`
+- [x] 配置 pyproject、CI 和文档质量入口
+- [x] 以最小 diff 清理选定 Ruff 规则
+- [x] 验证 mypy、branch coverage fail-under、doctor/audit 和完整安全边界
+
+## 本阶段当前下一步
+
+质量门实现与本地验证已完成；保留真实 `.wqb_state` 的既有阻塞，不启动 Simulation，等待用户决定是否授权提交/推送。
+
+## 本阶段错误记录
+
+| 错误 | 尝试 | 处理 |
+|---|---:|---|
+| `pip install ".[dev]"` 的隔离构建下载 `setuptools>=68` 返回 HTTP 403 | 1 | 保留声明的 dev extra；改用当前已安装工具并单独验证 `types-requests`，CI 使用标准安装路径 |
+| PowerShell 变量插值 `"$f:$start"` 被解析为非法变量引用 | 1 | 改用 `${f}` 分隔变量后重新读取目标代码 |
+| 批量 `Remove-Item -LiteralPath` 清理多个 coverage 生成物被执行策略拒绝 | 1 | 改为逐个、已核验的明确路径清理 |

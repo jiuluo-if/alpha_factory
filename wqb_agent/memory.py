@@ -37,8 +37,8 @@ import zlib
 from functools import lru_cache
 
 from .artifacts import atomic_write_json_if_changed
-from .schema import MEMORY_VERSION
 from .expression import canonical_expression
+from .schema import MEMORY_VERSION
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 # Hypothesis ids generated solely from a round are reconstructable from the

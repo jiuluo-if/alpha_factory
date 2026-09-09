@@ -6,7 +6,6 @@ dependencies so lightweight proposal/audit tools can be imported cheaply.
 
 import math
 
-
 METRIC_KEYS = ("sharpe", "fitness", "turnover", "returns", "drawdown", "margin")
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from .alpha_colors import (
     PROJECT_COLOR_OWNER,
-    _value,
     _evidence_summary,
+    _value,
     classify_alpha_color,
 )
 
@@ -28,7 +28,7 @@ class AlphaColorWorkflow:
         # There is currently no durable ownership source.  Keep this local
         # mapping as the compatibility shape of the old implementation, but
         # never infer ownership from a remote color or create a sidecar.
-        local = {}
+        local: dict[str, object] = {}
         results = []
         seen = set()
         for experiment in experiments or ():

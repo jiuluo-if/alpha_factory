@@ -6,26 +6,26 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from wqb_agent.daily_cache import DailyResearchCache
-from wqb_agent.alpha_feed_cache import WeeklyAlphaFeedCache
-from wqb_agent.alpha_feed_workflow import AlphaFeedWorkflow
+from wqb_agent.agent import Agent
 from wqb_agent.alpha_factory import (
     AlphaFactory,
     AlphaTemplate,
     AlphaTemplateRegistry,
 )
-from wqb_agent.research_guard import parameter_only_change_reason
-from wqb_agent.agent import Agent
-from wqb_agent.state import Experiment
+from wqb_agent.alpha_feed_cache import WeeklyAlphaFeedCache
+from wqb_agent.alpha_feed_workflow import AlphaFeedWorkflow
 from wqb_agent.checkpoints import CheckpointStore
-from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
-from wqb_agent.factory_runner import AIFactoryRunner
-from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 from wqb_agent.client import WQBQueryTooBroadError
+from wqb_agent.daily_cache import DailyResearchCache
+from wqb_agent.factory_runner import AIFactoryRunner
+from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
+from wqb_agent.research_guard import parameter_only_change_reason
+from wqb_agent.state import Experiment
+from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 
 def _utc_timestamp(value):
-    return value.replace(tzinfo=dt.timezone.utc).timestamp()
+    return value.replace(tzinfo=dt.UTC).timestamp()
 
 
 class TestDailyResearchCache(unittest.TestCase):

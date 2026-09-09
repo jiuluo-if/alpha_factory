@@ -11,7 +11,6 @@ from wqb_agent.agent import Agent
 from wqb_agent.optimizer_workflow import OptimizerHooks, OptimizerWorkflow
 from wqb_agent.research_guard import overfit_expression_reason
 
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_ROOT = os.path.join(ROOT, "wqb_agent")
 

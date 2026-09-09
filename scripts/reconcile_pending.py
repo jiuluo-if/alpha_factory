@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Reconcile historical UNKNOWN/PENDING simulations against the platform (read-only).
 
 §6 纪律：已知 simulation URL 的重试只允许轮询同一 job，绝不重新 POST。
@@ -19,16 +18,18 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from wqb_agent.artifacts import atomic_write_json_if_changed, iter_jsonl_objects
 from wqb_agent.client import WQBClient
 from wqb_agent.evidence import load_evidence_cache
-from wqb_agent.artifacts import atomic_write_json_if_changed, iter_jsonl_objects
 from wqb_agent.locking import acquire_os_owner_lock, release_os_owner_lock
 from wqb_agent.metrics import (
     check_pass,
     checks_passed,
+)
+from wqb_agent.metrics import (
     extract_metrics as _extract_metrics,
 )
-from wqb_agent.state import Experiment, RECOVERABLE_STATUSES, Trajectory
+from wqb_agent.state import RECOVERABLE_STATUSES, Experiment, Trajectory
 
 
 def _scalar_key(value):

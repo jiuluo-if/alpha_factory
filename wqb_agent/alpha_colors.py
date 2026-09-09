@@ -17,7 +17,6 @@ from .artifacts import iter_jsonl_objects
 from .metrics import check_pass, num
 from .state import Experiment
 
-
 ALPHA_COLORS = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
 PROJECT_COLOR_OWNER = "wqb_alpha_factory"
 _POSITIVE_QUALITY = frozenset({

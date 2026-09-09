@@ -6,7 +6,11 @@ from unittest.mock import patch
 
 import main as main_entry
 from wqb_agent.checkpoints import CheckpointStore
-from wqb_agent.preflight import build_agent_context, render_agent_context, run_takeover_preflight
+from wqb_agent.preflight import (
+    build_agent_context,
+    render_agent_context,
+    run_takeover_preflight,
+)
 from wqb_agent.state import Trajectory
 from wqb_agent.workspace_snapshot import read_workspace_snapshot
 

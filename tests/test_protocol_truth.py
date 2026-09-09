@@ -10,11 +10,10 @@ from wqb_agent.protocol import (
     probe_capability_response,
     retry_after_seconds,
 )
-from wqb_agent.state import Experiment
 from wqb_agent.simulator import Simulator
+from wqb_agent.state import Experiment
 from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.yearly import build_yearly_evidence
-
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
 

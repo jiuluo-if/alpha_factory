@@ -60,10 +60,10 @@ class TestBudgetAllocator(unittest.TestCase):
 
     def test_synthetic_selection_reduces_duplicates_under_same_budget(self):
         candidates = [
-            {"expression": "rank(field_%d)" % i, "fields": ["field_%d" % i], "template_family": "rank", "datasets": ["pv1"]}
+            {"expression": f"rank(field_{i})", "fields": [f"field_{i}"], "template_family": "rank", "datasets": ["pv1"]}
             for i in range(6)
         ] + [
-            {"expression": "ts_mean(rank(signal_%d), 5)" % i, "fields": ["signal_%d" % i], "template_family": "smooth", "datasets": ["fundamental6"]}
+            {"expression": f"ts_mean(rank(signal_{i}), 5)", "fields": [f"signal_{i}"], "template_family": "smooth", "datasets": ["fundamental6"]}
             for i in range(3)
         ]
         old = candidates[:4]

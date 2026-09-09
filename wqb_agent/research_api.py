@@ -20,11 +20,12 @@ DO NOT USE FOR:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import os
 import tempfile
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
 from .config import normalize_config
@@ -65,7 +66,7 @@ class ExperimentSpec:
         object.__setattr__(self, "settings", dict(self.settings or {}))
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "ExperimentSpec":
+    def from_mapping(cls, value: Mapping[str, Any]) -> ExperimentSpec:
         if not isinstance(value, Mapping):
             raise TypeError("experiment spec must be an object")
         return cls(

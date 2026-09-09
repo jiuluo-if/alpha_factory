@@ -4,9 +4,9 @@ PURPOSE: Compute date-aligned behavioral incremental-value evidence.
 READ WHEN: changing PnL/series correlation diagnostics.
 DO NOT USE FOR: platform truth or research-direction selection."""
 
-from dataclasses import dataclass
 import hashlib
 import math
+from dataclasses import dataclass
 
 
 def _num(value):

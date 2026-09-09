@@ -14,12 +14,15 @@ import os
 import time
 from collections import Counter, defaultdict
 
-from .artifacts import append_jsonl_if_unique, iter_jsonl_objects, atomic_write_json_if_changed
+from .artifacts import (
+    append_jsonl_if_unique,
+    atomic_write_json_if_changed,
+    iter_jsonl_objects,
+)
 from .expression import canonical_expression
 from .identity import candidate_identity
-from .search_policy import structural_fingerprint
 from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
-
+from .search_policy import structural_fingerprint
 
 PHASES = {
     "generated", "preflight", "submitted", "completed",

@@ -49,7 +49,7 @@ def migrate_artifact(kind, payload):
     if not isinstance(payload, dict):
         raise ValueError("artifact must be an object")
     if kind not in ARTIFACT_SCHEMAS:
-        raise ValueError("unknown artifact schema: %s" % kind)
+        raise ValueError(f"unknown artifact schema: {kind}")
     result = copy.deepcopy(payload)
     result["schema_version"] = ARTIFACT_SCHEMAS[kind]
     result.setdefault("created_by_version", CREATED_BY_VERSION)

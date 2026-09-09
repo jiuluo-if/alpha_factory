@@ -6,8 +6,8 @@ DO NOT USE FOR: changing platform execution or choosing hypotheses.
 
 Read-only efficiency metrics and no-look-ahead policy replay."""
 
-from collections import Counter, defaultdict
 import math
+from collections import Counter, defaultdict
 
 
 def _get(row, key, default=None):
@@ -195,7 +195,7 @@ class SearchPolicyReplay:
             checkpoints=(10, 25, 50, 100)):
         indexed = [(index, row, self._time(row, index + 1))
                    for index, row in enumerate(self.candidates)]
-        for _, row, decision_time in indexed:
+        for _, row, _decision_time in indexed:
             observed_at = self._observed_at(row, 0)
             explicit_decision = _finite(row.get("decision_timestamp"))
             if explicit_decision is not None and observed_at > explicit_decision:
@@ -214,7 +214,7 @@ class SearchPolicyReplay:
         step = 0
         while remaining:
             decision_time = min(item[2] for item in remaining)
-            for index, row, available_at in selected:
+            for index, row, _available_at in selected:
                 if index in observed_ids:
                     continue
                 if self._observed_at(row, index + 1) <= decision_time:

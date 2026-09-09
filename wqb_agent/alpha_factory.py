@@ -6,15 +6,15 @@ shape of an Alpha; a field bundle supplies the slots.  The resulting metadata
 keeps the skeleton visible to the later proposal and diversity gates.
 """
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
 import random
+from dataclasses import dataclass
 
 from .diversity import extract_fields
 from .expression import analyze_expression, canonical_expression
-from .research_guard import parameter_only_change_reason, overfit_expression_reason
+from .research_guard import overfit_expression_reason, parameter_only_change_reason
 
 
 @dataclass(frozen=True)
@@ -1201,7 +1201,7 @@ class AlphaFactory:
         for offset, profile in enumerate(verified):
             if len(result) >= limit:
                 break
-            for step, template in enumerate(templates):
+            for _step, template in enumerate(templates):
                 if len(result) >= limit:
                     break
                 # Pair templates require a semantically reviewed secondary

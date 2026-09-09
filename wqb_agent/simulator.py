@@ -26,9 +26,9 @@ Safety semantics (rolling executor, three windows):
   local error does not prove the POST never happened.
 """
 
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from collections import deque
 import time
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .client import (
     WQBAuthError,
@@ -164,7 +164,7 @@ class Simulator:
                 experiment.status = "SUBMITTING"
                 experiment.submission_started_at = time.time()
                 persist()
-                for submit_attempt in range(1, self.replace_attempts + 1):
+                for _submit_attempt in range(1, self.replace_attempts + 1):
                     try:
                         try:
                             experiment.progress_url = self.client.submit_simulation(

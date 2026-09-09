@@ -11,8 +11,8 @@ from .checkpoints import CheckpointStore
 from .discovery import FieldDiscovery
 from .memory import ExperienceMemory
 from .reflection import Reflector
-from .simulator import Simulator
 from .search_policy import SearchPolicy
+from .simulator import Simulator
 from .state import Trajectory
 from .submission import SubmissionPool
 from .trial_ledger import TrialLedger

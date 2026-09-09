@@ -127,3 +127,25 @@
 - TDD 红灯为 `ModuleNotFoundError: wqb_agent.proposal_execution`，确认新增 architecture/facade 测试不是误测；实现窄依赖 workflow 后 focused characterization 为 7 tests OK。
 - 第一轮定向回归暴露配置快照差异：旧测试在 Agent 构造后修改 `candidates_per_round`，workflow 若只保存初始化值会额外 POST；已增加 `update_agent_config()` 并在 facade 每次运行前同步兼容配置属性，定向 205 tests OK。
 - 新 workflow 的 remote execution 仍只调用注入的 `simulator.run()`；源码不 import Agent，也不包含 `submit_simulation(`，checkpoint 仍由注入的现有 `CheckpointStore` 负责。
+
+## 2026-09-09 渐进式工程质量门 baseline
+
+- `git fetch origin main` 后，`HEAD` 与 `origin/main` 均为 `d49287436ad23978bf4ba4b250c16e95290a2ed95`，工作树原有唯一未跟踪文件是质量门设计 spec。
+- fresh `coverage run --branch -m unittest discover -s tests`：`595 tests OK`。未配置 source 时用 `--include='wqb_agent/*'` 复核为 10,300 statements / 3,964 branches，statement `80.83%`、branch `69.00%`、combined `77.54%`；配置 `source=["wqb_agent"]` 后会纳入未被测试导入的 `validation.py`，真实 gate baseline 为 10,418 statements / 4,004 branches，statement `79.99%`、branch `68.31%`、combined `76.74%`，故初始 `fail_under=76.0`。
+- 生产模块最低覆盖率：`factory_runner.py 50%`、`mutations.py 54%`、`client.py/diversity.py 60%`、`artifacts.py 62%`、`research_api.py 63%`、`context.py 64%`、`__init__.py 64%`、`agent.py 65%`；因此 coverage 不应通过排除低覆盖模块来抬高。
+- Ruff dry-run 全规则族：`I=85`、`UP=38`、`B=19`；设计选择的安全子集为 `UP009,UP012,UP017,UP031,UP035,UP037` 共 33 项，`B007,B904` 共 11 项。暂不启用 `UP042`、`B025`、`B905`、`SIM`、`RUF`，避免 Enum、不可达防御分支、zip 长度语义和大范围判断式改写。
+- 候选 9 模块 mypy 首次运行只报传递依赖 `wqb_agent/client.py` 缺 `requests` stubs；声明 `types-requests` 后再复测，不改 Client 网络/重试行为。
+- Ruff B904 的生产/脚本命中为 `scripts/archive_completed_rounds.py:118`、`wqb_agent/agent.py:513`、`wqb_agent/search_policy.py:42`；需要逐处确认使用 `from exc` 或 `from None`，不改变异常类型或 fail-closed 语义。
+- `python -m pip install ".[dev]"` 在当前环境的 build isolation 阶段因镜像下载 `setuptools>=68` HTTP 403 失败；不是项目构建/测试失败，后续改用当前工具环境验证并保留 CI 声明。
+- 首次输出 typed frontier 上下文的 PowerShell 命令因路径变量后紧跟冒号触发 ParserError；未修改仓库，改用 `${f}` 变量边界后继续。
+- 清理多个 coverage 生成物的批量 PowerShell 删除命令被执行策略拒绝；文件均为本轮明确生成的单个 artifacts，改为逐个明确路径处理。
+
+## 2026-09-09 质量门实现与验收
+
+- `pyproject.toml` 已启用 `branch=true`、`source=["wqb_agent"]`、`show_missing=true`、`precision=1`、`fail_under=76.0`；真实 configured baseline 为 statement `79.99%`、branch `68.31%`、branch-aware `76.74%`。
+- mypy 已加入 dev extra（含 `types-requests`），9 个 typed frontier 模块最终 `Success: no issues found in 9 source files`；未启用全仓 strict、blanket ignore 或 baseline ignore 文件。
+- Ruff 最终规则为既有 `E4,E7,E9,F` 加 `I`、`UP009,UP012,UP017,UP031,UP035,UP037`、`B007,B904`；dry-run 后全部通过。没有启用 `ALL`、`SIM`、`RUF`、`UP042`、`B025`、`B905`。
+- CI 已统一为 install → compile → type → unit → Ruff → branch coverage/report → doctor → audit；Coverage 命令使用 `coverage erase` 和 `coverage run --branch`，低于配置阈值会返回非零。
+- fresh verification：compileall exit 0；mypy exit 0；Ruff exit 0；`595 tests OK`；configured coverage `76.7%` 且 report exit 0；fixture doctor `config_valid=true`/exit 0；fixture audit `ok=true`/exit 0；compact context exit 0；`git diff --check` exit 0。
+- fresh review 未发现 Critical/Important；92 个 tracked 文件中多数仅为 import/安全现代化机械修复，手工改动集中在 typed annotations、等价格式化、B007 变量命名和 `from None` 异常包装。未触碰 Client retry、Simulation、SUBMIT_UNKNOWN、checkpoint、credentials source 选择、Alpha Feed/Color 或研究政策。
+- 默认 `python main.py context --compact --json` 仍报告既有真实 `.wqb_state/round_11.checkpoint.json`、`submit_unknown=1`、`workspace_status=BLOCKED`；本阶段未修改该研究状态，也未启动 live BRAIN/Simulation。

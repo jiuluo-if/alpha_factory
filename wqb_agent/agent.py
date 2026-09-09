@@ -12,19 +12,11 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from .artifacts import (
-    atomic_write_json_if_changed,
-    iter_jsonl_objects,
-)
-from .research_guard import (
-    ResearchLoopGuard,
-    overfit_expression_reason,
-    parameter_only_change_reason,
-)
+from .artifacts import iter_jsonl_objects
+from .research_guard import overfit_expression_reason, parameter_only_change_reason
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
 from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
-from .context import key_experiments
 from .evidence import overlay_cached_checks, refresh_self_correlation_cache
 from .alpha_colors import classify_alpha_color
 from .expression import canonical_expression, submission_fingerprint
@@ -51,6 +43,7 @@ from .submission import latest_active_snapshot, self_correlation_evidence
 from .submission import submission_eligibility
 from .runtime_components import build_runtime_components
 from .proposal_execution import ProposalExecutionContext, ProposalExecutionHooks, ProposalExecutionWorkflow
+from .suggestion_workflow import SuggestionHooks, SuggestionWorkflow
 from .behavior import extract_behavior_series
 from .alpha_pool import build_pool_snapshot
 from .incremental_policy import IncrementalValuePolicy
@@ -207,6 +200,27 @@ class Agent:
             feed_cache_path,
             weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
         )
+        self.suggestion_workflow = SuggestionWorkflow(
+            discovery=self.discovery,
+            memory=self.memory,
+            trajectory=self.trajectory,
+            alpha_factory=self.alpha_factory,
+            state_dir=self.state_dir,
+            fields_per_discovery=self.fields_per_discovery,
+            context_experiments=self.context_experiments,
+            simulation_settings=self.simulation_settings,
+            operator_reference=self.operator_reference,
+            hooks=SuggestionHooks(
+                ensure_loaded=self._ensure_loaded,
+                next_round_no=self.next_round_no,
+                epoch_label=self.epoch_label,
+                form_research_space=self._form_research_space,
+                trusted_current_best=self._trusted_current_best,
+                ensure_best_field=self._ensure_best_field,
+                optimizer_gate_report=self.optimizer_gate_report,
+                fallback_templates=lambda: list(EXPLORATION_HYPOTHESES) + list(SEED_HYPOTHESES),
+            ),
+        )
         self.proposal_execution = ProposalExecutionWorkflow(
             ProposalExecutionContext(
                 state_dir=self.state_dir,
@@ -288,117 +302,8 @@ class Agent:
     # ------------------------------------------------- LLM-driven research
 
     def run_suggestion_round(self, round_no=None):
-        """Phase 1 of LLM-driven research: form a hypothesis, discover real
-        fields from BRAIN, and export a suggestion bundle for the agent (LLM)
-        to read. No simulation happens here."""
-        self._ensure_loaded()
-        round_no = round_no or self.next_round_no()
-        # 2026-08-22 用户政策变更：删除字段级全量排除机制。字段允许跨轮重复
-        # 进入 discovery；重复防护收敛到 run_proposals 的表达式级去重
-        # （精确/等价表达式与同族变体不复跑），以及模拟前与 ACTIVE/已提交
-        # Alpha 的相关性预检与噪点结构审计。
-
-        research_space = self._form_research_space(round_no)
-        research_space = self._rotate_stalled_research_space(
-            research_space, round_no
-        )
-        research_space["_round"] = round_no
-        fields = self.discovery.discover(
-            research_space, target_count=self.fields_per_discovery
-        )
-        # A research space can legitimately have no eligible fields after the
-        # current alphaCount gate.  Do not leave the persistent suggestion
-        # phase stuck on the same empty round; try the next declared space
-        # while keeping the statement itself non-economic until discovery
-        # returns usable descriptions.
-        if not fields:
-            fallback_templates = list(EXPLORATION_HYPOTHESES) + list(SEED_HYPOTHESES)
-            for template in fallback_templates:
-                if template.get("id") == research_space.get("id"):
-                    continue
-                candidate = {
-                    "id": template.get("id", f"space-r{round_no}"),
-                    "statement": research_space["statement"],
-                    "tags": list(template.get("tags") or []),
-                    "datasets": list(template.get("datasets") or []),
-                    "parent_best": None,
-                    "_round": round_no,
-                }
-                candidate_fields = self.discovery.discover(
-                    candidate, target_count=max(self.fields_per_discovery * 4, 50)
-                )
-                candidate_fields = candidate_fields[: self.fields_per_discovery]
-                if candidate_fields:
-                    research_space = candidate
-                    fields = candidate_fields
-                    print(
-                        "[DISCOVERY FALLBACK] 初始研究空间无合格字段，"
-                        f"切换到数据集提示: {candidate['datasets']}"
-                    )
-                    break
-        if research_space.get("parent_best") and self._trusted_current_best():
-            fields = self._ensure_best_field(fields)
-
-        bundle = {
-            "round_no": round_no,
-            "epoch_label": self.epoch_label(round_no),
-            "research_space": research_space,
-            "fields": [
-                {
-                    "id": f["id"],
-                    "name": f.get("name", ""),
-                    "description": f.get("description", ""),
-                    "dataset": f.get("dataset"),
-                    "type": f.get("type"),
-                    "coverage": f.get("coverage"),
-                    "frequency": f.get("frequency"),
-                    "alpha_count": f.get("alpha_count"),
-                    "platform_dedupe": f.get("platform_dedupe"),
-                    "semantic_status": f.get("semantic_status", "UNKNOWN"),
-                    "field_source": f.get("field_source") or self.discovery.source_provenance(),
-                    "field_ref": {
-                        "dataset": f.get("dataset"),
-                        "id": f.get("id"),
-                    },
-                }
-                for f in fields
-            ],
-            "context": self.memory.context(
-                recent_experiments=key_experiments(
-                    self.trajectory.recent(self.context_experiments * 2)
-                )
-            ),
-            "simulation_settings": self.simulation_settings,
-            "field_source": self.discovery.source_provenance(),
-            "operator_reference": self.operator_reference,
-            "alpha_templates": self.alpha_factory.catalog(),
-            "research_guard": ResearchLoopGuard(self.trajectory.experiments).snapshot(),
-            # This is an auditable gate view, not a second result store.  The
-            # active Agent can use its in-memory trajectory for optimization;
-            # the exported bundle only explains why a CHILD path is or is not
-            # currently available.
-            "optimizer_context": self.optimizer_gate_report(),
-            "field_selection": {
-                "max_alpha_count": self.max_field_alpha_count,
-                "excluded_high_usage": self.discovery.last_excluded_high_usage,
-                "excluded_unknown_usage": self.discovery.last_excluded_unknown_usage,
-                "platform_dedupe": self.discovery.platform_dedupe_view(),
-                "dataset_selection": self.discovery.last_dataset_selection,
-                "catalog_provenance": self.discovery.source_provenance(),
-            },
-            "dataset_selection": self.discovery.last_dataset_selection,
-            "catalog_provenance": self.discovery.source_provenance(),
-        }
-        os.makedirs(self.state_dir, exist_ok=True)
-        path = os.path.join(self.state_dir, "suggestions.json")
-        atomic_write_json_if_changed(path, bundle)
-        print(f"\n=== Suggestion round {round_no} ({self.epoch_label(round_no)}) ===")
-        print(f"Research space: {research_space['statement']}")
-        print(f"Fields ({len(fields)}): {[f['id'] for f in fields]}")
-        print(f"Bundle written: {path}")
-        print("-> read suggestions.json + context.md, write proposals.json, "
-              "then run python main.py run-proposals")
-        return bundle
+        """Compatibility facade for read-only suggestion generation."""
+        return self.suggestion_workflow.run(round_no=round_no)
 
     def optimizable_signal_records(self, limit=128):
         """Return completed signals, preferring cloud-indexed evidence.
@@ -714,59 +619,10 @@ class Agent:
 
     def _rotate_stalled_research_space(self, research_space, round_no,
                                        window=40, concentration=0.8):
-        # RESEARCH_POLICY:
-        # Heuristic only. Not a BRAIN invariant; an external research agent
-        # may override or bypass this direction choice.
-        """Avoid spending another round on a recently exhausted dataset.
-
-        A research-space hypothesis can remain valid while its current
-        dataset produces only weak baselines.  Continuing to select fields
-        from that same dataset then consumes simulation budget without adding
-        a new experiment family.  This guard is deliberately based only on
-        the bounded recent trajectory window and changes no persisted state.
-        """
-        if not isinstance(research_space, dict):
-            return research_space
-        datasets = {
-            str(value) for value in (research_space.get("datasets") or [])
-            if isinstance(value, (str, int)) and str(value).strip()
-        }
-        if not datasets:
-            return research_space
-        recent = self.trajectory.recent(window)
-        observed = [
-            str(dataset)
-            for experiment in recent
-            for dataset in (experiment.datasets or [])
-            if isinstance(dataset, (str, int)) and str(dataset).strip()
-        ]
-        if not observed:
-            return research_space
-        counts = {}
-        for dataset in observed:
-            counts[dataset] = counts.get(dataset, 0) + 1
-        dominant, dominant_count = max(counts.items(), key=lambda item: item[1])
-        if dominant not in datasets or dominant_count / len(observed) < concentration:
-            return research_space
-
-        candidates = list(EXPLORATION_HYPOTHESES) + list(SEED_HYPOTHESES)
-        for offset in range(len(candidates)):
-            candidate = candidates[(int(round_no) + offset) % len(candidates)]
-            candidate_datasets = {
-                str(value) for value in (candidate.get("datasets") or [])
-                if isinstance(value, (str, int)) and str(value).strip()
-            }
-            if not candidate_datasets or candidate_datasets & set(counts):
-                continue
-            rotated = dict(candidate)
-            rotated["statement"] = research_space.get("statement") or candidate.get("statement")
-            rotated["parent_best"] = None
-            rotated["rotation_reason"] = (
-                f"recent dataset concentration: {dominant} "
-                f"{dominant_count}/{len(observed)}"
-            )
-            return rotated
-        return research_space
+        """Compatibility wrapper for the workflow-owned rotation heuristic."""
+        return self.suggestion_workflow.rotate_stalled_research_space(
+            research_space, round_no, window=window, concentration=concentration
+        )
 
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):
         """Compatibility facade for the guarded proposal workflow."""

@@ -280,6 +280,24 @@ class TestArchitectureBoundaries(unittest.TestCase):
         self.assertIn(".checkpoints", imports)
         self.assertIn(".state", imports)
 
+    def test_suggestion_workflow_has_one_way_read_only_dependencies(self):
+        imports = _direct_imports("suggestion_workflow")
+        for forbidden in (
+            ".agent", "wqb_agent.agent", ".client", "wqb_agent.client",
+            ".simulator", "wqb_agent.simulator", ".proposal_execution",
+            "wqb_agent.proposal_execution", "main", ".factory_runner",
+            "wqb_agent.factory_runner",
+        ):
+            self.assertNotIn(forbidden, imports)
+
+    def test_suggestion_workflow_does_not_create_simulation_write_path(self):
+        path = os.path.join(PACKAGE_ROOT, "suggestion_workflow.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn("submit_simulation(", source)
+        self.assertNotIn("CheckpointStore", source)
+        self.assertNotIn("owner_lock", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -285,6 +285,58 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertEqual(restarted_client.sim_calls, [])
         self.assertFalse(restarted._load_proposal_checkpoint(1)["complete"])
 
+    def test_submit_unknown_pauses_same_checkpoint_pending_work(self):
+        client = FakeClient(latency=0)
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["agent"]["state_dir"] = self._tmp
+        agent = Agent(client, config)
+        unknown = Experiment(1, "h", "rank(unknown_field)", {}, [], ["pv1"])
+        unknown.proposal_id = "p-unknown"
+        unknown.status = "SUBMIT_UNKNOWN"
+        pending = Experiment(1, "h", "rank(pending_field)", {}, [], ["pv1"])
+        pending.proposal_id = "p-pending"
+        pending.status = "PENDING"
+        agent._write_proposal_checkpoint(
+            1, {"id": "h", "statement": "test"}, [unknown, pending], complete=False
+        )
+
+        checkpoint = agent._load_proposal_checkpoint(1)
+        self.assertIsNone(agent._resume_proposal_checkpoint(checkpoint))
+        self.assertEqual(client.sim_calls, [])
+        restored = agent._load_proposal_checkpoint(1)
+        self.assertEqual(
+            {row["status"] for row in restored["experiments"]},
+            {"SUBMIT_UNKNOWN", "PENDING"},
+        )
+        self.assertFalse(restored["complete"])
+
+    def test_submit_unknown_still_polls_known_progress_urls(self):
+        client = FakeClient(latency=0)
+        client._expr_by_url["progress-known"] = "rank(known_field)"
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["agent"]["state_dir"] = self._tmp
+        agent = Agent(client, config)
+        unknown = Experiment(1, "h", "rank(unknown_field)", {}, [], ["pv1"])
+        unknown.status = "SUBMIT_UNKNOWN"
+        known = Experiment(1, "h", "rank(known_field)", {}, [], ["pv1"])
+        known.status = "RUNNING"
+        known.progress_url = "progress-known"
+        pending = Experiment(1, "h", "rank(pending_field)", {}, [], ["pv1"])
+        pending.status = "PENDING"
+        agent._write_proposal_checkpoint(
+            1, {"id": "h", "statement": "test"},
+            [unknown, known, pending], complete=False,
+        )
+
+        checkpoint = agent._load_proposal_checkpoint(1)
+        self.assertIsNone(agent._resume_proposal_checkpoint(checkpoint))
+        self.assertEqual(client.sim_calls, [])
+        restored = agent._load_proposal_checkpoint(1)
+        statuses = {row["expression"]: row["status"] for row in restored["experiments"]}
+        self.assertEqual(statuses["rank(known_field)"], "DONE")
+        self.assertEqual(statuses["rank(pending_field)"], "PENDING")
+        self.assertEqual(statuses["rank(unknown_field)"], "SUBMIT_UNKNOWN")
+
     def test_agent_submit_unknown_update_keeps_budget_and_arm_occupied(self):
         config = json.loads(json.dumps(BASE_CONFIG))
         config["agent"]["state_dir"] = self._tmp

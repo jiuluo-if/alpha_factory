@@ -199,15 +199,15 @@ def main():
         )
         sys.exit(1)
 
-    if args.state_dir:
-        config["agent"]["state_dir"] = args.state_dir
-
     # Validate once before any client construction.  The legacy mapping is
     # retained for Agent compatibility; typed policy objects are exposed by
     # wqb_agent.config and are not reparsed by read-only commands.
-    from wqb_agent.config import normalize_config
+    from wqb_agent.config import apply_cli_overrides, normalize_config
     try:
         typed_config = normalize_config(config)
+        typed_config = apply_cli_overrides(
+            typed_config, state_dir=args.state_dir
+        )
     except (TypeError, ValueError) as exc:
         print(f"配置无效: {exc}")
         sys.exit(1)

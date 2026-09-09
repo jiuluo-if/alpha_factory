@@ -75,3 +75,28 @@
 - 已新增探索层稳定种子随机化字段/经济模板组合，并标记 `signal_discovery`；未引入参数、窗口、权重或符号扫描。
 - 已将双层来源、目标和策略写入 `factory_batch_stats`/当前 proposals 审计视图，仍复用 `Agent.run_proposals()`。
 - 新增回归后全量测试为 478 tests OK；fresh review 无 Critical，compileall、Ruff、diff check 均通过；代码与文档已分两批推送到 `main`，远端核验 SHA 为 `372f438372a69e073bc28c1a13ad29a755d3aa4f`。
+
+## 2026-09-09 本次真实状态接管
+
+- 接管预检为 `BLOCKED`，唯一未完成边界为 `.wqb_state/round_11.checkpoint.json`。
+- round 11 当前为 `DONE=56, FAILED=8, RUNNING=3, PENDING=32, SUBMIT_UNKNOWN=1`；未知项没有 `progress_url`，3 个运行中项各有已知 `progress_url`。
+- `factory_session.json` 为 `status=RUNNING` 且 `stop_requested=true`，但当前仓库未发现对应工厂进程；未启动第二个工厂。
+- 已确认恢复实现会把同一 checkpoint 中的 `PENDING` 与已知 URL 任务继续交给模拟器，即使另有 `SUBMIT_UNKNOWN`；本次先以失败测试锁定该安全缺陷。
+- 新增 `test_submit_unknown_pauses_same_checkpoint_pending_work`，先观察到真实失败（`rank(pending_field)` 被提交），再在 `_resume_proposal_checkpoint()` 增加批次级 fail-closed 返回；定向回归与既有 `SUBMIT_UNKNOWN` 测试通过。
+- 为保留安全吞吐，补充先失败后通过的已知 URL 回归：同批存在 `SUBMIT_UNKNOWN` 时，3 个已知 URL 任务仍可只读轮询，`PENDING` 不得 POST。
+- 真实 `python main.py --run-proposals` 已恢复轮询 round 11 的 3 个已知远程任务，均收敛为 `DONE`；没有新增 POST。实时结果均未达到通过门槛：Sharpe `0.17/0.24/-0.35`、Fitness `0.04/0.05/-0.13`，且关键检查失败或自相关仍 `PENDING`。
+- 轮询后 round 11 为 `DONE=59, FAILED=8, PENDING=32, SUBMIT_UNKNOWN=1`，checkpoint 仍未完成；接管预检仍为 `BLOCKED`。
+
+## 2026-09-09 配置边界收敛第一阶段
+
+- 已确认 `main.py` 在 normalize 前执行 `config["agent"]["state_dir"] = ...`；缺少 `agent` 时实际抛出 `KeyError`，未进入统一配置错误路径。
+- 当前工作树基线：`python -m unittest discover -s tests` 为 480 tests OK；最新 `main` 与 `origin/main` 均为 `61cafc2`。
+- 已先新增配置/架构回归并运行红灯：新增测试实际暴露上述 `KeyError`、缺失 `apply_cli_overrides`、0/负数/NaN/越界值未拒绝，以及 `main.py` raw section 访问；`config.example.json` 兼容测试通过。
+- 当前下一步：在不触碰 Agent/Client/Simulation 的前提下实现 validator、typed override 和 main 流程切换。
+- 已实现并通过定向绿灯：集中 `_int_in_range`/`_finite_float`/optional int validator，typed `apply_cli_overrides()`，以及 main/运行时 parse 架构守卫。
+- 全量回归阶段当前证据：490 tests OK、compileall 退出码 0、Ruff 0 errors、doctor offline `config_valid=true`、audit offline `ok=true`、`git diff --check` 通过。
+- 复核并保留 legacy factory per-run `max_simulations` mapping；weekly/daily typed caps 仍分别为配置值，避免把兼容运行器 cap 改成 weekly cap。
+- 当前下一步：完成 fresh review、最终复测，并记录未处理的兼容 raw mapping 与研究控制面非本阶段项。
+- fresh review 结论：无 Critical；配置变更仅触及 normalize/validator/CLI override 及其测试，未改 Agent、Client、Simulator、checkpoint 或研究策略代码。
+- 最终 fresh verification：490 tests OK；compileall 0；Ruff 0 errors；doctor `config_valid=true`；audit `ok=true`；`git diff --check` 通过。
+- 本阶段不提交、不推送；保留工作树中原有 `tests/test_agent_flow.py` 与 `wqb_agent/agent.py` 用户改动，并未将其混入本阶段配置 diff。

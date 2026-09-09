@@ -137,6 +137,50 @@ class TestArchitectureBoundaries(unittest.TestCase):
                 f"{filename} 绕过 normalize_config 直接解释 raw config",
             )
 
+    def test_main_does_not_access_raw_config_sections(self):
+        path = os.path.join(ROOT, "main.py")
+        with open(path, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Subscript):
+                continue
+            if not isinstance(node.value, ast.Name) or node.value.id != "config":
+                continue
+            key = node.slice.value if isinstance(node.slice, ast.Constant) else None
+            self.assertNotIn(
+                key, {"agent", "simulation"},
+                "main.py 不得在 normalize_config 前访问 raw config 内部结构",
+            )
+
+    def test_cli_override_accepts_typed_app_config(self):
+        path = os.path.join(PACKAGE_ROOT, "config.py")
+        with open(path, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=path)
+        functions = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "apply_cli_overrides"
+        ]
+        self.assertEqual(len(functions), 1)
+        first_arg = functions[0].args.args[0]
+        self.assertIsInstance(first_arg.annotation, ast.Name)
+        self.assertEqual(first_arg.annotation.id, "AppConfig")
+
+    def test_runtime_modules_do_not_call_parse_config(self):
+        for filename in os.listdir(PACKAGE_ROOT):
+            if not filename.endswith(".py") or filename == "config.py":
+                continue
+            path = os.path.join(PACKAGE_ROOT, filename)
+            with open(path, encoding="utf-8") as handle:
+                tree = ast.parse(handle.read(), filename=path)
+            calls = [
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "parse_config"
+            ]
+            self.assertEqual(calls, [], f"{filename} 不得重新调用 parse_config")
+
     def test_runtime_components_does_not_reinterpret_formal_defaults(self):
         path = os.path.join(PACKAGE_ROOT, "runtime_components.py")
         with open(path, encoding="utf-8") as handle:

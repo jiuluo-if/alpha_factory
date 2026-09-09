@@ -58,6 +58,18 @@
 
 等待当前 `python main.py --factory-run --factory-hours 0.5` 自然返回；只读核对 round 3 checkpoint、session、锁和进程，随后清理本轮构建缓存并完成最终验证记录。
 
+## 2026-09-09 本次接管：真实状态驱动恢复边界
+
+- [x] 只读接管并确认 `round_11` 的真实 checkpoint 状态
+- [x] 先用失败测试锁定 `SUBMIT_UNKNOWN` 存在时禁止同批 `PENDING` 新提交
+- [x] 实现最小恢复边界修复，不修改现有研究状态
+- [x] 运行定向测试、全量测试、compileall、Ruff 和 diff check
+- [ ] 若预检恢复为 READY，才沿唯一入口继续真实 Simulation；否则保持暂停并报告重大阻塞
+
+## 本次当前下一步
+
+全量验证已通过；真实只读恢复已完成，预检仍为 BLOCKED，按安全边界保持暂停并报告重大结果。
+
 ## 2026-09-09 自主模拟双层改造
 
 - [x] 经用户确认双层设计：优化层云端优先/本轮其次，代码初筛后 Agent 二筛；探索层大批量随机定位信号
@@ -65,3 +77,15 @@
 - [x] 实现现有 AlphaFactory/Agent/FactoryRunner 双层边界，不新增状态机或执行入口
 - [x] 补充 batch stats、AGENTS/README/STATE_LAYOUT 约束
 - [x] fresh code review、全量验证、分批提交并推送 main
+
+## 2026-09-09 配置边界收敛第一阶段
+
+- [x] 读取任务要求、最新 main、配置入口和相关测试；建立 480 tests 基线
+- [x] 先写并验证配置边界/数值验证/CLI override 回归测试
+- [x] 实现统一 fail-closed validators 与 typed CLI override
+- [x] 强化架构守卫并复测完整配置兼容性
+- [x] 完成 unittest、compileall、Ruff、doctor/audit 离线验证及风险复核
+
+## 当前下一步
+
+阶段完成：保留未提交工作树，交付配置边界、回归证据和 deferred/risk review。

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 
 from .incremental_policy import IncrementalValuePolicy
 from .search_policy import validate_budget_hierarchy
@@ -175,16 +176,58 @@ def _as_bool(value, default, key):
     raise ValueError(f"{key} 必须是布尔值")
 
 
+def _int_in_range(value, *, key, minimum=None, maximum=None):
+    """Parse a user integer without accepting booleans or clamping it."""
+    if isinstance(value, bool):
+        raise ValueError(f"{key} 必须是整数")
+    if isinstance(value, float) and (
+        not math.isfinite(value) or not value.is_integer()
+    ):
+        raise ValueError(f"{key} 必须是整数")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{key} 必须是整数") from exc
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"{key} 必须大于或等于 {minimum}")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{key} 必须小于或等于 {maximum}")
+    return parsed
+
+
+def _finite_float(value, *, key, minimum=None, maximum=None):
+    """Parse a finite user float without accepting booleans or clamping it."""
+    if isinstance(value, bool):
+        raise ValueError(f"{key} 必须是有限数字")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{key} 必须是有限数字") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{key} 必须是有限数字")
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"{key} 必须大于或等于 {minimum}")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{key} 必须小于或等于 {maximum}")
+    return parsed
+
+
+def _optional_int_in_range(value, *, key, minimum=None, maximum=None):
+    if value is None:
+        return None
+    return _int_in_range(
+        value, key=key, minimum=minimum, maximum=maximum
+    )
+
+
 def _resolved_ints(values, defaults, *, minimum=0):
     resolved = dict(values)
     for key, default in defaults.items():
-        try:
-            value = int(values.get(key, default))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"config.agent.{key} 必须是整数") from exc
-        if value < minimum:
-            raise ValueError(f"config.agent.{key} 不得小于 {minimum}")
-        resolved[key] = value
+        resolved[key] = _int_in_range(
+            values.get(key, default),
+            key=f"config.agent.{key}",
+            minimum=minimum,
+        )
     return resolved
 
 
@@ -196,31 +239,27 @@ def _resolve_runtime_policies(agent):
             raise ValueError(f"config.agent.memory.{key} 必须大于 0")
 
     field_selection = {**_FIELD_SELECTION_DEFAULTS, **dict(agent.get("field_selection") or {})}
-    try:
-        field_selection["random_fraction"] = float(field_selection["random_fraction"])
-    except (TypeError, ValueError) as exc:
-        raise ValueError("config.agent.field_selection.random_fraction 必须是数字") from exc
-    if not 0.0 <= field_selection["random_fraction"] <= 1.0:
-        raise ValueError("config.agent.field_selection.random_fraction 必须在 0 到 1 之间")
+    field_selection["random_fraction"] = _finite_float(
+        field_selection["random_fraction"],
+        key="config.agent.field_selection.random_fraction",
+        minimum=0.0,
+        maximum=1.0,
+    )
     field_selection["mode"] = str(field_selection["mode"] or "semantic_random")
     field_selection["random_seed"] = str(field_selection["random_seed"] or "newwqb")
     field_selection["dataset_sampling"] = str(
         field_selection["dataset_sampling"] or "stratified"
     ).lower()
-    try:
-        field_selection["min_datasets"] = max(
-            1, int(field_selection["min_datasets"])
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("config.agent.field_selection.min_datasets 必须是整数") from exc
-    try:
-        field_selection["min_cross_dataset_pairs"] = max(
-            0, int(field_selection["min_cross_dataset_pairs"])
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "config.agent.field_selection.min_cross_dataset_pairs 必须是整数"
-        ) from exc
+    field_selection["min_datasets"] = _int_in_range(
+        field_selection["min_datasets"],
+        key="config.agent.field_selection.min_datasets",
+        minimum=1,
+    )
+    field_selection["min_cross_dataset_pairs"] = _int_in_range(
+        field_selection["min_cross_dataset_pairs"],
+        key="config.agent.field_selection.min_cross_dataset_pairs",
+        minimum=0,
+    )
     raw_pool = field_selection.get("dataset_pool") or []
     if isinstance(raw_pool, (str, int)):
         raw_pool = [raw_pool]
@@ -246,20 +285,43 @@ def _resolve_runtime_policies(agent):
         raise ValueError(f"config.agent.field_selection.{key} 必须是布尔值")
 
     search_policy = {**_SEARCH_POLICY_DEFAULTS, **dict(agent.get("search_policy") or {})}
-    try:
-        search_policy["max_pending_per_arm"] = int(search_policy["max_pending_per_arm"])
-        search_policy["ucb_exploration"] = float(search_policy["ucb_exploration"])
-    except (TypeError, ValueError) as exc:
-        raise ValueError("config.agent.search_policy 的预算参数类型无效") from exc
-    if search_policy["max_pending_per_arm"] < 1 or search_policy["ucb_exploration"] < 0:
-        raise ValueError("config.agent.search_policy 的预算参数无效")
+    search_policy["max_pending_per_arm"] = _int_in_range(
+        search_policy["max_pending_per_arm"],
+        key="config.agent.search_policy.max_pending_per_arm",
+        minimum=1,
+    )
+    search_policy["ucb_exploration"] = _finite_float(
+        search_policy["ucb_exploration"],
+        key="config.agent.search_policy.ucb_exploration",
+        minimum=0.0,
+    )
 
     quality = {**_QUALITY_DEFAULTS, **dict(agent.get("quality") or {})}
     for key in _QUALITY_DEFAULTS:
-        try:
-            quality[key] = float(quality[key])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"config.agent.quality.{key} 必须是数字") from exc
+        quality[key] = _finite_float(
+            quality[key], key=f"config.agent.quality.{key}"
+        )
+    for group_name, keys in {
+        "excellent": (
+            "min_sharpe", "min_fitness", "min_margin",
+            "min_turnover", "max_turnover",
+        ),
+        "spectacular": (
+            "min_sharpe", "min_fitness", "min_margin",
+            "min_turnover", "max_turnover",
+        ),
+    }.items():
+        group = quality.get(group_name)
+        if group is None:
+            continue
+        if not isinstance(group, dict):
+            raise ValueError(f"config.agent.quality.{group_name} 必须是对象")
+        for key in keys:
+            if key in group:
+                group[key] = _finite_float(
+                    group[key],
+                    key=f"config.agent.quality.{group_name}.{key}",
+                )
     return memory, field_selection, search_policy, quality
 
 def parse_config(raw):
@@ -269,19 +331,52 @@ def parse_config(raw):
     if not isinstance(agent, dict):
         raise ValueError("config.agent 必须是对象")  # noqa: TRY004
     incremental = dict(agent.get("incremental_value") or {})
+    incremental_max_correlation = _finite_float(
+        incremental.get("max_abs_correlation", 0.7),
+        key="config.agent.incremental_value.max_abs_correlation",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    incremental_min_overlap = _int_in_range(
+        incremental.get("min_overlap", 60),
+        key="config.agent.incremental_value.min_overlap",
+        minimum=1,
+    )
     policy = IncrementalValuePolicy(
         mode=incremental.get("mode", "required_when_available"),
-        max_abs_correlation=incremental.get("max_abs_correlation", 0.7),
-        min_overlap=incremental.get("min_overlap", 60),
+        max_abs_correlation=incremental_max_correlation,
+        min_overlap=incremental_min_overlap,
     )
     search_raw = dict(agent.get("search_policy") or {})
     research_raw = dict(agent.get("research_allocation") or {})
-    search_max = int(search_raw.get("max_simulations", research_raw.get("max_simulations", 100)))
-    research_max = int(research_raw.get("max_simulations", search_max))
+    search_max = _int_in_range(
+        search_raw.get(
+            "max_simulations", research_raw.get("max_simulations", 100)
+        ),
+        key="config.agent.search_policy.max_simulations",
+        minimum=0,
+    )
+    research_max = _int_in_range(
+        research_raw.get("max_simulations", search_max),
+        key="config.agent.research_allocation.max_simulations",
+        minimum=0,
+    )
     factory_raw = dict(agent.get("factory") or {})
-    legacy_factory_max = int(factory_raw.get("max_simulations", search_max))
-    factory_max = int(factory_raw.get("weekly_simulation_cap", legacy_factory_max))
-    daily_factory_max = int(factory_raw.get("daily_simulation_cap", factory_max))
+    legacy_factory_max = _int_in_range(
+        factory_raw.get("max_simulations", search_max),
+        key="config.agent.factory.max_simulations",
+        minimum=0,
+    )
+    factory_max = _int_in_range(
+        factory_raw.get("weekly_simulation_cap", legacy_factory_max),
+        key="config.agent.factory.weekly_simulation_cap",
+        minimum=0,
+    )
+    daily_factory_max = _int_in_range(
+        factory_raw.get("daily_simulation_cap", factory_max),
+        key="config.agent.factory.daily_simulation_cap",
+        minimum=0,
+    )
     if daily_factory_max > factory_max:
         raise ValueError("daily_simulation_cap 不得超过 weekly_simulation_cap")
     validate_budget_hierarchy(
@@ -295,15 +390,34 @@ def parse_config(raw):
             "config.agent.search_policy.enabled",
         ),
         max_simulations=search_max,
-        validation_max_simulations=int(search_raw.get("validation_max_simulations", 0) or 0),
+        validation_max_simulations=_int_in_range(
+            search_raw.get("validation_max_simulations", 0),
+            key="config.agent.search_policy.validation_max_simulations",
+            minimum=0,
+        ),
     )
+    maximum_raw = research_raw.get("maximum") or {}
+    if not isinstance(maximum_raw, dict):
+        raise ValueError("config.agent.research_allocation.maximum 必须是对象")
+    maximum = {
+        role: _int_in_range(
+            value,
+            key=f"config.agent.research_allocation.maximum.{role}",
+            minimum=0,
+        )
+        for role, value in maximum_raw.items()
+    }
     allocation = ResearchAllocation(
         max_simulations=research_max,
-        maximum=copy.deepcopy(research_raw.get("maximum") or {}),
+        maximum=maximum,
     )
     factory = FactoryConfig(
         max_simulations=factory_max,
-        max_runtime_sec=int(factory_raw.get("max_runtime_sec", 86400)),
+        max_runtime_sec=_int_in_range(
+            factory_raw.get("max_runtime_sec", 86400),
+            key="config.agent.factory.max_runtime_sec",
+            minimum=0,
+        ),
         daily_simulation_cap=daily_factory_max,
         weekly_simulation_cap=factory_max,
     )
@@ -313,19 +427,47 @@ def parse_config(raw):
     # Keep the validated typed factory model; the raw mapping remains
     # available only through ``runtime.factory`` for extensible legacy keys.
     factory_settings = dict(agent.get("factory") or {})
-    factory_settings.setdefault("daily_simulation_cap", daily_factory_max)
-    factory_settings.setdefault("weekly_simulation_cap", factory_max)
+    # The compatibility runner still treats this legacy key as its per-run
+    # cap; the typed FactoryConfig separately owns the weekly cap.
+    factory_settings["max_simulations"] = legacy_factory_max
+    factory_settings["max_runtime_sec"] = factory.max_runtime_sec
+    factory_settings["daily_simulation_cap"] = daily_factory_max
+    factory_settings["weekly_simulation_cap"] = factory_max
+    if "max_rounds" in factory_settings:
+        factory_settings["max_rounds"] = _int_in_range(
+            factory_settings["max_rounds"],
+            key="config.agent.factory.max_rounds",
+            minimum=0,
+        )
+    else:
+        factory_settings["max_rounds"] = 0
+    if "idle_sleep_sec" in factory_settings:
+        factory_settings["idle_sleep_sec"] = _finite_float(
+            factory_settings["idle_sleep_sec"],
+            key="config.agent.factory.idle_sleep_sec",
+            minimum=1.0,
+            maximum=60.0,
+        )
+    else:
+        factory_settings["idle_sleep_sec"] = 30.0
     research_allocation_raw = dict(agent.get("research_allocation") or {})
     statistical_policy = dict(agent.get("statistical_policy") or {})
     robustness_policy = dict(agent.get("robustness_policy") or {})
     yearly_policy = dict(agent.get("yearly_policy") or {})
-    try:
-        yearly_policy["min_years"] = int(yearly_policy.get("min_years", 2))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("config.agent.yearly_policy.min_years 必须是整数") from exc
-    if yearly_policy["min_years"] < 1:
-        raise ValueError("config.agent.yearly_policy.min_years 必须大于 0")
+    yearly_policy["min_years"] = _int_in_range(
+        yearly_policy.get("min_years", 2),
+        key="config.agent.yearly_policy.min_years",
+        minimum=1,
+    )
     statistical_policy.setdefault("mode", "required_when_available")
+    for key in ("min_psr", "min_dsr", "max_pbo_proxy"):
+        if key in statistical_policy and statistical_policy[key] is not None:
+            statistical_policy[key] = _finite_float(
+                statistical_policy[key],
+                key=f"config.agent.statistical_policy.{key}",
+                minimum=0.0,
+                maximum=1.0,
+            )
     robustness_policy = {
         "min_sharpe_retention": 0.7,
         "min_fitness_retention": 0.6,
@@ -334,29 +476,96 @@ def parse_config(raw):
         "require_checks_passed": True,
         **robustness_policy,
     }
+    for key in (
+        "min_sharpe_retention", "min_fitness_retention",
+        "max_turnover_multiple", "max_drawdown_multiple",
+    ):
+        robustness_policy[key] = _finite_float(
+            robustness_policy[key],
+            key=f"config.agent.robustness_policy.{key}",
+            minimum=0.0,
+        )
     runtime = AgentRuntimeConfig(
         state_dir=str(agent.get("state_dir", ".wqb_state")),
-        max_rounds=int(agent.get("max_rounds", 5)),
-        candidates_per_round=int(agent.get("candidates_per_round", 6)),
-        max_proposals_per_round=max(0, min(100, int(agent.get("max_proposals_per_round", 18)))),
-        max_concurrent_sims=int(agent.get("max_concurrent_sims", 3)),
+        max_rounds=_int_in_range(
+            agent.get("max_rounds", 5),
+            key="config.agent.max_rounds",
+            minimum=0,
+        ),
+        candidates_per_round=_int_in_range(
+            agent.get("candidates_per_round", 6),
+            key="config.agent.candidates_per_round",
+            minimum=0,
+        ),
+        max_proposals_per_round=_int_in_range(
+            agent.get("max_proposals_per_round", 18),
+            key="config.agent.max_proposals_per_round",
+            minimum=0,
+            maximum=100,
+        ),
+        max_concurrent_sims=_int_in_range(
+            agent.get("max_concurrent_sims", 3),
+            key="config.agent.max_concurrent_sims",
+            minimum=1,
+        ),
         research_integrity=_as_bool(
             agent.get("research_integrity"), False,
             "config.agent.research_integrity",
         ),
-        correlation_refresh_window=max(1, int(agent.get("correlation_refresh_window", 256))),
-        fields_per_discovery=int(agent.get("fields_per_discovery", 6)),
-        pagination_limit=int(agent.get("pagination_limit", 50)),
-        max_pagination_pages=int(agent.get("max_pagination_pages", 20)),
-        poll_timeout_sec=float(agent.get("poll_timeout_sec", 1500)),
-        replace_attempts=int(agent.get("replace_attempts", 3)),
-        replace_backoff_sec=float(agent.get("replace_backoff_sec", 60)),
-        trajectory_window=int(agent.get("trajectory_window", 100)),
-        context_experiments=int(agent.get("context_experiments", 10)),
-        fields_cache_ttl_sec=float(agent.get("fields_cache_ttl_sec", 7 * 24 * 3600)),
-        max_field_alpha_count=(
-            int(field_selection["max_alpha_count"])
-            if field_selection.get("max_alpha_count") is not None else None
+        correlation_refresh_window=_int_in_range(
+            agent.get("correlation_refresh_window", 256),
+            key="config.agent.correlation_refresh_window",
+            minimum=1,
+        ),
+        fields_per_discovery=_int_in_range(
+            agent.get("fields_per_discovery", 6),
+            key="config.agent.fields_per_discovery",
+            minimum=1,
+        ),
+        pagination_limit=_int_in_range(
+            agent.get("pagination_limit", 50),
+            key="config.agent.pagination_limit",
+            minimum=1,
+        ),
+        max_pagination_pages=_int_in_range(
+            agent.get("max_pagination_pages", 20),
+            key="config.agent.max_pagination_pages",
+            minimum=1,
+        ),
+        poll_timeout_sec=_finite_float(
+            agent.get("poll_timeout_sec", 1500),
+            key="config.agent.poll_timeout_sec",
+            minimum=0.0,
+        ),
+        replace_attempts=_int_in_range(
+            agent.get("replace_attempts", 3),
+            key="config.agent.replace_attempts",
+            minimum=1,
+        ),
+        replace_backoff_sec=_finite_float(
+            agent.get("replace_backoff_sec", 60),
+            key="config.agent.replace_backoff_sec",
+            minimum=0.0,
+        ),
+        trajectory_window=_int_in_range(
+            agent.get("trajectory_window", 100),
+            key="config.agent.trajectory_window",
+            minimum=1,
+        ),
+        context_experiments=_int_in_range(
+            agent.get("context_experiments", 10),
+            key="config.agent.context_experiments",
+            minimum=0,
+        ),
+        fields_cache_ttl_sec=_finite_float(
+            agent.get("fields_cache_ttl_sec", 7 * 24 * 3600),
+            key="config.agent.fields_cache_ttl_sec",
+            minimum=0.0,
+        ),
+        max_field_alpha_count=_optional_int_in_range(
+            field_selection.get("max_alpha_count"),
+            key="config.agent.field_selection.max_alpha_count",
+            minimum=0,
         ),
         factory=copy.deepcopy(factory_settings),
         research_allocation=copy.deepcopy(research_allocation_raw),
@@ -377,12 +586,14 @@ def parse_config(raw):
         search=search,
         research_allocation=allocation,
         factory=factory,
-        incremental_value=IncrementalValueConfig(policy.mode, policy.max_abs_correlation, policy.min_overlap),
+        incremental_value=IncrementalValueConfig(
+            policy.mode, policy.max_abs_correlation, policy.min_overlap
+        ),
         validation=ValidationConfig(yearly_policy["min_years"]),
         statistical=StatisticalConfig(str((agent.get("statistical_policy") or {}).get("mode", "required_when_available"))),
         robustness=RobustnessConfig(
-            float((agent.get("robustness_policy") or {}).get("min_sharpe_retention", 0.7)),
-            float((agent.get("robustness_policy") or {}).get("min_fitness_retention", 0.6)),
+            robustness_policy["min_sharpe_retention"],
+            robustness_policy["min_fitness_retention"],
         ),
         simulation_config=SimulationConfig({
             "neutralization": "SUBINDUSTRY",
@@ -397,3 +608,19 @@ def normalize_config(config):
     if isinstance(config, AppConfig):
         return config
     return parse_config(config)
+
+
+def apply_cli_overrides(
+    config: AppConfig,
+    *,
+    state_dir: str | None = None,
+) -> AppConfig:
+    """Apply only explicit CLI overrides to an already normalized config."""
+    if not isinstance(config, AppConfig):
+        raise TypeError("apply_cli_overrides 需要已 normalize 的 AppConfig")
+    runtime = config.runtime
+    if state_dir is not None:
+        if not isinstance(state_dir, str):
+            raise TypeError("state_dir CLI override 必须是字符串")
+        runtime = replace(runtime, state_dir=state_dir)
+    return replace(config, runtime=runtime)

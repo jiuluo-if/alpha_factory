@@ -71,3 +71,20 @@
 - 颜色分类只在 `run_proposals()` 的整批无 unresolved 分支调用 `_sync_submission_pool()`；存在 `RUNNING/PENDING` 时不会分类。即使整批完成，颜色只进入进程内 `DailyResearchCache`，进程退出后 `--sync-alpha-colors` 无法从不持久化的 trajectory 恢复历史结果。
 - 自主优化入口存在，但历史工厂 checkpoint 全为 `BASELINE/EXPLORE`。`optimize_signal_proposals()` 还要求 `DONE`、metrics、字段审计元数据和 Agent 提供的 `child_economic_hypothesis`；工厂本身不生成经济机制，因此 `agent_optimizer/CHILD` 没有触发条件。
 - 新需求涉及远程 Simulation 预算。当前阶段按 `weekly_simulation_cap=11200`（`7*1600`）、`daily_simulation_cap=1600`、`America/New_York` 本地日刷新；只保存计数/日期控制元数据，不保存模拟结果，且不能绕过未完成 checkpoint 的预算槽。
+
+## 2026-09-09 真实 round 11 恢复审计
+
+- `python main.py --takeover-preflight --offline` 与 `python main.py --agent-context --compact --json` 均确认 `BLOCKED`，安全动作是先只读对账/恢复，不能启动新 Simulation。
+- round 11 的未知提交为 `id=5d49051762fc`、`proposal_id=p-52b9c26b61b4e283`，`status=SUBMIT_UNKNOWN`、`progress_url=null`；它占用 exactly-once 边界，不能自动重发或跳过。
+- 同一 checkpoint 还有 3 个已知 URL 的 `RUNNING` 任务和 32 个无 URL 的 `PENDING` 题案。当前 `_resume_proposal_checkpoint()` 仅排除 `SUBMIT_UNKNOWN` 本身，却仍会将其余 `PENDING` 交给 `Simulator.run()`，存在未知 POST 未对账前继续新增 POST 的流程漏洞。
+- `scripts/reconcile_pending.py` 只扫描 `trajectory.jsonl`；当前运行时结果/trajectory 不持久化，因此它无法发现仅存在于 checkpoint 的 3 个已知 URL，说明恢复工具也需要与 checkpoint 边界对齐后再进行有效只读对账。
+- 最小修复位置是 `Agent._resume_proposal_checkpoint()`：在构造 `runnable` 后、调用 `Simulator.run()` 前检查 `SUBMIT_UNKNOWN`，发现时仅保留带已知 `progress_url` 的任务进入只读轮询，过滤无 URL 的 `PENDING`/未知任务；这样不改变未知提交、不新增 POST。
+- 修复后的实际策略进一步细化为：`SUBMIT_UNKNOWN` 阻断无 URL 的 `PENDING`/未知任务，但允许仅带已知 `progress_url` 的任务进入只读轮询；真实 round 11 轮询证明 3 个已知任务均可安全收敛。
+- 3 个真实完成结果均为负向/需对账证据，不构成可用 Alpha：Sharpe `0.17、0.24、-0.35`，Fitness `0.04、0.05、-0.13`；分别出现 `LOW_SUB_UNIVERSE_SHARPE` 或 `CONCENTRATED_WEIGHT` 等失败检查，`SELF_CORRELATION` 均仍为 `PENDING`。
+
+## 配置边界收敛第一阶段发现（2026-09-09）
+
+- 唯一 CLI raw mutation 位于 `main.py:202-203`；normalize 调用在其后，故缺少 `agent` 的配置会以 `KeyError` 泄漏，而不是 `config.agent` 的统一 `ValueError`。
+- `wqb_agent/config.py` 的生产 scalar 目前由散落的 `int`/`float`/`max`/`min` 解释；`max_proposals_per_round` 会把 101 静默改为 100，`correlation_refresh_window` 会把 0 静默改为 1，NaN/Infinity 也可能进入 runtime。
+- 当前 typed runtime 已是 Agent 的主要消费边界；`AppConfig.agent`/`simulation` 仍是兼容映射，CLI override 应只替换 `runtime.state_dir`，不重建 raw mapping。
+- 预算语义：factory/search/research hierarchy 允许非负整数并由 `validate_budget_hierarchy` 约束层级；daily cap 不得超过 weekly cap；example 使用 daily `1600`、weekly `11200`。

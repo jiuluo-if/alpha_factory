@@ -1643,6 +1643,10 @@ class Agent:
                 f"[SUBMIT_UNKNOWN] {len(unresolved)} 个 POST 结果不明，已保留预算槽，"
                 "不会重发；需先做平台侧只读对账。"
             )
+            # An ambiguous POST blocks every new submission in this batch.
+            # Known progress URLs remain safe to poll read-only so already
+            # submitted jobs can settle without growing the batch.
+            runnable = [exp for exp in runnable if exp.progress_url]
         if runnable:
             self.trajectory.begin_append_batch(runnable)
             try:

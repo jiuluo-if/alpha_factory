@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import wqb_agent.config as config_module
 from wqb_agent.config import AppConfig, FactoryConfig, normalize_config, parse_config
 from wqb_agent.schema import CURRENT_SCHEMA_VERSION, migrate_artifact, ARTIFACT_SCHEMAS
 from wqb_agent.doctor import run_doctor
@@ -29,6 +30,80 @@ class TestRuntimeSafety(unittest.TestCase):
         typed = normalize_config(raw)
         self.assertIsInstance(typed, AppConfig)
         self.assertIs(normalize_config(typed), typed)
+
+    def test_main_state_dir_override_reports_config_error_before_agent_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = os.path.join(tmp, "invalid.json")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump({"simulation": {}}, handle)
+            output = io.StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "main.py", "--doctor", "--offline",
+                    "--config", config_path, "--state-dir", tmp,
+                ],
+            ), redirect_stdout(output):
+                with self.assertRaises(SystemExit) as raised:
+                    main_entry.main()
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("config.agent", output.getvalue())
+
+    def test_cli_state_dir_override_is_typed_and_does_not_mutate_original(self):
+        typed = normalize_config({
+            "simulation": {},
+            "agent": {"state_dir": "original-state"},
+        })
+        apply_override = getattr(config_module, "apply_cli_overrides", None)
+        self.assertIsNotNone(apply_override)
+        overridden = apply_override(typed, state_dir="override-state")
+        self.assertIsInstance(overridden, AppConfig)
+        self.assertEqual(overridden.runtime.state_dir, "override-state")
+        self.assertEqual(typed.runtime.state_dir, "original-state")
+        self.assertEqual(typed.agent["state_dir"], "original-state")
+
+    def test_runtime_scalar_max_concurrent_sims_must_be_positive(self):
+        with self.assertRaisesRegex(
+            ValueError, "config.agent.max_concurrent_sims"
+        ):
+            parse_config({
+                "simulation": {},
+                "agent": {"max_concurrent_sims": 0},
+            })
+
+    def test_runtime_scalar_poll_timeout_rejects_negative_values(self):
+        with self.assertRaisesRegex(
+            ValueError, "config.agent.poll_timeout_sec"
+        ):
+            parse_config({
+                "simulation": {},
+                "agent": {"poll_timeout_sec": -1},
+            })
+
+    def test_runtime_scalar_poll_timeout_rejects_nan(self):
+        with self.assertRaisesRegex(
+            ValueError, "config.agent.poll_timeout_sec"
+        ):
+            parse_config({
+                "simulation": {},
+                "agent": {"poll_timeout_sec": float("nan")},
+            })
+
+    def test_max_proposals_per_round_rejects_values_above_hard_limit(self):
+        with self.assertRaisesRegex(
+            ValueError, "config.agent.max_proposals_per_round"
+        ):
+            parse_config({
+                "simulation": {},
+                "agent": {"max_proposals_per_round": 101},
+            })
+
+    def test_config_example_remains_valid_with_factory_quotas(self):
+        with open("config.example.json", encoding="utf-8") as handle:
+            config = normalize_config(json.load(handle))
+        self.assertEqual(config.factory.daily_simulation_cap, 1600)
+        self.assertEqual(config.factory.weekly_simulation_cap, 11200)
+        self.assertEqual(config.runtime.max_proposals_per_round, 100)
 
     def test_default_typed_config_is_runtime_ready(self):
         typed = normalize_config(AppConfig())
@@ -81,6 +156,7 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertEqual(config.factory.max_simulations, 11200)
         self.assertEqual(config.factory.daily_simulation_cap, 1600)
         self.assertEqual(config.factory.weekly_simulation_cap, 11200)
+        self.assertEqual(config.runtime.factory["max_simulations"], 300)
         with self.assertRaises(ValueError):
             parse_config({"simulation": {}, "agent": {
                 "factory": {

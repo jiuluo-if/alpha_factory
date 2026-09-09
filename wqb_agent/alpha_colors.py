@@ -1,10 +1,12 @@
 """Derived research-state colors for real BRAIN Alpha metadata.
 
 Colors are a thin view over existing evidence.  This module does not score
-alphas, submit alphas, or change Simulation state.  It only decides whether
-an already-evaluated experiment has enough evidence for one research-state
-color and, separately, applies an explicitly requested metadata update. Color
-evidence is not persisted locally.
+alphas, submit alphas, change Simulation state, or perform remote metadata
+writes in its domain functions.  It decides whether an already-evaluated
+experiment has enough evidence for one research-state color, summarizes that
+evidence, and loads local candidates.  Explicit remote color synchronization
+belongs to ``AlphaColorWorkflow``; the legacy wrapper below only delegates to
+that workflow. Color evidence is not persisted locally.
 """
 
 from __future__ import annotations
@@ -271,57 +273,14 @@ def _evidence_summary(experiment, classification):
 
 
 def sync_alpha_colors(experiments, client, state_dir, *, dry_run=False):
-    """Plan or apply color metadata updates; never submits an Alpha.
-
-    Color evidence is intentionally process-local now.  The state directory
-    argument remains for compatibility with the CLI, but this function never
-    writes an Alpha result or color sidecar to it.
-    """
+    """Compatibility wrapper for the explicit Alpha color workflow."""
     del state_dir
-    local = {}
-    results = []
-    seen = set()
-    for experiment in experiments or ():
-        alpha_id = _value(experiment, "alpha_id")
-        if not alpha_id or str(alpha_id) in seen:
-            continue
-        seen.add(str(alpha_id))
-        classification = classify_alpha_color(experiment)
-        prior = local.get(str(alpha_id))
-        owned = isinstance(prior, dict) and prior.get("color_managed_by") == PROJECT_COLOR_OWNER
-        desired = classification
-        if desired is None and not owned:
-            continue
-        remote = client.get_alpha(str(alpha_id))
-        old_color = remote.get("color") if isinstance(remote, dict) else None
-        action = "NOOP"
-        if old_color == desired:
-            new_color = old_color
-        elif not owned and old_color is not None:
-            action = "OWNERSHIP_CONFLICT"
-            new_color = old_color
-        elif dry_run:
-            action = "DRY_RUN_PATCH"
-            new_color = desired
-        else:
-            payload = client.set_alpha_color(str(alpha_id), desired, verify=True)
-            new_color = payload.get("color") if isinstance(payload, dict) else desired
-            if new_color != desired:
-                raise ValueError(
-                    f"Alpha {alpha_id} color readback mismatch: {new_color!r} != {desired!r}"
-                )
-            action = "PATCHED"
-            # Ownership is deliberately not persisted.  A later process must
-            # re-read the remote color and fail closed if ownership is unclear.
-        results.append({
-            "alpha_id": str(alpha_id),
-            "old_color": old_color,
-            "new_color": new_color,
-            "classification": classification,
-            "evidence": _evidence_summary(experiment, classification),
-            "action": action,
-        })
-    return results
+    from .alpha_color_workflow import AlphaColorWorkflow
+
+    return AlphaColorWorkflow(
+        get_alpha=client.get_alpha,
+        set_alpha_color=client.set_alpha_color,
+    ).sync(experiments, dry_run=dry_run)
 
 
 def load_color_candidates(state_dir):

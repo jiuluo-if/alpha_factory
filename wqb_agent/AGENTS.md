@@ -15,6 +15,8 @@
 
 `AlphaFeedWorkflow` 是 `AgentWorkflows` 的第三个成员，负责 BRAIN 用户 Alpha 的只读分页、`America/New_York` 七个自然日窗口、去重、bucket 以及 `DailyResearchCache`/`WeeklyAlphaFeedCache` 更新。它只接收 `get_all_user_alphas` 操作，不接收整个 Client，不依赖 Agent、Simulator、proposal/suggestion/optimizer workflow，不产生 POST、PATCH、submission 或 checkpoint 写入。`OptimizerWorkflow` 是第四个成员，拥有 `_cloud_alpha_ids()` 消费逻辑、已有证据筛选、Agent hypothesis gate 和 AlphaFactory CHILD 编排；cloud metadata 只作排序提示。
 
+`alpha_colors.py` 是纯 derived color domain owner：保留 `classify_alpha_color()`、`has_research_signal()`、轻量 evidence summary 与 `load_color_candidates()`，不执行远端写入。`AlphaColorWorkflow` 是独立的 CLI control/write workflow，不属于四个 `AgentWorkflows`；它通过窄的 `get_alpha` / `set_alpha_color` hooks 编排远端读取、ownership fail-closed、dry-run、verified PATCH 和结果摘要。`main.py` 继续拥有锁、lazy Client、CLI JSON 与 exit code；只有显式 `alpha sync-colors` 才允许颜色 metadata 写入。
+
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 
 ## 不变量

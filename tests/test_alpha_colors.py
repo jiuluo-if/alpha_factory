@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from wqb_agent.alpha_colors import (
     classify_alpha_color,
     has_research_signal,
+    load_color_candidates,
     sync_alpha_colors,
 )
+from wqb_agent.state import Experiment
 from wqb_agent.client import WQBClient
 
 
@@ -195,6 +197,41 @@ class TestAlphaColorSync(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sync_alpha_colors([exp], client, tmp, dry_run=False)
         self.assertEqual(client.submit_calls, [])
+
+
+class TestAlphaColorCandidates(unittest.TestCase):
+    def test_loader_keeps_newest_valid_experiment_per_alpha_and_skips_bad_rows(self):
+        first = Experiment(
+            1, "h1", "rank(close)", {}, [], alpha_id="a1", created_at=10
+        )
+        newest = Experiment(
+            2, "h2", "rank(volume)", {}, [], alpha_id="a1", created_at=20
+        )
+        same_time_later_round = Experiment(
+            3, "h4", "rank(vwap)", {}, [], alpha_id="a1", created_at=20
+        )
+        other = Experiment(
+            1, "h3", "rank(open)", {}, [], alpha_id="a2", created_at=15
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trajectory.jsonl")
+            with open(path, "w", encoding="utf-8") as stream:
+                for row in (
+                    first.to_dict(),
+                    {"alpha_id": "a1", "created_at": 30},
+                    {"id": "missing-alpha", "created_at": 40},
+                    newest.to_dict(),
+                    same_time_later_round.to_dict(),
+                    other.to_dict(),
+                ):
+                    stream.write(json.dumps(row) + "\n")
+
+            candidates = load_color_candidates(tmp)
+
+        self.assertEqual(
+            [(item.alpha_id, item.expression) for item in candidates],
+            [("a2", "rank(open)"), ("a1", "rank(vwap)")],
+        )
 
 
 class FakeResponse:

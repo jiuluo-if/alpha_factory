@@ -89,6 +89,8 @@ AgentWorkflows
 
 `SuggestionWorkflow`、`ProposalExecutionWorkflow` 与 `OptimizerWorkflow` 使用同一套 `RuntimeComponents` 身份；`AlphaFeedWorkflow` 使用 Agent 已创建的两个 cache 实例，Optimizer 复用同一 trajectory、weekly cache 和 AlphaFactory。组合器不创建第二套状态、执行器或 checkpoint 路径。Alpha Feed 只同步轻量远端元数据，Optimizer 只消费已有证据；两者都不建立第二套研究状态。Agent 继续提供旧属性 projection，避免为了装配重构而大范围改变研究方法和安全执行代码。
 
+Alpha 颜色有意分成两个边界：`alpha_colors.py` 是纯 evidence-derived classification、轻量 evidence summary 和 trajectory candidate loading 的 owner；`alpha_color_workflow.py` 的 `AlphaColorWorkflow` 是独立的 CLI control/write workflow，不属于四个 `AgentWorkflows`。它只接收 `get_alpha` / `set_alpha_color` operation-shaped hooks，负责远端当前颜色、ownership fail-closed、dry-run、verified PATCH 与 readback 结果。`main.py` 负责 `alpha sync-colors` 的单实例锁、lazy Client、JSON/exit code；没有该显式命令时不会自动 PATCH 颜色。`DailyResearchCache.colors` 仍是进程内视图，不是远端颜色 ownership 或证据存储。
+
 ## 机制与研究策略
 
 必须 fail-closed 的机制包括 schema、expression dedup、hard budget、checkpoint recovery、锁、Retry-After、known-URL polling 和 unknown-write reconciliation。

@@ -227,6 +227,84 @@ class TestLegacyCliCanonicalization(unittest.TestCase):
 
 
 class TestCliRuntimeSafety(unittest.TestCase):
+    def test_sync_colors_dispatches_to_color_workflow_without_agent(self):
+        changes = [{
+            "alpha_id": "a1",
+            "old_color": None,
+            "new_color": "GREEN",
+            "classification": "GREEN",
+            "evidence": {},
+            "action": "DRY_RUN_PATCH",
+        }]
+        with patch.object(
+            main_entry, "acquire_single_instance_lock", return_value="lock"
+        ) as acquire, patch.object(
+            main_entry, "release_single_instance_lock"
+        ) as release, patch(
+            "wqb_agent.WQBClient"
+        ) as client_class, patch(
+            "wqb_agent.alpha_colors.load_color_candidates",
+            return_value=[object()],
+        ) as load_candidates, patch(
+            "wqb_agent.alpha_color_workflow.AlphaColorWorkflow"
+        ) as workflow_class, patch(
+            "wqb_agent.Agent",
+            side_effect=AssertionError("sync-colors 不应构造 Agent"),
+        ):
+            workflow_class.return_value.sync.return_value = changes
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main_entry.main([
+                    "--config", "config.example.json",
+                    "--state-dir", "tests/fixtures",
+                    "alpha", "sync-colors", "--dry-run",
+                ])
+
+        acquire.assert_called_once_with(
+            "tests/fixtures", operation="sync-alpha-colors"
+        )
+        release.assert_called_once_with("lock")
+        client = client_class.return_value
+        workflow_class.assert_called_once_with(
+            get_alpha=client.get_alpha,
+            set_alpha_color=client.set_alpha_color,
+        )
+        load_candidates.assert_called_once_with("tests/fixtures")
+        workflow_class.return_value.sync.assert_called_once_with(
+            load_candidates.return_value, dry_run=True
+        )
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["dry_run"])
+        self.assertFalse(payload["network_write"])
+
+    def test_sync_colors_failure_keeps_json_and_exit_contract(self):
+        with patch.object(
+            main_entry, "acquire_single_instance_lock", return_value="lock"
+        ), patch.object(
+            main_entry, "release_single_instance_lock"
+        ) as release, patch(
+            "wqb_agent.WQBClient"
+        ), patch(
+            "wqb_agent.alpha_colors.load_color_candidates",
+            return_value=[],
+        ), patch(
+            "wqb_agent.alpha_color_workflow.AlphaColorWorkflow"
+        ) as workflow_class:
+            workflow_class.return_value.sync.side_effect = ValueError(
+                "color readback mismatch"
+            )
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit) as raised:
+                    main_entry.main([
+                        "--config", "config.example.json",
+                        "alpha", "sync-colors",
+                    ])
+
+        self.assertEqual(raised.exception.code, 1)
+        release.assert_called_once_with("lock")
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "FAILED")
+        self.assertTrue(payload["network_write"])
+
     def test_local_readonly_commands_do_not_construct_client(self):
         for argv in (
             ["--config", "config.example.json", "factory", "status"],

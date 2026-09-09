@@ -6,39 +6,34 @@
 
 | 类别 | 固定路径/模式 | 内容与权威性 | 处理规则 |
 |---|---|---|---|
-| 记忆：决策视图 | `context.md` | 给下一轮读取的压缩视图；可由程序重建 | 先读；不手改 |
-| 记忆：经验库 | `experience.json` | `current_best`、`active_hypotheses`、`short_term`、`lessons`、`avoid`、`next`、压缩编码的 `seen_expressions_blob` | 通过 `ExperienceMemory` 或维护脚本更新；表达式运行时解压用于精确去重 |
-| 记忆：墓碑 | `garbage.json` | 被遗忘、过期或淘汰条目的可恢复记录 | 只软删除；不与经验库混写 |
-| 原始证据 | `trajectory.jsonl` | append-only 实验事件，最完整的历史事实源 | 只追加；禁止排序、压缩或覆盖 |
+| 运行记忆 | `context.md`、`experience.json`、`garbage.json` | 可选的 Agent 进程内决策视图；默认运行不落盘 | 新进程不从本地结果恢复 |
+| 原始证据 | 进程内 trajectory/ledger | 当前进程的短期去重和生命周期视图 | 不落盘；远程未完成状态只由 checkpoint 恢复 |
 | 执行恢复 | `round_*.checkpoint.json`、`run.lock`（POSIX 另有 OS guard） | 提交状态、progress URL、锁和崩溃恢复依据 | OS owner 存活或存在未完成 checkpoint 时禁止新轮和移动 |
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写 |
-| 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、预算、最近动作和 `stop_requested` | 固定单文件；`--factory-status` 只读，`--factory-stop` 原子请求安全停止；不按轮次复制 session/log |
-| 展示缓存 | `sims_results.json`、`reconcile_report.json`、`recovered_candidates.json` | 可重建的结果、对账和分析输出 | 不覆盖 checkpoint 或 trajectory |
-| 实验审计侧车 | `trial_ledger.jsonl` | generated/preflight/submitted/completed 生命周期和 family/lineage/template/field 计数 | append-only；缺失时可从新实验重新建立，不替代 trajectory/checkpoint |
-| 发现与证据侧车 | `fields_cache.json`、`evidence_cache.json`、`platform_field_catalog_YYYYMMDD/` | 字段目录、平台证据缓存与字段快照 | 日期目录不可覆盖；优先最新完整 manifest |
+| 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、最近动作、`stop_requested` 和本地配额控制元数据 | 固定单文件；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`--factory-status` 只读，`--factory-stop` 原子请求安全停止；不按轮次复制 session/log |
+| 当日内存缓存 | 进程内 `DailyResearchCache` | 以 `America/New_York` 本地日分桶的模拟、Alpha 和颜色视图 | 跨纽约本地日自动清空；不写文件 |
+| 结果/提交侧车 | 不再生成 `sims_results.json`、`submission_pool.json`、`evidence_cache.json`、颜色 evidence | 模拟结果、已提交 Alpha 和颜色判定的临时视图 | 只在当日内存缓存中存在 |
+| 发现缓存 | `fields_cache.json`、`platform_field_catalog_YYYYMMDD/` | 按纽约本地日固化的多数据集字段目录与字段快照；生产发现会只读刷新平台 `alphaCount` 做字段查重 | 只保存字段元数据、查询范围、哈希和平台使用量状态，不保存模拟/Alpha 结果；缺失平台计数在严格模式下不准入 |
 | 平台审计快照 | `active_alphas_YYYYMMDD.json`、`new_active_details_YYYYMMDD.json` | ACTIVE Alpha 辅助 provenance | 只作审计背景；平台当前响应优先 |
 | 隔离区 | `quarantine/` | 明确隔离的异常、备份或不可直接使用材料；例如 `quarantine/submission_pool_history/`、`quarantine/duplicate_round_summaries/` | 不得自动回流生产链 |
-| 当前轮次摘要 | `.wqb_state/round_N.json` | 最近轮次摘要 | 根目录只保留最近 10 个；历史摘要归档到 `docs/archive/rounds/` |
-| 历史轮次 | `docs/archive/rounds/round_N.json` | 已完成轮次摘要 | 保持十进制编号；由 `scripts/archive_completed_rounds.py` 归档 |
-| 历史 checkpoint | `docs/archive/checkpoints/round_N.checkpoint.json` | 已完成 checkpoint 的审计副本 | 仅归档 `complete=true`；未完成任务必须留在 `.wqb_state/` |
+| 当前 checkpoint | `round_*.checkpoint.json` | 未完成远程任务的 progress URL、身份和最小恢复元数据 | 这是唯一结果恢复边界；不得手工覆盖 |
 
 ## 记忆阅读顺序
 
-1. `context.md`：快速了解当前结论、`avoid`、`next` 和未完成任务。
-2. `experience.json`：核对短期经验、长期 lessons、候选谱系和已见表达式。
-3. `garbage.json`：仅在判断某机制是否已淘汰、是否可恢复时查阅。
-4. `trajectory.jsonl`：对关键结论做原始实验回溯；按关键词定位，不整读大文件。`trajectory_window` 仅保留内存近期窗口（默认 512），旧 parent 由 `Trajectory` 流式查找，完整原始证据仍只保存在该 JSONL 文件。
-5. checkpoint 与 evidence cache：恢复任务或补齐平台后处理时查阅。
+1. 当前进程内 Agent 记忆和日缓存：只用于本轮决策，不作为事实源。
+2. checkpoint：恢复任务、核对远程状态和 exactly-once 边界。
+3. BRAIN live response：模拟与 Alpha 的真实当前证据。
 
 ## 冲突仲裁与整理边界
 
-- 未完成传输状态以 checkpoint 为准；已确认实验事实以 trajectory 为准；展示结果以可重建缓存为准。
+- 未完成传输状态以 checkpoint 为准；已确认实验事实以 BRAIN live response 为准；本地结果只存在当日内存缓存。
 - `context.md` 与 `experience.json` 是压缩决策视图，不得反向覆盖原始证据。
 - Experiment 的 `yearly_evidence` 是由已知 Alpha 的 aggregates 派生的年度稳定性证据；缺失或 `UNKNOWN` 不得解释为稳定通过。
 - Experiment 的 `validation_plan`/`validation_report` 记录预注册 robustness 变量与聚合判定；只有 report `PASS` 的 parent 才能为 `STABLE`、进入 `current_best` 或提交池。
-- `validation_reports.jsonl` 是 validation report 的 append-only 派生审计证据，不替代 trajectory 或 checkpoint。
+- validation report 只在当前进程中参与判断，不作为本地历史结果留存。
 - `SELF_CORRELATION` 缺失、`PENDING` 或未完成时只能标记 `RECONCILE`，不得升级为 `PROMOTE`。
 - 任何历史状态快照、`quarantine/` 内容和本地字段目录都不能冒充当前 BRAIN API 响应。
+- 字段选择必须使用可复现种子做多数据集分层抽样；`dataset_selection` 中的池、顺序、选中数量和拒绝原因是审计证据，不能用一个数据集的字段数量冒充多数据集覆盖。
 - 允许新增审计说明或外部报告；禁止手工移动/重命名 canonical 文件、删除运行锁、覆盖状态文件，或把备份直接放回生产路径。
 - 需要归档的历史材料移至 `docs/archive/`，按对象类别分类；不要在 `.wqb_state` 内复制一份“整理版”状态。
 - 非 canonical 的状态备份可移入已有 `quarantine/<category>/` 子目录；保留原文件名和内容，并在本文件或审计记录中说明来源。

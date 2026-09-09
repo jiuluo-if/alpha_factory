@@ -14,7 +14,7 @@
 ## 不变量
 
 - `Agent.run_proposals()` 仍是受保护的 Simulation 路径。
-- POST 前持久化 identity/checkpoint；写结果含糊时只轮询或对账同一 job，绝不重复 POST。
+- POST 前持久化 identity/checkpoint；写结果含糊时只轮询或对账同一 job，绝不重复 POST。模拟与 Alpha 结果不落盘，按 America/New_York 本地日只保留进程内缓存。
 - 保留 Retry-After、锁、预算、schema、expression dedup 和 `UNKNOWN` / `UNAVAILABLE`。
 - Alpha submission 始终手工完成。
 

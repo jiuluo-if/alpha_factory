@@ -14,6 +14,20 @@
 
 当前官方接口登记：`authentication`、`data_sets`、`data_fields`、`simulations`、已知 progress URL、`alphas`、`aggregates`、`self_correlation`、`prod_correlation`。
 
+字段查重使用 `data_fields` 响应中的平台 `alphaCount`（兼容内部标准化键
+`alpha_count`）。查重键必须是 `(dataset_id, field_id)`，不能只用字段名；它表示字段在平台现有 Alpha 中的使用量，是本地不保留
+Simulation/Alpha 结果时的唯一字段使用事实源。字段发现命中本地目录或
+`fields_cache.json` 时，生产配置仍会对候选数据集发起只读刷新；刷新失败或
+缺少 `alphaCount` 保持 `UNKNOWN`，严格模式不进入工厂批次。该刷新不保存
+Simulation 结果、Alpha payload 或提交历史。
+
+字段目录按 `America/New_York` 本地日固化为
+`platform_field_catalog_YYYYMMDD/manifest.json` 加数据集字段文件。manifest
+记录查询范围、抓取时间、字段数量、字段哈希和平台使用量状态；目录只包含
+平台字段元数据，不包含 Simulation/Alpha 结果。多数据集发现使用可复现种子做
+分层轮询，优先保证配置的 `min_datasets` 覆盖，再按字段评分和随机扰动取样。
+当前选择必须在 discovery bundle 中暴露数据集池、顺序、选中数量和拒绝原因。
+
 仅观察登记：`operators`、`alpha_check`、`pnl`。这些接口没有被生产 client 自动调用；只有 capability probe 或脱敏 fixture 可以证明其当前可用性。
 
 Retry-After 支持秒数和 HTTP-date，统一由 `retry_after_seconds()` 解析，并拒绝负数、非有限值和畸形值。429 仍受全局 gate 与预算约束，Simulation POST 的未知结果仍进入 `SUBMIT_UNKNOWN`。

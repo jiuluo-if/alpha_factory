@@ -61,7 +61,15 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 
 ## Alpha 顶层 color
 
-`--sync-alpha-colors` 只把已有研究证据映射到 BRAIN Alpha 顶层 `color`，不评分、不创建 Simulation、不提交 Alpha；`--dry-run` 仅预览。`PURPLE` 表示可提交且已有独立/增量价值证据，`GREEN` 表示可提交，`RED` 表示有信号但存在自相关、相关性或稳健性阻断，`BLUE` 表示强信号但仍待关键证据，`YELLOW` 表示有机制的 promising 信号。无信号、失败、重复、参数幸运或证据不足保持无颜色；已有非本项目颜色不覆盖。
+`--sync-alpha-colors` 只把已有研究证据映射到 BRAIN Alpha 顶层 `color`，不评分、不创建 Simulation、不提交 Alpha；`--dry-run` 仅预览。`PURPLE` 表示可提交且已有独立/增量价值证据，`GREEN` 表示可提交，`RED` 表示有信号但存在自相关、相关性或稳健性阻断，`BLUE` 表示强信号但仍待关键证据，`YELLOW` 表示有机制的 promising 信号。无信号、失败、重复、参数幸运或证据不足保持无颜色；已有非本项目颜色不覆盖。颜色检测结果只保存在当前进程的 America/New_York 日缓存中，不生成颜色 evidence 侧车。
+
+颜色触发分为两个时点：Simulation settle 时更新单个实验的当前日颜色视图，批次收尾时使用已刷新验证/相关性证据再次同步提交池视图。颜色是既有证据的派生视图，不会因为颜色分类而创建请求、修改 checkpoint 或提交 Alpha。
+
+## 自主优化触发边界与阶段配额
+
+自主优化不是“有历史结果就自动变参”。门禁要求 parent 已完成、拥有完整平台指标、字段理解与字段分析，并且研究 Agent 明确提交非参数性的 `child_economic_hypothesis`、变化类型和反证标准。缺少任一条件时，`optimizer_context.blocked_reasons` 记录原因，继续走普通 discovery，不生成伪 CHILD。
+
+当前阶段本地 Simulation admission quota 为每周 `11200` 次（`7*1600`），每日 `1600` 次，日期按 `America/New_York` 计算。配额只保留 schema、日期、周起点、上限和预留计数；模拟结果、Alpha ID、metrics、颜色证据仍不进入配额文件。每日刷新只释放日槽位，不能清除周计数，也不能覆盖未完成 checkpoint 的恢复预留。
 
 ## Agent 接管与效率
 

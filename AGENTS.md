@@ -7,7 +7,7 @@
 - 先读：`AGENTS.md` → `wqb_agent/research_api.py` → 当前任务目标 → 一个直接依赖和一个测试；不要递归扫描仓库。
 - 只读上下文：`python main.py --agent-context --compact`；机器读取加 `--json`。它复用 takeover preflight/audit/doctor，`BLOCKED` 时只做对账/恢复，不启动 Simulation。
 - 唯一执行入口：`python main.py --suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py --run-proposals`；不得绕过 `Agent.run_proposals()`。
-- 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、trajectory append-only、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。
+- 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 结果按美国东部本地日仅作内存缓存，不在本地留存历史结果。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
 - 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。
 
@@ -23,7 +23,7 @@
 
 ### Research State
 
-现有 trajectory、checkpoint、ledger 和压缩上下文保存已经发生的实验、证据和恢复边界。cache 与报告是可重建派生物，不是事实源。
+checkpoint 保存未完成实验的恢复边界；trajectory、ledger、压缩上下文和结果视图只在当前进程内使用，不作为本地历史事实源。模拟/Alpha/颜色结果按 America/New_York 本地日做内存缓存，BRAIN live response 才是平台事实。
 
 ### Evaluation
 

@@ -66,3 +66,9 @@ tests/                     # 核心安全不变量和可观察行为
 python -m unittest discover -s tests
 python -m compileall -q wqb_agent scripts tests
 ```
+
+## 颜色、Agent 优化与阶段配额
+
+- 颜色在每个 Simulation settle 后立即刷新当前进程的 `DailyResearchCache`，整批结束时再按完整证据重算；因此混合批次或中断不会把颜色更新延迟到整批成功。
+- `suggestions.json` 的 `optimizer_context` 是优化门禁的可审计摘要。只有 DONE、指标、字段审计元数据齐全，并由 Agent 明确提供 `child_economic_hypothesis` 时，才允许生成 `CHILD`/`agent_optimizer` 候选；参数、窗口、符号扫描不构成自主优化。
+- 当前阶段工厂本地配额为每周 `11200` 次（`7*1600`），每日 `1600` 次，按 `America/New_York` 本地日刷新。`factory_session.json` 只保存配额控制元数据；未完成 checkpoint 的恢复预留优先，不能通过新轮绕过。

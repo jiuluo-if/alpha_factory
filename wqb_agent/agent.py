@@ -10,7 +10,6 @@ DO NOT USE FOR: choosing economic hypotheses or bypassing `research_api`.
 import json
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
 
 from .artifacts import iter_jsonl_objects
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
@@ -40,6 +39,7 @@ from .state import (
 )
 from .submission import latest_active_snapshot, self_correlation_evidence
 from .submission import submission_eligibility
+from .alpha_feed_workflow import AlphaFeedHooks, remote_local_date
 from .runtime_components import build_runtime_components
 from .proposal_execution import ProposalExecutionHooks
 from .suggestion_workflow import SuggestionHooks
@@ -54,9 +54,8 @@ from .validation_report import (
 )
 from .config import normalize_config
 from .research_evidence import ResearchEvidenceBundle
-from .daily_cache import DailyResearchCache, NEW_YORK
+from .daily_cache import DailyResearchCache
 from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
-from .client import WQBQueryTooBroadError
 
 SEED_HYPOTHESES = [
     {
@@ -241,18 +240,26 @@ class Agent:
                     self.memory, "best_exhausted", False
                 ),
             ),
+            alpha_feed=AlphaFeedHooks(
+                get_all_user_alphas=getattr(
+                    self.client, "get_all_user_alphas", None
+                ),
+            ),
         )
 
     def _init_workflows(self):
-        """用已存在的组件和 hooks 完成两个 workflow 的唯一装配。"""
+        """用已存在的组件和 hooks 完成三个 workflow 的唯一装配。"""
         workflows = build_agent_workflows(
             components=self.runtime_components,
             policy=self.runtime_policy,
             operator_reference=self.operator_reference,
             hooks=self._build_workflow_hooks(),
+            daily_cache=self.daily_cache,
+            weekly_cache=self.alpha_feed_cache,
         )
         self.suggestion_workflow = workflows.suggestion
         self.proposal_execution = workflows.proposal_execution
+        self.alpha_feed_workflow = workflows.alpha_feed
 
     # ------------------------------------------------------------ running
 
@@ -418,155 +425,11 @@ class Agent:
 
     @staticmethod
     def _remote_local_date(value):
-        if not isinstance(value, str) or not value.strip():
-            return None
-        try:
-            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(NEW_YORK).date().isoformat()
+        return remote_local_date(value)
 
     def refresh_remote_alpha_feed(self, *, limit=100):
-        """Pull the rolling seven-day submitted/simulated Alpha views together.
-
-        This is a read-only refresh.  Only lightweight IDs, status, local day,
-        and timestamps enter the rebuildable weekly cache; result metrics and
-        Alpha evidence remain owned by the live API/checkpoint boundaries.
-        """
-        refreshed_at = time.time()
-        local_date = self.daily_cache.local_date
-        current_day = date.fromisoformat(local_date)
-        week_start = current_day - timedelta(days=6)
-        days = {}
-
-        def fetch_window(status, field):
-            start = datetime.combine(
-                week_start, datetime.min.time(), tzinfo=NEW_YORK
-            ) - timedelta(seconds=1)
-            end = datetime.combine(
-                current_day + timedelta(days=1), datetime.min.time(),
-                tzinfo=NEW_YORK,
-            )
-
-            def fetch(start_at, end_at, depth):
-                kwargs = {
-                    "status": status,
-                    "limit": limit,
-                    "max_results": 1000,
-                }
-                if field == "created":
-                    kwargs.update({
-                        "date_created_after": start_at.isoformat(),
-                        "date_created_before": end_at.isoformat(),
-                    })
-                else:
-                    kwargs.update({
-                        "date_submitted_after": start_at.isoformat(),
-                        "date_submitted_before": end_at.isoformat(),
-                    })
-                try:
-                    return self.client.get_all_user_alphas(**kwargs)
-                except WQBQueryTooBroadError:
-                    if depth >= 12 or end_at - start_at <= timedelta(minutes=1):
-                        raise
-                    midpoint = start_at + (end_at - start_at) / 2
-                    return (
-                        fetch(start_at, midpoint + timedelta(seconds=1), depth + 1)
-                        + fetch(midpoint - timedelta(seconds=1), end_at, depth + 1)
-                    )
-
-            return fetch(start, end, 0)
-
-        def unique_rows(rows):
-            result = []
-            seen = set()
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                identity = row.get("id")
-                if identity is None or str(identity) in seen:
-                    continue
-                seen.add(str(identity))
-                result.append(row)
-            return result
-
-        submitted_rows = unique_rows(fetch_window("SUBMITTED", "submitted"))
-        simulated_rows = unique_rows(fetch_window("UNSUBMITTED", "created"))
-
-        def bucket_for(value):
-            local_value = self._remote_local_date(value)
-            if local_value is None:
-                return None
-            try:
-                parsed = date.fromisoformat(local_value)
-            except ValueError:
-                return None
-            if not (week_start <= parsed <= current_day):
-                return None
-            key = parsed.isoformat()
-            return days.setdefault(key, {"simulations": [], "submitted_alphas": []})
-
-        submitted = []
-        for row in submitted_rows:
-            if not isinstance(row, dict) or not row.get("id"):
-                continue
-            record = {
-                "alpha_id": str(row["id"]),
-                "status": row.get("status"),
-                "date_submitted": row.get("dateSubmitted"),
-                "local_date": self._remote_local_date(row.get("dateSubmitted")),
-                "source": "/users/self/alphas",
-            }
-            bucket = bucket_for(row.get("dateSubmitted"))
-            if bucket is not None:
-                bucket["submitted_alphas"].append(record)
-                submitted.append(record)
-        submitted.sort(
-            key=lambda item: str(item.get("date_submitted") or ""),
-            reverse=True,
-        )
-        today_simulated = []
-        weekly_simulated = []
-        for row in simulated_rows:
-            if not isinstance(row, dict) or not row.get("id"):
-                continue
-            row_local_date = self._remote_local_date(row.get("dateCreated"))
-            bucket = bucket_for(row.get("dateCreated"))
-            if bucket is None:
-                continue
-            record = {
-                "alpha_id": str(row["id"]),
-                "status": row.get("status"),
-                "date_created": row.get("dateCreated"),
-                "local_date": row_local_date,
-                "source": "/users/self/alphas",
-            }
-            bucket["simulations"].append(record)
-            weekly_simulated.append(record)
-            if row_local_date == local_date:
-                today_simulated.append(record)
-        today_simulated.sort(
-            key=lambda item: str(item.get("date_created") or ""),
-            reverse=True,
-        )
-        weekly_simulated.sort(
-            key=lambda item: str(item.get("date_created") or ""),
-            reverse=True,
-        )
-        self.daily_cache.put_submitted_alphas(submitted)
-        self.daily_cache.put_simulations(today_simulated)
-        cache_result = self.alpha_feed_cache.refresh(days)
-        return {
-            "local_date": local_date,
-            "refreshed_at": refreshed_at,
-            "submitted_count": len(submitted),
-            "today_simulated_count": len(today_simulated),
-            "weekly_simulated_count": len(weekly_simulated),
-            **cache_result,
-            "source": "/users/self/alphas",
-        }
+        """兼容 facade：执行 Alpha Feed 的只读同步。"""
+        return self.alpha_feed_workflow.refresh(limit=limit)
 
     def generate_optimized_proposals(self, parents=None, *, max_candidates=4):
         """Return only evidence-backed Agent optimization candidates.

@@ -101,7 +101,7 @@ class TestAgentRuntimeComposition(unittest.TestCase):
             "trajectory", "trial_ledger", "builder", "alpha_factory", "discovery",
             "simulator", "reflector", "checkpoints", "submission_pool",
             "suggestion_workflow", "proposal_execution", "daily_cache",
-            "alpha_feed_cache",
+            "alpha_feed_cache", "alpha_feed_workflow",
         )
         for attribute in public_attributes:
             self.assertTrue(hasattr(agent, attribute), attribute)
@@ -129,6 +129,8 @@ class TestAgentRuntimeComposition(unittest.TestCase):
         self.assertIs(context.memory, agent.memory)
         self.assertIs(context.search_policy, agent.search_policy)
         self.assertIs(context.reflector, agent.reflector)
+        self.assertIs(agent.alpha_feed_workflow.daily_cache, agent.daily_cache)
+        self.assertIs(agent.alpha_feed_workflow.weekly_cache, agent.alpha_feed_cache)
 
     def test_domain_component_constructors_are_not_duplicated(self):
         constructors = {

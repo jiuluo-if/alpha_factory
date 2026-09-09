@@ -48,6 +48,7 @@ wqb_agent/research_api.py  # Agent-facing facade
 wqb_agent/runtime_policy.py       # AppConfig 到 Agent 运行时投影
 wqb_agent/runtime_components.py   # 唯一的基础领域组件
 wqb_agent/runtime_composition.py  # 两个 workflow 的显式组合边界
+wqb_agent/alpha_feed_workflow.py  # 只读 Alpha 元数据同步
 wqb_agent/                 # BRAIN、执行、状态和评估实现
 main.py                    # 兼容 CLI 与安全入口
 docs/                      # 当前协议、研究政策与少量参考
@@ -68,13 +69,16 @@ RuntimeComponents
 AgentWorkflows
   ├── SuggestionWorkflow（只读建议）
   └── ProposalExecutionWorkflow（提案执行与恢复）
+  └── AlphaFeedWorkflow（只读 Alpha 元数据同步）
 ```
 
 `AgentRuntimePolicy` 只保存 Agent 实际消费的已解析值，不复制完整
 `AppConfig`。`RuntimeComponents` 只拥有 memory、trajectory、ledger、discovery、
-simulator、checkpoint 等基础对象，不承担 workflow 编排；两个 workflow 共享这套对象，
+simulator、checkpoint 等基础对象，不承担 workflow 编排；三个 workflow 共享既有组件或缓存，
 不会自行创建第二个 `Simulator`、`Trajectory` 或 `CheckpointStore`。Agent 仍投影旧的
-public attributes，以保持兼容 facade 和现有研究方法不变。
+public attributes，以保持兼容 facade 和现有研究方法不变。`AlphaFeedWorkflow` 只读取
+`get_all_user_alphas`，维护 `America/New_York` 七个自然日的轻量元数据，不发送 Simulation
+POST、不 PATCH Alpha，也不写入指标或研究证据。
 
 ## 文档入口
 

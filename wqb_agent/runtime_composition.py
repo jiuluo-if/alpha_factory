@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .alpha_feed_workflow import AlphaFeedHooks, AlphaFeedWorkflow
 from .proposal_execution import (
     ProposalExecutionContext,
     ProposalExecutionHooks,
@@ -16,18 +17,20 @@ from .suggestion_workflow import SuggestionHooks, SuggestionWorkflow
 
 @dataclass(frozen=True)
 class AgentWorkflowHooks:
-    """两个 workflow 所需的显式 Agent 操作回调。"""
+    """三个 workflow 所需的显式 Agent 操作回调。"""
 
     suggestion: SuggestionHooks
     proposal_execution: ProposalExecutionHooks
+    alpha_feed: AlphaFeedHooks
 
 
 @dataclass(frozen=True)
 class AgentWorkflows:
-    """由同一套基础组件组合出的两个 workflow。"""
+    """由同一套基础组件和缓存组合出的三个 workflow。"""
 
     suggestion: SuggestionWorkflow
     proposal_execution: ProposalExecutionWorkflow
+    alpha_feed: AlphaFeedWorkflow
 
 
 def build_agent_workflows(
@@ -36,8 +39,10 @@ def build_agent_workflows(
     policy: AgentRuntimePolicy,
     operator_reference: dict,
     hooks: AgentWorkflowHooks,
+    daily_cache,
+    weekly_cache,
 ) -> AgentWorkflows:
-    """使用既有组件和显式 hooks 构造 workflow，不创建第二套组件。"""
+    """使用既有组件、缓存和显式 hooks 构造 workflow。"""
     suggestion = SuggestionWorkflow(
         discovery=components.discovery,
         memory=components.memory,
@@ -73,7 +78,13 @@ def build_agent_workflows(
             require_platform_alpha_count=policy.require_platform_alpha_count,
         )
     )
+    alpha_feed = AlphaFeedWorkflow(
+        alpha_reader=hooks.alpha_feed.get_all_user_alphas,
+        daily_cache=daily_cache,
+        weekly_cache=weekly_cache,
+    )
     return AgentWorkflows(
         suggestion=suggestion,
         proposal_execution=proposal_execution,
+        alpha_feed=alpha_feed,
     )

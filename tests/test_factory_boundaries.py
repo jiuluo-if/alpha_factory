@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 from wqb_agent.daily_cache import DailyResearchCache
 from wqb_agent.alpha_feed_cache import WeeklyAlphaFeedCache
+from wqb_agent.alpha_feed_workflow import AlphaFeedWorkflow
 from wqb_agent.alpha_factory import (
     AlphaFactory,
     AlphaTemplate,
@@ -211,6 +212,11 @@ class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
                 os.path.join(tmp, "weekly.json"),
                 clock=lambda: _utc_timestamp(dt.datetime(2026, 9, 9, 12, 0)),
             )
+            agent.alpha_feed_workflow = AlphaFeedWorkflow(
+                alpha_reader=agent.client.get_all_user_alphas,
+                daily_cache=agent.daily_cache,
+                weekly_cache=agent.alpha_feed_cache,
+            )
             snapshot = agent.refresh_remote_alpha_feed(limit=20)
 
             self.assertEqual(snapshot["submitted_count"], 1)
@@ -262,6 +268,11 @@ class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
             agent.alpha_feed_cache = WeeklyAlphaFeedCache(
                 os.path.join(tmp, "weekly.json"),
                 clock=lambda: _utc_timestamp(dt.datetime(2026, 9, 9, 12, 0)),
+            )
+            agent.alpha_feed_workflow = AlphaFeedWorkflow(
+                alpha_reader=agent.client.get_all_user_alphas,
+                daily_cache=agent.daily_cache,
+                weekly_cache=agent.alpha_feed_cache,
             )
 
             snapshot = agent.refresh_remote_alpha_feed(limit=100)

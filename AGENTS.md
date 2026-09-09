@@ -51,11 +51,13 @@ RuntimeComponents
 Agent 提供显式 operation hooks
   ├── SuggestionWorkflow
   └── ProposalExecutionWorkflow
+  └── AlphaFeedWorkflow
 ```
 
 - `build_agent_runtime_policy()` 是 Agent 配置投影的唯一 owner；`Agent.__init__` 不得再次逐字段解释 `config.runtime`、`config.factory` 或 `field_selection`。
 - `RuntimeComponents` 只拥有已经解析的领域对象，不放入 workflow，也不反向导入 `Agent`；workflow composition 只能接收既有组件，不能重新构造 `Trajectory`、`TrialLedger`、`Simulator`、`CheckpointStore` 或 `SubmissionPool`。
-- `Agent` 可以保留 `self.memory`、`self.trajectory` 等兼容属性，但这些属性必须集中投影自同一组组件；两个 workflow 必须通过 identity tests 证明共享对象。
+- `Agent` 可以保留 `self.memory`、`self.trajectory` 等兼容属性，但这些属性必须集中投影自同一组组件；执行 workflow 必须通过 identity tests 证明共享对象，Alpha Feed 必须证明复用同一组 cache。
+- `AlphaFeedWorkflow` 只负责 BRAIN 用户 Alpha 的只读分页、纽约七日窗口、去重/bucket 和两个既有 cache 的更新；它只接收 `get_all_user_alphas`，不得导入 `Agent`/`Simulator`、调用 POST/PATCH 或迁移 optimizer。
 - 不引入 DI/IoC 框架，不创建 `Workflow(agent=self)` 或 `hooks.get_attr` 逃生通道；hooks 必须是窄的、按操作定义的显式回调。
 
 ## Alpha 经济含义与自相关硬约束

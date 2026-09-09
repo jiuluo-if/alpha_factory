@@ -13,6 +13,8 @@
 
 运行时装配的 owner 关系是：`AppConfig` → `AgentRuntimePolicy` → `RuntimeComponents` → `AgentWorkflows`。`build_agent_runtime_policy()` 集中解析 Agent 实际消费的配置投影；`RuntimeComponents` 只拥有基础领域对象；`runtime_composition.py` 只用既有组件和显式 hooks 创建 `SuggestionWorkflow` 与 `ProposalExecutionWorkflow`，不得反向导入 `Agent` 或重复构造组件。Agent 的旧 public attributes 可以继续保留，但必须集中投影自这套唯一对象图。
 
+`AlphaFeedWorkflow` 是 `AgentWorkflows` 的第三个成员，负责 BRAIN 用户 Alpha 的只读分页、`America/New_York` 七个自然日窗口、去重、bucket 以及 `DailyResearchCache`/`WeeklyAlphaFeedCache` 更新。它只接收 `get_all_user_alphas` 操作，不接收整个 Client，不依赖 Agent、Simulator、proposal/suggestion workflow，不产生 POST、PATCH、submission 或 checkpoint 写入。`Agent._cloud_alpha_ids()` 仍是 optimizer 对 weekly cache 的消费方，不迁移到该 workflow。
+
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 
 ## 不变量

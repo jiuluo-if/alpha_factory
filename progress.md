@@ -74,4 +74,4 @@
 - 已新增优化层代码初筛、Agent 经济机制/反过拟合二筛；云端轻量 Alpha 元数据仅提升已有本地完成证据的优先级。
 - 已新增探索层稳定种子随机化字段/经济模板组合，并标记 `signal_discovery`；未引入参数、窗口、权重或符号扫描。
 - 已将双层来源、目标和策略写入 `factory_batch_stats`/当前 proposals 审计视图，仍复用 `Agent.run_proposals()`。
-- 新增回归后全量测试为 477 tests OK；待完成 fresh review、compileall、Ruff、diff 检查和分批推送。
+- 新增回归后全量测试为 478 tests OK；fresh review 无 Critical，compileall、Ruff、diff check 均通过；代码与文档已分两批推送到 `main`，远端核验 SHA 为 `372f438372a69e073bc28c1a13ad29a755d3aa4f`。

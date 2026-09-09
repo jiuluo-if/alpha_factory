@@ -64,4 +64,4 @@
 - [x] 用失败测试锁定稳定随机种子、层级标记、代码筛选和云端轻量元数据优先级
 - [x] 实现现有 AlphaFactory/Agent/FactoryRunner 双层边界，不新增状态机或执行入口
 - [x] 补充 batch stats、AGENTS/README/STATE_LAYOUT 约束
-- [ ] fresh code review、全量验证、分批提交并推送 main
+- [x] fresh code review、全量验证、分批提交并推送 main

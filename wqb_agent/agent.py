@@ -10,6 +10,7 @@ DO NOT USE FOR: choosing economic hypotheses or bypassing `research_api`.
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 from .artifacts import (
     atomic_write_json_if_changed,
@@ -63,7 +64,7 @@ from .validation_report import (
 )
 from .config import normalize_config
 from .research_evidence import ResearchEvidenceBundle
-from .daily_cache import DailyResearchCache
+from .daily_cache import DailyResearchCache, NEW_YORK
 
 SEED_HYPOTHESES = [
     {
@@ -413,6 +414,73 @@ class Agent:
                 continue
             report["ready_parent_count"] += 1
         return report
+
+    @staticmethod
+    def _remote_local_date(value):
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(NEW_YORK).date().isoformat()
+
+    def refresh_remote_alpha_feed(self, *, limit=100):
+        """Pull submitted and current-day simulated Alpha views together.
+
+        This is a read-only, bounded refresh.  Only lightweight IDs, status,
+        and timestamps enter the process-local daily cache; result metrics and
+        Alpha evidence remain owned by the live API/checkpoint boundaries.
+        """
+        refreshed_at = time.time()
+        submitted_page = self.client.get_user_alphas(
+            status="SUBMITTED", limit=limit, offset=0
+        )
+        simulated_page = self.client.get_user_alphas(
+            status="UNSUBMITTED", limit=limit, offset=0
+        )
+        local_date = self.daily_cache.local_date
+        submitted = []
+        for row in submitted_page.get("results") or []:
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            submitted.append({
+                "alpha_id": str(row["id"]),
+                "status": row.get("status"),
+                "date_submitted": row.get("dateSubmitted"),
+                "source": "/users/self/alphas",
+            })
+        submitted.sort(
+            key=lambda item: str(item.get("date_submitted") or ""),
+            reverse=True,
+        )
+        today_simulated = []
+        for row in simulated_page.get("results") or []:
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            if self._remote_local_date(row.get("dateCreated")) != local_date:
+                continue
+            today_simulated.append({
+                "alpha_id": str(row["id"]),
+                "status": row.get("status"),
+                "date_created": row.get("dateCreated"),
+                "source": "/users/self/alphas",
+            })
+        today_simulated.sort(
+            key=lambda item: str(item.get("date_created") or ""),
+            reverse=True,
+        )
+        self.daily_cache.put_submitted_alphas(submitted)
+        self.daily_cache.put_simulations(today_simulated)
+        return {
+            "local_date": local_date,
+            "refreshed_at": refreshed_at,
+            "submitted_count": len(submitted),
+            "today_simulated_count": len(today_simulated),
+            "source": "/users/self/alphas",
+        }
 
     def generate_optimized_proposals(self, parents=None, *, max_candidates=4):
         """Return only evidence-backed Agent optimization candidates.

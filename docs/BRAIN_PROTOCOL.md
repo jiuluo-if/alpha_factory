@@ -12,7 +12,9 @@
 | `COMMUNITY_OBSERVED` | 社区观察到的接口，只能 probe/fixture，不能成为生产依赖 |
 | `UNKNOWN` | 没有足够证据，必须 fail-closed |
 
-当前官方接口登记：`authentication`、`data_sets`、`data_fields`、`simulations`、已知 progress URL、`alphas`、`aggregates`、`self_correlation`、`prod_correlation`。
+当前官方接口登记：`authentication`、`data_sets`、`data_fields`、`simulations`、已知 progress URL、`users/self/alphas`、`alphas`、`aggregates`、`self_correlation`、`prod_correlation`。
+
+`GET /users/self/alphas` 仅用于有界只读同步，按分页读取用户 Alpha 的 `id`、`status`、`dateCreated` 和 `dateSubmitted`；提交 Alpha 与本日模拟 Alpha 使用同一次刷新触发，按 `America/New_York` 本地日筛选，不写入结果侧车。
 
 字段查重使用 `data_fields` 响应中的平台 `alphaCount`（兼容内部标准化键
 `alpha_count`）。查重键必须是 `(dataset_id, field_id)`，不能只用字段名；它表示字段在平台现有 Alpha 中的使用量，是本地不保留

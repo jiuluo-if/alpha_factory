@@ -114,6 +114,47 @@ class TestWeeklySimulationQuota(unittest.TestCase):
 
 
 class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
+    def test_remote_alpha_feed_refreshes_submitted_and_today_simulations_together(self):
+        class FeedClient:
+            def __init__(self):
+                self.calls = []
+
+            def get_user_alphas(self, *, status, limit, offset):
+                self.calls.append((status, limit, offset))
+                if status == "SUBMITTED":
+                    return {"results": [{
+                        "id": "submitted-1",
+                        "status": "SUBMITTED",
+                        "dateSubmitted": "2026-09-08T20:00:00-04:00",
+                    }]}
+                return {"results": [
+                    {
+                        "id": "today-1",
+                        "status": "UNSUBMITTED",
+                        "dateCreated": "2026-09-09T08:00:00-04:00",
+                    },
+                    {
+                        "id": "old-1",
+                        "status": "UNSUBMITTED",
+                        "dateCreated": "2026-09-08T08:00:00-04:00",
+                    },
+                ]}
+
+        agent = Agent.__new__(Agent)
+        agent.client = FeedClient()
+        agent.daily_cache = DailyResearchCache(clock=lambda: _utc_timestamp(
+            dt.datetime(2026, 9, 9, 12, 0)
+        ))
+        snapshot = agent.refresh_remote_alpha_feed(limit=20)
+
+        self.assertEqual(snapshot["submitted_count"], 1)
+        self.assertEqual(snapshot["today_simulated_count"], 1)
+        self.assertEqual(agent.daily_cache.submitted_alphas()[0]["alpha_id"], "submitted-1")
+        self.assertEqual(agent.daily_cache.simulations()[0]["alpha_id"], "today-1")
+        self.assertEqual(agent.client.calls, [
+            ("SUBMITTED", 20, 0), ("UNSUBMITTED", 20, 0),
+        ])
+
     def test_settled_result_updates_color_cache_immediately(self):
         agent = Agent.__new__(Agent)
         agent.daily_cache = DailyResearchCache(clock=lambda: _utc_timestamp(

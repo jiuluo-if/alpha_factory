@@ -249,6 +249,27 @@ class TestPublicReadAdapters(unittest.TestCase):
         self.assertEqual(snapshot["payload"]["status"], "RUNNING")
         self.assertEqual(snapshot["retry_after_seconds"], 1.0)
 
+    def test_get_user_alphas_reads_a_bounded_page(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(
+                200,
+                payload={
+                    "count": 1,
+                    "next": None,
+                    "previous": None,
+                    "results": [{
+                        "id": "alpha-1",
+                        "status": "UNSUBMITTED",
+                        "dateCreated": "2026-09-09T08:00:00-04:00",
+                    }],
+                },
+            ),
+        ])
+        page = c.get_user_alphas(status="UNSUBMITTED", limit=5, offset=10)
+        self.assertEqual(page["count"], 1)
+        self.assertEqual(page["results"][0]["id"], "alpha-1")
+
 
 class TestClassifiedExceptions(unittest.TestCase):
     def setUp(self):

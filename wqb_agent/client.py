@@ -469,6 +469,31 @@ class WQBClient:
         )
         return resp.json().get("results", [])
 
+    def get_user_alphas(self, *, status=None, limit=100, offset=0):
+        """Read one bounded page of the authenticated user's Alpha library."""
+        try:
+            page_limit = max(1, min(100, int(limit)))
+            page_offset = max(0, int(offset))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Alpha page limit/offset 必须是整数") from exc
+        params = {"limit": page_limit, "offset": page_offset}
+        if status is not None:
+            if not isinstance(status, str) or not status.strip():
+                raise ValueError("Alpha status 必须是非空字符串")
+            params["status"] = status.strip().upper()
+        resp = self._request(
+            "GET",
+            f"{self.base_url}/users/self/alphas",
+            params=params,
+            context="GET /users/self/alphas",
+        )
+        payload = resp.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+            raise WQBSimulationError(
+                "GET /users/self/alphas returned an invalid paginated payload."
+            )
+        return payload
+
     def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
         """Fetch datafields of a dataset. ``field_type`` optionally filters by
         BRAIN field type (MATRIX / VECTOR / SCALAR / ...).

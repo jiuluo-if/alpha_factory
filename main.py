@@ -106,6 +106,10 @@ def main():
         help="依据已评估证据同步 BRAIN Alpha 顶层 color 元数据；不提交 Alpha",
     )
     parser.add_argument(
+        "--sync-alpha-feed", action="store_true",
+        help="只读拉取最新提交 Alpha 与本日模拟 Alpha到当日内存缓存",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="仅预览 Alpha 颜色同步，不发送 PATCH；只能与 --sync-alpha-colors 一起使用",
     )
@@ -139,14 +143,24 @@ def main():
         args.skip_submit_unknown, args.finalize_recorded_round is not None,
         args.factory_stop, args.factory_status,
         args.doctor, args.audit_state, args.takeover_preflight, args.smoke_readonly,
-        args.sync_alpha_colors, args.agent_context,
+        args.sync_alpha_colors, args.sync_alpha_feed, args.agent_context,
     )):
         parser.error("--factory-run 不能与其他研究动作同时使用")
+    if args.sync_alpha_feed and any((
+        args.suggest, args.run_proposals, args.factory_run,
+        args.factory_stop, args.factory_status, args.doctor,
+        args.audit_state, args.takeover_preflight, args.smoke_readonly,
+        args.sync_alpha_colors, args.dry_run, args.agent_context,
+        args.skip_stale, args.skip_submit_unknown,
+        args.finalize_recorded_round is not None,
+    )):
+        parser.error("--sync-alpha-feed 不能与其他研究动作同时使用")
     if args.sync_alpha_colors and any((
         args.suggest, args.run_proposals, args.factory_run,
         args.factory_stop, args.factory_status, args.doctor,
         args.audit_state, args.takeover_preflight, args.smoke_readonly,
         args.agent_context,
+        args.sync_alpha_feed,
         args.skip_stale, args.skip_submit_unknown,
         args.finalize_recorded_round is not None,
     )):
@@ -303,6 +317,14 @@ def main():
         if args.suggest:
             # --suggest 只做字段检索、不模拟，不占模拟实例锁
             agent.run_suggestion_round()
+            return
+        if args.sync_alpha_feed:
+            snapshot = agent.refresh_remote_alpha_feed(limit=100)
+            print(json.dumps({
+                **snapshot,
+                "network_write": False,
+                "cache": agent.daily_cache.snapshot(),
+            }, ensure_ascii=False, indent=2))
             return
         lock_path = acquire_single_instance_lock(
             typed_config.runtime.state_dir,

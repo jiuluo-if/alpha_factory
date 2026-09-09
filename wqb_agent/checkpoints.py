@@ -46,7 +46,7 @@ class CheckpointStore:
                 "status", "proposal_id", "submission_fingerprint",
                 "submission_started_at", "progress_url", "experiment_stage",
                 "research_role", "change_type", "lineage_id", "template_id",
-                "template_family", "proposal_origin",
+                "template_family", "proposal_origin", "research_layer",
             }
             row = {key: value for key, value in row.items() if key in keep}
             checkpoint_experiments.append(row)

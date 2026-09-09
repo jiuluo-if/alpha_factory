@@ -17,7 +17,12 @@ from .artifacts import (
     append_jsonl_if_unique,
     iter_jsonl_objects,
 )
-from .research_guard import ResearchLoopGuard, structural_family_key
+from .research_guard import (
+    ResearchLoopGuard,
+    overfit_expression_reason,
+    parameter_only_change_reason,
+    structural_family_key,
+)
 from .search_outcome import SearchOutcome, settle_search_outcome, extract_statistical_decision
 from .research_evidence import classify_research
 from .search_snapshot import SearchSnapshot
@@ -352,17 +357,73 @@ class Agent:
         return bundle
 
     def optimizable_signal_records(self, limit=128):
-        """Return a bounded view of completed signals for factory optimization."""
+        """Return completed signals, preferring cloud-indexed evidence.
+
+        The rolling cloud feed stores only lightweight metadata.  It is used
+        here as a priority/index signal; all returned records still come from
+        the current in-memory trajectory and must pass the code and Agent
+        evidence gates before becoming CHILD proposals.
+        """
         records = []
-        for exp in reversed(self.trajectory.recent(limit)):
+        cloud_ids = self._cloud_alpha_ids()
+        for position, exp in enumerate(reversed(self.trajectory.recent(limit))):
             if exp.status != "DONE" or not exp.metrics:
                 continue
             # Older trajectory rows predate the auditable metadata needed for
             # a CHILD proposal; they remain evidence but are not auto-mutated.
             if not exp.field_analysis or not exp.field_understanding:
                 continue
-            records.append(exp.to_dict())
+            record = exp.to_dict()
+            record["optimization_source"] = (
+                "cloud" if str(exp.alpha_id or "") in cloud_ids else "current_run"
+            )
+            record["optimization_recency"] = position
+            records.append(record)
+        records.sort(
+            key=lambda item: (
+                item.get("optimization_source") != "cloud",
+                item.get("optimization_recency", 0),
+            )
+        )
         return records
+
+    def _cloud_alpha_ids(self):
+        """Read cloud Alpha IDs from the rolling lightweight metadata view."""
+        payload = self.alpha_feed_cache.load()
+        if not isinstance(payload, dict):
+            return set()
+        ids = set()
+        for bucket in (payload.get("days") or {}).values():
+            if not isinstance(bucket, dict):
+                continue
+            for key in ("simulations", "submitted_alphas"):
+                for row in bucket.get(key) or ():
+                    if not isinstance(row, dict):
+                        continue
+                    alpha_id = row.get("alpha_id") or row.get("id")
+                    if alpha_id is not None and str(alpha_id).strip():
+                        ids.add(str(alpha_id))
+        return ids
+
+    def _agent_screen_optimization_parents(self, parents):
+        """Apply the Agent's semantic/non-overfit gate after code screening."""
+        selected = []
+        for parent in parents or ():
+            if not isinstance(parent, dict):
+                continue
+            child = parent.get("child_economic_hypothesis")
+            if not isinstance(child, dict):
+                continue
+            required = ("expression", "economic_mechanism", "change_type")
+            if not all(isinstance(child.get(key), str) and child[key].strip()
+                       for key in required):
+                continue
+            if parameter_only_change_reason(
+                parent.get("expression"), child.get("expression")
+            ) or overfit_expression_reason(child.get("expression")):
+                continue
+            selected.append(parent)
+        return selected
 
     @staticmethod
     def _optimizer_value(parent, key, default=None):
@@ -587,8 +648,17 @@ class Agent:
         self._ensure_loaded()
         parents = self.optimizable_signal_records() if parents is None else parents
         quality = self.quality_policy or {}
-        return self.alpha_factory.optimize_signal_proposals(
+        code_screened = self.alpha_factory.screen_optimization_parents(
             parents,
+            excluded_expressions=self._terminal_expressions(),
+            min_sharpe=quality.get("promising_sharpe", 0.9),
+            min_fitness=quality.get("promising_fitness", 0.6),
+            min_turnover=quality.get("min_turnover", 0.01),
+            max_turnover=quality.get("max_turnover", 0.7),
+        )
+        agent_screened = self._agent_screen_optimization_parents(code_screened)
+        return self.alpha_factory.optimize_signal_proposals(
+            agent_screened,
             self.operator_reference,
             max_candidates=max_candidates,
             excluded_expressions=self._terminal_expressions(),
@@ -1268,6 +1338,10 @@ class Agent:
             exp.proposal_origin = p.get("proposal_origin") or (
                 "factory" if factory_batch else "agent"
             )
+            exp.research_layer = p.get("research_layer") or {
+                "EXPLOIT": "optimization",
+                "EXPLORE": "exploration",
+            }.get(p.get("research_role"))
             exp.mutation = p.get("mutation") or "agent-proposed"
             exp.lineage_id = p.get("lineage_id") or p.get("parent_expression") or hypothesis["id"]
             exp.experiment_stage = p.get("experiment_stage")

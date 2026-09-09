@@ -73,6 +73,7 @@ class Experiment:
     allocation_key: object = None
     factory_session_id: object = None
     proposal_origin: object = None
+    research_layer: object = None
     self_correlation: object = None
     status: str = "PENDING"
     metrics: object = None

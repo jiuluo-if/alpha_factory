@@ -138,6 +138,9 @@ def factory_batch_stats(proposals):
     """Return auditable composition counts without retaining result payloads."""
     stats = {
         "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
+        "layer_counts": {"optimization": 0, "exploration": 0, "unknown": 0},
+        "optimization_source_counts": {"cloud": 0, "current_run": 0, "unknown": 0},
+        "exploration_objective_counts": {},
         "dataset_counts": {},
         "field_dataset_counts": {},
         "template_counts": {},
@@ -147,6 +150,21 @@ def factory_batch_stats(proposals):
     for proposal in proposals or []:
         if not isinstance(proposal, dict):
             continue
+        layer = str(proposal.get("research_layer") or "").strip().lower()
+        if layer not in stats["layer_counts"]:
+            layer = "unknown"
+        stats["layer_counts"][layer] += 1
+        if layer == "optimization":
+            source = str(proposal.get("optimization_source") or "").strip().lower()
+            if source not in stats["optimization_source_counts"]:
+                source = "unknown"
+            stats["optimization_source_counts"][source] += 1
+        if layer == "exploration":
+            objective = str(proposal.get("exploration_objective") or "").strip()
+            if objective:
+                stats["exploration_objective_counts"][objective] = (
+                    stats["exploration_objective_counts"].get(objective, 0) + 1
+                )
         datasets = []
         for value in proposal.get("datasets") or []:
             value = value.get("id") or value.get("name") if isinstance(value, dict) else value

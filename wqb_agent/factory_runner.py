@@ -538,6 +538,7 @@ class AIFactoryRunner:
                     target=batch_size,
                     optimized=optimized,
                     excluded_expressions=self._known_expressions(),
+                    seed=f"{hypothesis['id']}:round:{round_no}",
                 )
             except (KeyboardInterrupt, SystemExit):
                 raise
@@ -577,6 +578,11 @@ class AIFactoryRunner:
                 "proposals": proposals,
                 "batch_type": "factory_100",
                 "source": "ai_factory_template_adapter",
+                "layer_policy": {
+                    "optimization": "cloud_priority_then_current_run",
+                    "exploration": "seeded_factory_signal_discovery",
+                    "code_screen": "required_before_agent_screen",
+                },
                 "dataset_selection": bundle.get("dataset_selection") or {},
                 "catalog_provenance": bundle.get("catalog_provenance") or bundle.get("field_source"),
                 "factory_batch_stats": factory_batch_stats(proposals),

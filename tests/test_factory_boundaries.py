@@ -401,6 +401,144 @@ class TestFactoryBatchContract(unittest.TestCase):
         ok, errors = validate_factory_batch(proposals)
         self.assertTrue(ok, errors)
 
+    def test_factory_exploration_is_seeded_and_marked_as_signal_discovery(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        from wqb_agent.proposal_contract import _operator_reference
+
+        reference = _operator_reference(
+            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        fields = [
+            {
+                "id": f"field_{index}", "description": f"verified field {index}",
+                "type": "MATRIX", "semantic_status": "KNOWN",
+                "dataset": "fundamental6",
+            }
+            for index in range(30)
+        ]
+        hypothesis = {"id": "factory-seeded", "datasets": ["fundamental6"]}
+        first = AlphaFactory().generate_factory_batch(
+            hypothesis, fields, reference, target=100, seed="round-a"
+        )
+        repeat = AlphaFactory().generate_factory_batch(
+            hypothesis, fields, reference, target=100, seed="round-a"
+        )
+        other = AlphaFactory().generate_factory_batch(
+            hypothesis, fields, reference, target=100, seed="round-b"
+        )
+        self.assertEqual(
+            [item["expression"] for item in first],
+            [item["expression"] for item in repeat],
+        )
+        self.assertNotEqual(
+            [item["expression"] for item in first[:8]],
+            [item["expression"] for item in other[:8]],
+        )
+        self.assertTrue(all(item["research_role"] == "EXPLORE" for item in first))
+        self.assertTrue(all(item["experiment_stage"] == "BASELINE" for item in first))
+        self.assertTrue(
+            all(item["research_layer"] == "exploration" for item in first)
+        )
+        self.assertTrue(
+            all(item["exploration_objective"] == "signal_discovery" for item in first)
+        )
+
+    def test_code_screen_precedes_agent_economic_gate(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        from wqb_agent.proposal_contract import _operator_reference
+
+        reference = _operator_reference(
+            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        complete_parent = {
+            "status": "DONE",
+            "expression": "rank(field)",
+            "fields_used": ["field"],
+            "datasets": ["fundamental6"],
+            "metrics": {"sharpe": 1.1, "fitness": 0.8, "turnover": 0.2},
+            "health": {"ok": True},
+            "field_understanding": {"field": "已核验字段"},
+            "field_analysis": {"field": {"data_type": "MATRIX"}},
+            "field_source": {"kind": "brain_api", "snapshot_date": "2026-09-08"},
+            "field_hypothesis_basis": {"field": {"mechanism": "质量变化"}},
+        }
+        weak_parent = dict(complete_parent, metrics={"sharpe": 0.1, "fitness": 0.1, "turnover": 0.2})
+        screened = AlphaFactory().screen_optimization_parents(
+            [weak_parent, complete_parent], min_sharpe=0.9, min_fitness=0.6
+        )
+        self.assertEqual([item["expression"] for item in screened], ["rank(field)"])
+        self.assertEqual(
+            AlphaFactory().screen_optimization_parents(
+                [dict(complete_parent, metrics={
+                    "sharpe": float("nan"), "fitness": 0.8, "turnover": 0.2,
+                })]
+            ),
+            [],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
+            self.assertEqual(
+                agent.generate_optimized_proposals(screened, max_candidates=4), []
+            )
+        self.assertEqual(
+            AlphaFactory().optimize_signal_proposals(
+                screened, reference, max_candidates=4
+            ), []
+        )
+
+    def test_cloud_alpha_metadata_prioritizes_matching_evidence_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
+            cloud_parent = Experiment(1, "h", "rank(cloud_field)", {}, ["cloud_field"])
+            cloud_parent.status = "DONE"
+            cloud_parent.alpha_id = "cloud-alpha"
+            cloud_parent.metrics = {"sharpe": 1.0}
+            cloud_parent.field_understanding = {"cloud_field": "verified"}
+            cloud_parent.field_analysis = {"cloud_field": {"data_type": "MATRIX"}}
+            current_parent = Experiment(2, "h", "rank(current_field)", {}, ["current_field"])
+            current_parent.status = "DONE"
+            current_parent.alpha_id = "current-alpha"
+            current_parent.metrics = {"sharpe": 1.0}
+            current_parent.field_understanding = {"current_field": "verified"}
+            current_parent.field_analysis = {"current_field": {"data_type": "MATRIX"}}
+            agent.trajectory.experiments = [current_parent, cloud_parent]
+            today = agent.alpha_feed_cache.local_date
+            agent.alpha_feed_cache.refresh({
+                today: {
+                    "simulations": [{"alpha_id": "cloud-alpha", "status": "SIMULATED"}],
+                    "submitted_alphas": [],
+                }
+            })
+            records = agent.optimizable_signal_records()
+
+        self.assertEqual(
+            [item["alpha_id"] for item in records], ["cloud-alpha", "current-alpha"]
+        )
+        self.assertEqual(records[0]["optimization_source"], "cloud")
+        self.assertEqual(records[1]["optimization_source"], "current_run")
+
+    def test_factory_batch_stats_separate_layers_and_sources(self):
+        stats = factory_batch_stats([
+            {
+                "expression": "rank(cloud_field)",
+                "research_layer": "optimization",
+                "optimization_source": "cloud",
+            },
+            {
+                "expression": "rank(new_field)",
+                "research_layer": "exploration",
+                "exploration_objective": "signal_discovery",
+            },
+        ])
+        self.assertEqual(stats["layer_counts"], {
+            "optimization": 1, "exploration": 1, "unknown": 0,
+        })
+        self.assertEqual(stats["optimization_source_counts"]["cloud"], 1)
+        self.assertEqual(stats["exploration_objective_counts"], {
+            "signal_discovery": 1,
+        })
+
     def test_factory_batch_prefers_cross_dataset_companions_and_reports_stats(self):
         root = os.path.dirname(os.path.dirname(__file__))
         from wqb_agent.proposal_contract import _operator_reference

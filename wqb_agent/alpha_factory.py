@@ -9,6 +9,8 @@ keeps the skeleton visible to the later proposal and diversity gates.
 from dataclasses import dataclass
 import hashlib
 import json
+import math
+import random
 
 from .diversity import extract_fields
 from .expression import analyze_expression, canonical_expression
@@ -672,6 +674,68 @@ class AlphaFactory:
                 ]
         return candidates[:required_count]
 
+    def screen_optimization_parents(self, parents, *, excluded_expressions=None,
+                                    min_sharpe=0.9, min_fitness=0.6,
+                                    min_turnover=0.01, max_turnover=0.7):
+        """Apply deterministic code gates before Agent semantic selection.
+
+        This gate only examines observable evidence and anti-budget signals.
+        The lightweight cloud Alpha feed can prioritize or deduplicate a
+        parent, but it cannot become performance evidence by itself.
+        """
+        if not isinstance(parents, (list, tuple)):
+            return []
+        try:
+            min_sharpe, min_fitness = float(min_sharpe), float(min_fitness)
+            min_turnover, max_turnover = float(min_turnover), float(max_turnover)
+        except (TypeError, ValueError):
+            return []
+        excluded = {
+            canonical_expression(value)
+            for value in (excluded_expressions or [])
+            if isinstance(value, str) and value.strip()
+        }
+        screened = []
+        seen = set()
+        for parent in parents:
+            if not isinstance(parent, dict):
+                continue
+            if str(parent.get("status") or "").upper() != "DONE":
+                continue
+            expression = parent.get("expression")
+            if not isinstance(expression, str) or not expression.strip():
+                continue
+            identity = canonical_expression(expression)
+            if not identity or identity in seen or identity in excluded:
+                continue
+            metrics = parent.get("metrics")
+            if not isinstance(metrics, dict):
+                continue
+            try:
+                sharpe = float(metrics.get("sharpe"))
+                fitness = float(metrics.get("fitness"))
+                turnover = float(metrics.get("turnover"))
+            except (TypeError, ValueError):
+                continue
+            if not all(math.isfinite(value) for value in (sharpe, fitness, turnover)):
+                continue
+            if not ((sharpe >= min_sharpe or fitness >= min_fitness)
+                    and min_turnover <= turnover <= max_turnover):
+                continue
+            if isinstance(parent.get("health"), dict) and not parent["health"].get("ok"):
+                continue
+            if not parent.get("fields_used") or not parent.get("datasets"):
+                continue
+            required_metadata = (
+                "field_understanding", "field_analysis", "field_source",
+                "field_hypothesis_basis",
+            )
+            if any(not parent.get(key) for key in required_metadata):
+                continue
+            seen.add(identity)
+            screened.append(parent)
+        return screened
+
     def optimize_signal_proposals(self, parents, operator_reference,
                                    max_candidates=4, excluded_expressions=None,
                                    min_sharpe=0.9, min_fitness=0.6,
@@ -700,13 +764,19 @@ class AlphaFactory:
             min_turnover, max_turnover = float(min_turnover), float(max_turnover)
         except (TypeError, ValueError):
             return []
+        parents = self.screen_optimization_parents(
+            parents,
+            excluded_expressions=excluded_expressions,
+            min_sharpe=min_sharpe,
+            min_fitness=min_fitness,
+            min_turnover=min_turnover,
+            max_turnover=max_turnover,
+        )
         out = []
         seen_parents = set()
         for parent in parents:
             if len(out) >= limit or not isinstance(parent, dict):
                 break
-            if parent.get("status") != "DONE":
-                continue
             # Automatic children previously performed generic smoothing and
             # window variants.  They are exactly the low-information tuning
             # loop this factory must stop producing.  A future child must be
@@ -718,21 +788,9 @@ class AlphaFactory:
             if not isinstance(base, str) or not base.strip():
                 continue
             identity = canonical_expression(base)
-            if identity in seen_parents or identity in excluded:
+            if identity in seen_parents:
                 continue
             seen_parents.add(identity)
-            metrics = parent.get("metrics") or {}
-            try:
-                sharpe = float(metrics.get("sharpe"))
-                fitness = float(metrics.get("fitness"))
-                turnover = float(metrics.get("turnover"))
-            except (TypeError, ValueError):
-                continue
-            if not ((sharpe >= min_sharpe or fitness >= min_fitness)
-                    and min_turnover <= turnover <= max_turnover):
-                continue
-            if isinstance(parent.get("health"), dict) and not parent["health"].get("ok"):
-                continue
             fields = parent.get("fields_used") or []
             datasets = parent.get("datasets") or []
             common = {
@@ -808,8 +866,28 @@ class AlphaFactory:
                         "falsification",
                         "若独立样本、健康检查或自相关证据恶化，则关闭该优化分支。",
                     ),
+                    "direction_transform": child.get(
+                        "direction_transform",
+                        {
+                            "applied": False,
+                            "reason": "沿用 parent 的方向，不把方向翻转当作新机制。",
+                        },
+                    ),
+                    "self_correlation_impact": child.get(
+                        "self_correlation_impact",
+                        {
+                            "expected_effect": "UNKNOWN",
+                            "basis": "pre_simulation_structural_forecast",
+                            "rationale": "优化前没有平台结算序列，不把结构差异冒充为低自相关。",
+                            "admission": "REVIEW",
+                        },
+                    ),
                 })
                 proposal["proposal_origin"] = "agent_optimizer"
+                proposal["research_layer"] = "optimization"
+                proposal["optimization_source"] = parent.get(
+                    "optimization_source", "current_run"
+                )
                 out.append(proposal)
                 excluded.add(normalized)
         return out
@@ -1062,7 +1140,7 @@ class AlphaFactory:
 
     def generate_factory_batch(self, hypothesis, fields, operator_reference,
                                target=100, optimized=(),
-                               excluded_expressions=None):
+                               excluded_expressions=None, seed=None):
         """Generate one large, structurally diverse factory batch.
 
         The factory owns breadth.  It cycles verified field profiles through
@@ -1095,12 +1173,13 @@ class AlphaFactory:
                 continue
             item = dict(proposal)
             item.setdefault("proposal_origin", "agent_optimizer")
+            item.setdefault("research_layer", "optimization")
             result.append(item)
             excluded.add(identity)
             if len(result) >= limit:
                 return result[:limit]
 
-        templates = self.registry.economic_templates()
+        templates = list(self.registry.economic_templates())
         if not templates:
             return result
         verified = [
@@ -1111,6 +1190,14 @@ class AlphaFactory:
             and field.get("description", "").strip()
             and str(field.get("semantic_status", "UNKNOWN")).upper() != "UNKNOWN"
         ]
+        # Shuffle independent field/template arms with a stable seed.  This
+        # explores mechanisms and field coverage without scanning numeric
+        # windows, weights, signs, or other overfit parameters.
+        rng = random.Random(
+            str(seed if seed is not None else hypothesis.get("id", "factory"))
+        )
+        rng.shuffle(verified)
+        rng.shuffle(templates)
         for offset, profile in enumerate(verified):
             if len(result) >= limit:
                 break
@@ -1142,6 +1229,10 @@ class AlphaFactory:
                     continue
                 proposal = generated[0]
                 proposal["proposal_origin"] = "factory"
+                proposal["research_layer"] = "exploration"
+                proposal["exploration_objective"] = "signal_discovery"
+                proposal["research_role"] = "EXPLORE"
+                proposal["experiment_stage"] = "BASELINE"
                 result.append(proposal)
                 excluded.add(canonical_expression(proposal["expression"]))
         return result[:limit]

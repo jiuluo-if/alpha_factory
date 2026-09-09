@@ -329,7 +329,9 @@ class ExperienceMemory:
             "hypothesis_outcome", "mechanism_learning", "unresolved_question",
             "competing_explanations", "next_discriminating_question",
             "evidence_needed", "evidence_refs", "parent_hypothesis",
-            "parent_expression", "change_reason",
+            "parent_expression", "change_reason", "lineages",
+            "independent_lineages", "confirmation_status",
+            "agent_interpretation", "outcome_reason",
         ):
             if key in detail:
                 entry[key] = detail[key]
@@ -380,12 +382,13 @@ class ExperienceMemory:
         become long-term lessons; other kinds never auto-promote."""
         if entry.get("kind") != "observation":
             return None
-        if entry.get("hits", 0) < self.promote_hits:
+        confirmed = entry.get("confirmation_status") == "INDEPENDENT_CONFIRMED"
+        if not confirmed and entry.get("hits", 0) < self.promote_hits:
             return None
         # Repeating a result in the same lineage is not independent evidence.
         # Legacy entries with no lineage are deliberately retained as
         # observations rather than promoted on hit count alone.
-        if len(set(entry.get("lineages") or [])) < 2:
+        if not confirmed and len(set(entry.get("lineages") or [])) < 2:
             return None
         evidence = entry.get("evidence", 1) * min(entry.get("hits", 1), 3)
         confidence = min(0.6, 0.2 + 0.1 * entry.get("hits", 0))
@@ -397,7 +400,9 @@ class ExperienceMemory:
                     "hypothesis_outcome", "mechanism_learning", "unresolved_question",
                     "competing_explanations", "next_discriminating_question",
                     "evidence_needed", "evidence_refs", "parent_hypothesis",
-                    "parent_expression", "change_reason",
+                    "parent_expression", "change_reason", "lineages",
+                    "independent_lineages", "confirmation_status",
+                    "agent_interpretation", "outcome_reason",
                 )
                 if key in entry
             },
@@ -729,7 +734,8 @@ class ExperienceMemory:
         self.active_hypotheses.append(entry)
         return entry
 
-    def mark_hypothesis(self, hyp_id, verdict, round_no, outcome=None):
+    def mark_hypothesis(self, hyp_id, verdict, round_no, outcome=None,
+                        confirmation=None):
         """Keep legacy execution status and a separate research outcome."""
         for entry in self.active_hypotheses:
             if entry["id"] == hyp_id:
@@ -737,6 +743,21 @@ class ExperienceMemory:
                 entry["last_verdict"] = verdict
                 if outcome in {"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"}:
                     entry["outcome"] = outcome
+                if isinstance(confirmation, dict):
+                    for key in (
+                        "evidence_refs", "lineages", "independent_lineages",
+                        "confirmation_status", "agent_interpretation",
+                        "outcome_reason",
+                    ):
+                        if key not in confirmation:
+                            continue
+                        value = confirmation[key]
+                        if isinstance(value, list):
+                            entry[key] = list(value)
+                        elif isinstance(value, dict):
+                            entry[key] = dict(value)
+                        elif isinstance(value, str):
+                            entry[key] = value
                 entry["last_round"] = round_no
                 return entry
         return None
@@ -816,11 +837,18 @@ class ExperienceMemory:
         avoid = sorted(self.avoid, key=lambda x: -x.get("updated", 0))[: self.max_avoid]
         next_ideas = self.top_next(self.max_next)
         garbage = self.garbage[-garbage_n:] if self.garbage else []
-        supported, contradicted, unresolved, discriminating = self._learning_context()
+        supported, contradicted, unresolved, unresolved_mechanisms, discriminating = (
+            self._learning_context()
+        )
         return {
             "current_best": self.current_best,
             "active_hypotheses": [
-                {k: e[k] for k in ("id", "statement", "status", "outcome", "last_round", "last_verdict") if k in e}
+                {k: e[k] for k in (
+                    "id", "statement", "status", "outcome", "last_round",
+                    "last_verdict", "evidence_refs", "lineages",
+                    "independent_lineages", "confirmation_status",
+                    "agent_interpretation", "outcome_reason",
+                ) if k in e}
                 for e in self.active_hypotheses
             ][: self.max_hypotheses],
             "recent_key_experiments": recent_experiments or [],
@@ -835,6 +863,7 @@ class ExperienceMemory:
             "supported_mechanisms": supported,
             "contradicted_mechanisms": contradicted,
             "unresolved_questions": unresolved,
+            "unresolved_mechanisms": unresolved_mechanisms,
             "next_discriminating_questions": discriminating,
         }
 
@@ -853,10 +882,27 @@ class ExperienceMemory:
                 "learning": learning,
                 "outcome": outcome,
                 "evidence_refs": list(metadata.get("evidence_refs") or []),
+                "confirmation_status": metadata.get("confirmation_status"),
+                "independent_lineages": list(
+                    metadata.get("independent_lineages") or []
+                ),
+                "outcome_reason": metadata.get("outcome_reason"),
                 "round": item.get("source_round", item.get("round")),
             })
-        supported = [row for row in rows if row.get("outcome") == "SUPPORTED"][:3]
-        contradicted = [row for row in rows if row.get("outcome") == "CONTRADICTED"][:3]
+        supported = [
+            row for row in rows
+            if row.get("outcome") == "SUPPORTED"
+            and row.get("confirmation_status") == "INDEPENDENT_CONFIRMED"
+        ][:3]
+        contradicted = [
+            row for row in rows
+            if row.get("outcome") == "CONTRADICTED"
+            and row.get("confirmation_status") == "INDEPENDENT_CONFIRMED"
+        ][:3]
+        unresolved_mechanisms = [
+            row for row in rows
+            if row not in supported and row not in contradicted
+        ][:5]
 
         unresolved = []
         discriminating = []
@@ -869,7 +915,10 @@ class ExperienceMemory:
             question = item.get("next_discriminating_question")
             if isinstance(question, str) and question.strip() and question not in discriminating:
                 discriminating.append(question)
-        return supported, contradicted, unresolved[:5], discriminating[:5]
+        return (
+            supported, contradicted, unresolved[:5], unresolved_mechanisms,
+            discriminating[:5],
+        )
 
     # ----------------------------------------------------------- compress
 

@@ -390,6 +390,7 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
                 "outcome": outcome,
                 "mechanism_learning": "the evidence distinguishes the proposed mechanism",
                 "evidence_refs": [experiment_id],
+                "direct_relevance": True,
             },
         }
 
@@ -480,7 +481,7 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
                 self.assertEqual(active[hypothesis_id]["outcome"], "INCONCLUSIVE")
                 self.assertEqual(memory.avoid, [])
 
-    def test_complete_evidence_and_agent_interpretation_can_contradict(self):
+    def test_single_complete_negative_evidence_is_not_contradiction(self):
         memory = ExperienceMemory(state_dir=self._tmp)
         reflector = Reflector(memory)
         exp = Experiment(1, "h-contradicted", "rank(field)", {}, ["field"])
@@ -492,7 +493,7 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
         reflector.reflect(1, hypothesis, [exp])
 
         active = {item["id"]: item for item in memory.active_hypotheses}
-        self.assertEqual(active["h-contradicted"]["outcome"], "CONTRADICTED")
+        self.assertEqual(active["h-contradicted"]["outcome"], "INCONCLUSIVE")
 
     def test_supported_observation_does_not_become_durable_lesson_once(self):
         memory = ExperienceMemory(state_dir=self._tmp)
@@ -506,9 +507,11 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
         reflector.reflect(1, hypothesis, [exp])
 
         active = {item["id"]: item for item in memory.active_hypotheses}
-        self.assertEqual(active["h-supported"]["outcome"], "SUPPORTED")
+        self.assertEqual(active["h-supported"]["outcome"], "INCONCLUSIVE")
         self.assertEqual(memory.lessons, [])
         self.assertTrue(any(item.get("mechanism_learning") for item in memory.short_term))
+        self.assertFalse(memory.context()["supported_mechanisms"])
+        self.assertTrue(memory.context()["unresolved_mechanisms"])
 
     def test_mechanism_learning_promotes_only_after_independent_lineages(self):
         memory = ExperienceMemory(state_dir=self._tmp, short_term_window=5)
@@ -526,6 +529,16 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
         memory.register_hypothesis(hypothesis)
 
         reflector.reflect(1, hypothesis, [first, second])
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-independent"]["outcome"], "SUPPORTED")
+        self.assertEqual(
+            active["h-independent"]["confirmation_status"],
+            "INDEPENDENT_CONFIRMED",
+        )
+        self.assertEqual(
+            set(active["h-independent"]["independent_lineages"]),
+            {"lineage-a", "lineage-b"},
+        )
         self.assertEqual(memory.lessons, [])
         mechanism_entries = [
             item for item in memory.short_term if item.get("mechanism_learning")
@@ -537,6 +550,215 @@ class TestReflection(TmpStateMixin, unittest.TestCase):
 
         memory.expire_short_term(now_round=6)
         self.assertEqual(len(memory.lessons), 1)
+
+    def test_existing_independent_validation_can_confirm_one_experiment(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        exp = Experiment(1, "h-validated", "rank(field)", {}, ["field"])
+        exp.status = "DONE"
+        exp.metrics = self._full_metrics(1.2)
+        exp.validation_status = "STABLE"
+        exp.validation_report = {"status": "PASS", "candidate": "parent"}
+        hypothesis = self._interpreted_hypothesis("h-validated", "SUPPORTED", exp.id)
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, [exp])
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-validated"]["outcome"], "SUPPORTED")
+        self.assertEqual(
+            active["h-validated"]["confirmation_status"],
+            "INDEPENDENT_CONFIRMED",
+        )
+        self.assertFalse(active["h-validated"]["independent_lineages"])
+        self.assertTrue(memory.context()["supported_mechanisms"])
+
+        memory.expire_short_term(now_round=6)
+        self.assertEqual(len(memory.lessons), 1)
+
+    def test_same_lineage_repetition_is_not_independent_confirmation(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        experiments = []
+        for expression in ("rank(field_a)", "rank(field_b)"):
+            exp = Experiment(1, "h-same-lineage", expression, {}, ["field"])
+            exp.status = "DONE"
+            exp.metrics = self._full_metrics(1.2)
+            exp.lineage_id = "lineage-a"
+            experiments.append(exp)
+        hypothesis = self._interpreted_hypothesis(
+            "h-same-lineage", "SUPPORTED", experiments[0].id
+        )
+        hypothesis["agent_interpretation"]["evidence_refs"] = [
+            exp.id for exp in experiments
+        ]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, experiments)
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-same-lineage"]["outcome"], "INCONCLUSIVE")
+        self.assertEqual(memory.lessons, [])
+
+    def test_parameter_only_variants_are_not_independent_confirmation(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        first = Experiment(
+            1, "h-parameter-confirmation", "rank(ts_zscore(field, 20))", {}, ["field"]
+        )
+        second = Experiment(
+            1, "h-parameter-confirmation", "rank(ts_zscore(field, 21))", {}, ["field"]
+        )
+        for exp, lineage in ((first, "lineage-a"), (second, "lineage-b")):
+            exp.status = "DONE"
+            exp.metrics = self._full_metrics(1.2)
+            exp.lineage_id = lineage
+        hypothesis = self._interpreted_hypothesis(
+            "h-parameter-confirmation", "SUPPORTED", first.id
+        )
+        hypothesis["agent_interpretation"]["evidence_refs"] = [first.id, second.id]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, [first, second])
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(
+            active["h-parameter-confirmation"]["outcome"], "INCONCLUSIVE"
+        )
+
+    def test_invalid_evidence_member_blocks_confirmation(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        first = Experiment(1, "h-invalid-evidence", "rank(field_a)", {}, ["field_a"])
+        second = Experiment(1, "h-invalid-evidence", "rank(field_b)", {}, ["field_b"])
+        first.status = "DONE"
+        first.metrics = self._full_metrics(1.2)
+        first.lineage_id = "lineage-a"
+        second.status = "DONE"
+        second.metrics = {"sharpe": 1.2}
+        second.lineage_id = "lineage-b"
+        hypothesis = self._interpreted_hypothesis(
+            "h-invalid-evidence", "SUPPORTED", first.id
+        )
+        hypothesis["agent_interpretation"]["evidence_refs"] = [first.id, second.id]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, [first, second])
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-invalid-evidence"]["outcome"], "INCONCLUSIVE")
+
+    def test_fake_evidence_ref_blocks_confirmation(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        exp = Experiment(1, "h-fake-ref", "rank(field)", {}, ["field"])
+        exp.status = "DONE"
+        exp.metrics = self._full_metrics(1.2)
+        hypothesis = self._interpreted_hypothesis("h-fake-ref", "SUPPORTED", exp.id)
+        hypothesis["agent_interpretation"]["evidence_refs"] = ["does-not-exist"]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, [exp])
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-fake-ref"]["outcome"], "INCONCLUSIVE")
+
+    def test_cross_hypothesis_evidence_cannot_confirm_current_hypothesis(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        first = Experiment(1, "h-current", "rank(field_a)", {}, ["field_a"])
+        second = Experiment(1, "h-other", "rank(field_b)", {}, ["field_b"])
+        for exp, lineage in ((first, "lineage-a"), (second, "lineage-b")):
+            exp.status = "DONE"
+            exp.metrics = self._full_metrics(1.2)
+            exp.lineage_id = lineage
+        hypothesis = self._interpreted_hypothesis("h-current", "SUPPORTED", first.id)
+        hypothesis["agent_interpretation"]["evidence_refs"] = [first.id, second.id]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, [first, second])
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-current"]["outcome"], "INCONCLUSIVE")
+
+    def test_unvalidated_suspicious_evidence_cannot_confirm_with_normal_success(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        suspicious = Experiment(1, "h-suspicious-pair", "rank(field_a)", {}, ["field_a"])
+        normal = Experiment(1, "h-suspicious-pair", "rank(field_b)", {}, ["field_b"])
+        suspicious.status = "DONE"
+        suspicious.metrics = self._full_metrics(3.2)
+        suspicious.lineage_id = "lineage-a"
+        normal.status = "DONE"
+        normal.metrics = self._full_metrics(1.2)
+        normal.lineage_id = "lineage-b"
+        hypothesis = self._interpreted_hypothesis(
+            "h-suspicious-pair", "SUPPORTED", suspicious.id
+        )
+        hypothesis["agent_interpretation"]["evidence_refs"] = [
+            suspicious.id, normal.id
+        ]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, [suspicious, normal])
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-suspicious-pair"]["outcome"], "INCONCLUSIVE")
+
+    def test_two_independent_negative_results_can_contradict(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        experiments = []
+        for expression, lineage in (
+            ("rank(field_a)", "lineage-a"),
+            ("rank(field_b)", "lineage-b"),
+        ):
+            exp = Experiment(1, "h-negative-pair", expression, {}, ["field"])
+            exp.status = "DONE"
+            exp.metrics = self._full_metrics(0.2)
+            exp.lineage_id = lineage
+            experiments.append(exp)
+        hypothesis = self._interpreted_hypothesis(
+            "h-negative-pair", "CONTRADICTED", experiments[0].id
+        )
+        hypothesis["agent_interpretation"]["evidence_refs"] = [
+            exp.id for exp in experiments
+        ]
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, experiments)
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(active["h-negative-pair"]["outcome"], "CONTRADICTED")
+
+    def test_negative_pair_without_direct_relevance_stays_inconclusive(self):
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        experiments = []
+        for expression, lineage in (
+            ("rank(field_a)", "lineage-a"),
+            ("rank(field_b)", "lineage-b"),
+        ):
+            exp = Experiment(1, "h-negative-not-direct", expression, {}, ["field"])
+            exp.status = "DONE"
+            exp.metrics = self._full_metrics(0.2)
+            exp.lineage_id = lineage
+            experiments.append(exp)
+        hypothesis = self._interpreted_hypothesis(
+            "h-negative-not-direct", "CONTRADICTED", experiments[0].id
+        )
+        hypothesis["agent_interpretation"]["evidence_refs"] = [
+            exp.id for exp in experiments
+        ]
+        hypothesis["agent_interpretation"]["direct_relevance"] = False
+        memory.register_hypothesis(hypothesis)
+
+        reflector.reflect(1, hypothesis, experiments)
+
+        active = {item["id"]: item for item in memory.active_hypotheses}
+        self.assertEqual(
+            active["h-negative-not-direct"]["outcome"], "INCONCLUSIVE"
+        )
 
     def test_next_experiment_keeps_discriminating_metadata_and_rejects_parameter_only(self):
         memory = ExperienceMemory(state_dir=self._tmp)

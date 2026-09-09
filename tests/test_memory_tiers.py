@@ -231,13 +231,31 @@ class TestContextDigest(TmpStateMixin, unittest.TestCase):
                     "hypothesis_outcome": "SUPPORTED",
                     "mechanism_learning": f"supported mechanism {index}",
                     "evidence_refs": [f"exp-{index}"],
+                    "confirmation_status": "INDEPENDENT_CONFIRMED",
+                    "independent_lineages": [f"lineage-{index}", f"lineage-{index}-b"],
                 },
             )
         ctx = m.context()
         self.assertLessEqual(len(ctx["supported_mechanisms"]), 3)
+        self.assertEqual(len(ctx["supported_mechanisms"]), 3)
         self.assertLessEqual(len(ctx["contradicted_mechanisms"]), 3)
         self.assertLessEqual(len(ctx["unresolved_questions"]), 5)
         self.assertLessEqual(len(ctx["next_discriminating_questions"]), 5)
+
+    def test_context_does_not_trust_unconfirmed_supported_metadata(self):
+        m = ExperienceMemory(state_dir=self._tmp)
+        m.add_lesson(
+            "legacy supported claim", 1, evidence=5,
+            metadata={
+                "hypothesis_outcome": "SUPPORTED",
+                "mechanism_learning": "unconfirmed mechanism",
+            },
+        )
+
+        ctx = m.context()
+
+        self.assertFalse(ctx["supported_mechanisms"])
+        self.assertEqual(ctx["unresolved_mechanisms"][0]["outcome"], "SUPPORTED")
 
     def test_context_contains_short_term_and_garbage(self):
         m = ExperienceMemory(state_dir=self._tmp)

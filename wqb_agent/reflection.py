@@ -20,6 +20,7 @@ sign mismatch) do not block SUCCESS on their own.
 import re
 
 from .evidence import overlay_cached_checks
+from .expression import canonical_expression
 from .failures import (
     classify_experiment,
     is_research_relevant,
@@ -85,9 +86,12 @@ class Reflector:
         old_best_id = (self.memory.current_best or {}).get("id")
         best = self._update_best(results, validation_candidates=validation_candidates)
         self._update_lineages(round_no, results)
-        hypothesis_outcome = self._mark_hypothesis_outcome(hypothesis, results)
+        confirmation = self.research_confirmation_view(hypothesis, results)
+        hypothesis_outcome = self._mark_hypothesis_outcome(
+            hypothesis, results, confirmation=confirmation
+        )
         self._record_mechanism_learning(
-            round_no, hypothesis, results, hypothesis_outcome
+            round_no, hypothesis, results, hypothesis_outcome, confirmation=confirmation
         )
         self._generate_next(round_no, hypothesis, results)
         self._recap(round_no, hypothesis, results, best, old_best_id)
@@ -552,6 +556,11 @@ class Reflector:
         normalized = dict(value)
         normalized["outcome"] = outcome
         normalized["evidence_refs"] = [str(ref) for ref in refs]
+        if (
+            "direct_relevance" in normalized
+            and not isinstance(normalized["direct_relevance"], bool)
+        ):
+            return None
         for key in _LEARNING_METADATA_KEYS:
             if key not in normalized:
                 continue
@@ -581,12 +590,7 @@ class Reflector:
         if exp.status != "DONE" or label == "RECONCILE":
             return False
         if label == "SUSPICIOUS_HIGH_SIGNAL":
-            report = getattr(exp, "validation_report", None)
-            if (
-                getattr(exp, "validation_status", None) != "STABLE"
-                or not isinstance(report, dict)
-                or report.get("status") != "PASS"
-            ):
+            if not self._validation_confirmed(exp):
                 return False
         metrics = self._metrics_view(exp)
         required = ("sharpe", "fitness", "turnover", "returns", "drawdown", "margin")
@@ -607,20 +611,125 @@ class Reflector:
         return True
 
     @staticmethod
-    def _references_results(interpretation, results):
-        refs = set(interpretation["evidence_refs"])
+    def _validation_confirmed(exp):
+        report = getattr(exp, "validation_report", None)
+        return (
+            getattr(exp, "validation_status", None) == "STABLE"
+            and isinstance(report, dict)
+            and report.get("status") == "PASS"
+            and report.get("candidate") == "parent"
+        )
+
+    @staticmethod
+    def _lineage_id(exp):
+        return str(getattr(exp, "lineage_id", None) or exp.hypothesis_id)
+
+    @staticmethod
+    def _independence_blocker(first, second):
+        first_expression = canonical_expression(first.expression)
+        second_expression = canonical_expression(second.expression)
+        if first_expression and first_expression == second_expression:
+            return "duplicate expression is not independent evidence"
+        if parameter_only_change_reason(first.expression, second.expression):
+            return "parameter-only expression variants are not independent evidence"
+        if is_direction_only_change(first.expression, second.expression):
+            return "direction-only expression variants are not independent evidence"
+        for exp in (first, second):
+            parent = getattr(exp, "parent_expression", None)
+            if not isinstance(parent, str) or not parent.strip():
+                continue
+            if parameter_only_change_reason(parent, exp.expression):
+                return "parameter-only child is not independent evidence"
+            if is_direction_only_change(parent, exp.expression):
+                return "direction-only child is not independent evidence"
+        return None
+
+    def research_confirmation_view(self, hypothesis, results, interpretation=None):
+        """Return one evidence ladder used by outcome and lesson learning."""
+        view = {
+            "eligible_results": [],
+            "evidence_refs": [],
+            "lineages": [],
+            "independent_lineages": [],
+            "confirmation_status": "UNCONFIRMED",
+            "blocking_reasons": [],
+        }
+        interpretation = interpretation or self._interpretation(hypothesis)
+        if not interpretation:
+            view["blocking_reasons"].append("invalid Agent interpretation")
+            return view
+        refs = interpretation["evidence_refs"]
+        if len(set(refs)) != len(refs):
+            view["blocking_reasons"].append("duplicate evidence reference")
+            return view
+
+        by_identifier = {}
         for result in results:
             exp = result["experiment"]
-            identifiers = {
-                str(value)
-                for value in (exp.id, exp.alpha_id, exp.proposal_id)
-                if value is not None and str(value).strip()
-            }
-            if not identifiers or not identifiers.intersection(refs):
-                return False
-        return True
+            for value in (exp.id, exp.alpha_id, exp.proposal_id):
+                if value is not None and str(value).strip():
+                    by_identifier.setdefault(str(value), []).append(result)
 
-    def _mark_hypothesis_outcome(self, hypothesis, results):
+        selected = []
+        for ref in refs:
+            matches = by_identifier.get(ref, [])
+            if len(matches) != 1:
+                view["blocking_reasons"].append(
+                    f"evidence reference does not identify one experiment: {ref}"
+                )
+                continue
+            selected.append(matches[0])
+        if view["blocking_reasons"]:
+            return view
+
+        hypothesis_id = str(hypothesis.get("id") or "")
+        for result in selected:
+            exp = result["experiment"]
+            if str(exp.hypothesis_id) != hypothesis_id:
+                view["blocking_reasons"].append(
+                    f"evidence belongs to another hypothesis: {exp.id}"
+                )
+                continue
+            if not self._evidence_complete(result):
+                view["blocking_reasons"].append(
+                    f"mandatory evidence is incomplete or unresolved: {exp.id}"
+                )
+        if view["blocking_reasons"]:
+            return view
+
+        view["eligible_results"] = selected
+        view["evidence_refs"] = list(refs)
+        lineages = sorted({self._lineage_id(result["experiment"]) for result in selected})
+        view["lineages"] = lineages
+        if len(lineages) >= 2:
+            for index, first in enumerate(selected):
+                for second in selected[index + 1:]:
+                    blocker = self._independence_blocker(
+                        first["experiment"], second["experiment"]
+                    )
+                    if blocker:
+                        view["blocking_reasons"].append(blocker)
+                        break
+                if view["blocking_reasons"]:
+                    break
+            if not view["blocking_reasons"]:
+                view["independent_lineages"] = lineages
+        if (
+            not view["blocking_reasons"]
+            and len(lineages) >= 2
+        ) or (
+            not view["blocking_reasons"]
+            and len(selected) == 1
+            and self._validation_confirmed(selected[0]["experiment"])
+        ):
+            view["confirmation_status"] = "INDEPENDENT_CONFIRMED"
+        else:
+            view["blocking_reasons"].append(
+                "independent lineage or independent validation is missing"
+            )
+        return view
+
+    def _mark_hypothesis_outcome(self, hypothesis, results, confirmation=None):
         hyp_id = hypothesis.get("id")
         if not hyp_id:
             return "INCONCLUSIVE"
@@ -641,40 +750,90 @@ class Reflector:
 
         outcome = "INCONCLUSIVE"
         interpretation = self._interpretation(hypothesis)
-        complete = bool(results) and all(self._evidence_complete(item) for item in results)
-        testable = isinstance(hypothesis.get("statement"), str) and bool(hypothesis["statement"].strip())
-        if complete and testable and interpretation and self._references_results(interpretation, results):
+        confirmation = confirmation or self.research_confirmation_view(
+            hypothesis, results, interpretation
+        )
+        testable = (
+            isinstance(hypothesis.get("statement"), str)
+            and bool(hypothesis["statement"].strip())
+        )
+        if (
+            confirmation["confirmation_status"] == "INDEPENDENT_CONFIRMED"
+            and testable
+            and interpretation
+        ):
             requested = interpretation["outcome"]
             if requested == "SUPPORTED" and all(
                 item["verdict"]["label"] in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}
-                for item in results
+                for item in confirmation["eligible_results"]
             ):
                 outcome = "SUPPORTED"
-            elif requested == "CONTRADICTED" and any(
-                item["verdict"]["label"] in {"FAIL", "PROMISING"}
-                for item in results
-            ) and isinstance(hypothesis.get("falsification"), str) and hypothesis["falsification"].strip():
+            elif (
+                requested == "CONTRADICTED"
+                and all(
+                    item["verdict"]["label"] == "FAIL"
+                    for item in confirmation["eligible_results"]
+                )
+                and isinstance(hypothesis.get("falsification"), str)
+                and hypothesis["falsification"].strip()
+                and interpretation.get("direct_relevance") is True
+            ):
                 outcome = "CONTRADICTED"
+        reason = (
+            "independent platform evidence confirmed Agent interpretation"
+            if outcome in {"SUPPORTED", "CONTRADICTED"}
+            else (confirmation["blocking_reasons"] or [
+                "Agent interpretation remains unconfirmed"
+            ])[0]
+        )
         self.memory.mark_hypothesis(
-            hyp_id, legacy_verdict, hypothesis.get("_round", 0), outcome=outcome
+            hyp_id, legacy_verdict, hypothesis.get("_round", 0), outcome=outcome,
+            confirmation={
+                "evidence_refs": confirmation["evidence_refs"],
+                "lineages": confirmation["lineages"],
+                "independent_lineages": confirmation["independent_lineages"],
+                "confirmation_status": confirmation["confirmation_status"],
+                "agent_interpretation": interpretation,
+                "outcome_reason": reason,
+            },
         )
         return outcome
 
-    def _record_mechanism_learning(self, round_no, hypothesis, results, outcome):
+    def _record_mechanism_learning(
+        self, round_no, hypothesis, results, outcome, confirmation=None
+    ):
         interpretation = self._interpretation(hypothesis)
-        if outcome not in {"SUPPORTED", "CONTRADICTED"} or not interpretation:
+        if not interpretation:
             return
-        if not all(self._evidence_complete(item) for item in results):
+        confirmation = confirmation or self.research_confirmation_view(
+            hypothesis, results, interpretation
+        )
+        if not confirmation["eligible_results"]:
             return
-        if not self._references_results(interpretation, results):
+        if (
+            outcome in {"SUPPORTED", "CONTRADICTED"}
+            and confirmation["confirmation_status"] != "INDEPENDENT_CONFIRMED"
+        ):
             return
-        for result in results:
+        reason = (
+            "independent platform evidence confirmed Agent interpretation"
+            if outcome in {"SUPPORTED", "CONTRADICTED"}
+            else (confirmation["blocking_reasons"] or [
+                "Agent interpretation remains unconfirmed"
+            ])[0]
+        )
+        for result in confirmation["eligible_results"]:
             source = result["experiment"]
             detail = {
                 "hypothesis_outcome": outcome,
                 "mechanism_learning": interpretation["mechanism_learning"],
-                "evidence_refs": interpretation["evidence_refs"],
+                "evidence_refs": confirmation["evidence_refs"],
                 "lineage": getattr(source, "lineage_id", None) or source.hypothesis_id,
+                "lineages": confirmation["lineages"],
+                "independent_lineages": confirmation["independent_lineages"],
+                "confirmation_status": confirmation["confirmation_status"],
+                "agent_interpretation": interpretation,
+                "outcome_reason": reason,
             }
             for key in _LEARNING_METADATA_KEYS:
                 if key in interpretation:

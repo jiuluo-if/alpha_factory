@@ -61,7 +61,7 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 
 ## Alpha 顶层 color
 
-`--sync-alpha-colors` 只把已有研究证据映射到 BRAIN Alpha 顶层 `color`，不评分、不创建 Simulation、不提交 Alpha；`--dry-run` 仅预览。`PURPLE` 表示可提交且已有独立/增量价值证据，`GREEN` 表示可提交，`RED` 表示有信号但存在自相关、相关性或稳健性阻断，`BLUE` 表示强信号但仍待关键证据，`YELLOW` 表示有机制的 promising 信号。无信号、失败、重复、参数幸运或证据不足保持无颜色；已有非本项目颜色不覆盖。颜色检测结果只保存在当前进程的 America/New_York 日缓存中，不生成颜色 evidence 侧车。
+`alpha sync-colors` 只把已有研究证据映射到 BRAIN Alpha 顶层 `color`，不评分、不创建 Simulation、不提交 Alpha；`alpha sync-colors --dry-run` 仅预览。`PURPLE` 表示可提交且已有独立/增量价值证据，`GREEN` 表示可提交，`RED` 表示有信号但存在自相关、相关性或稳健性阻断，`BLUE` 表示强信号但仍待关键证据，`YELLOW` 表示有机制的 promising 信号。无信号、失败、重复、参数幸运或证据不足保持无颜色；已有非本项目颜色不覆盖。颜色检测结果只保存在当前进程的 America/New_York 日缓存中，不生成颜色 evidence 侧车。
 
 颜色触发分为两个时点：Simulation settle 时更新单个实验的当前日颜色视图，批次收尾时使用已刷新验证/相关性证据再次同步提交池视图。颜色是既有证据的派生视图，不会因为颜色分类而创建请求、修改 checkpoint 或提交 Alpha。
 
@@ -73,4 +73,4 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 
 ## Agent 接管与效率
 
-接管已有 workspace 的第一步是 `python main.py --takeover-preflight --offline`。该命令只读汇总未完成 checkpoint、状态审计、proposal/cache 概况和 trajectory 计数；`BLOCKED` 时先恢复或对账，不直接启动新实验。自相关回填使用 `scripts/refresh_self_correlation.py` 的时间窗和数量上限，避免重复扫描全部历史。它只调用现有 evidence cache GET 路径，不创建第二套 Simulation 或 submission API。
+接管已有 workspace 的第一步是 `python main.py state preflight`。该命令只读汇总未完成 checkpoint、状态审计、proposal/cache 概况和 trajectory 计数；`BLOCKED` 时先恢复或对账，不直接启动新实验。自相关回填使用 `scripts/refresh_self_correlation.py` 的时间窗和数量上限，避免重复扫描全部历史。它只调用现有 evidence cache GET 路径，不创建第二套 Simulation 或 submission API。

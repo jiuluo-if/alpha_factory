@@ -323,7 +323,7 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
             return candidates[0] if len(candidates) == 1 else None
 
         if not profiles_by_id:
-            problems.append("缺少本轮 discovery 字段画像；请先运行 --suggest")
+            problems.append("缺少本轮 discovery 字段画像；请先运行 python main.py suggest")
         else:
             used = extract_fields(expression, [str(f) for f in declared_fields or []])
             understanding = p.get("field_understanding")

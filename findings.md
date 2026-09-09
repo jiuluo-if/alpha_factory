@@ -88,3 +88,21 @@
 - `wqb_agent/config.py` 的生产 scalar 目前由散落的 `int`/`float`/`max`/`min` 解释；`max_proposals_per_round` 会把 101 静默改为 100，`correlation_refresh_window` 会把 0 静默改为 1，NaN/Infinity 也可能进入 runtime。
 - 当前 typed runtime 已是 Agent 的主要消费边界；`AppConfig.agent`/`simulation` 仍是兼容映射，CLI override 应只替换 `runtime.state_dir`，不重建 raw mapping。
 - 预算语义：factory/search/research hierarchy 允许非负整数并由 `validate_budget_hierarchy` 约束层级；daily cap 不得超过 weekly cap；example 使用 daily `1600`、weekly `11200`。
+
+## 2026-09-09 第二阶段 CLI 结构化基线
+
+- 当前 Git 与远端均为 `2c6355636cadbbd2d3e95c080fb9ce9b5f7abae6`，工作树干净。
+- 全量基线为 `490 tests OK`；`compileall` 和 `ruff check .` 均通过。
+- `main.py` 当前把所有动作注册为顶层 boolean flags，并在运行时手写互斥组合判断；诊断分支位于 Agent/WQBClient 构造前，factory stop/status 也位于 client import 前。
+- 当前安全顺序必须保留：doctor/audit/preflight/context 不构造 client；suggest 不加 owner lock；sync-alpha-colors 加锁且可 PATCH；factory stop/status 只读本地控制面；run-proposals/factory-run/恢复类动作沿 Agent 安全路径和 owner lock。
+- 旧 CLI 引用主要位于 `AGENTS.md`、`main.py`、`tests/test_runtime_safety.py`、`tests/test_agent_context.py`、`findings.md`、`progress.md`；后续文档应以新命令为主并声明兼容窗口。
+- 本阶段尚未修改源码；基于 `brainstorming` 架构门，先提交 canonical grammar、legacy normalization 和行为矩阵，待用户确认后再进入 TDD。
+
+## 2026-09-09 第二阶段实现与 review 结论
+
+- `wqb_agent/cli.py` 现在提供 required nested argparse grammar、typed `CLICommand` 和单一 legacy adapter；`main.py` 不再维护 boolean mode explosion 或 new/legacy 两套 dispatch。
+- legacy adapter 在 fresh review 中发现并修复了 inline `--run-proposals=PATH` / `--finalize-recorded-round=-1` 兼容缺口；非法 inline 值仍 fail-closed。
+- fresh review 还发现 smoke runtime exception 原先返回 0；现保留 `UNAVAILABLE` JSON contract 并返回 runtime failure code 1。
+- 活动 README、research prompt、Agent/proposal 用户提示和 CI 已切换到 canonical commands；测试/历史记录中的旧形式仅用于兼容验证或历史事实。
+- 最终证据：508 tests OK、compileall 0、Ruff 0、diff check 0；fixtures 上 state doctor/audit/preflight 均返回 0，分别为 `config_valid=true`、`ok=true`、`status=READY`。
+- review 未发现 Simulation POST、`SUBMIT_UNKNOWN`、checkpoint recovery、quota、research policy 或 typed config boundary 被触碰；这些路径仍由原有模块和安全测试覆盖。

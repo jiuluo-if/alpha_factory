@@ -23,6 +23,6 @@ jobs:
       - name: Coverage report
         run: coverage run -m unittest discover -s tests && coverage report
       - name: Offline doctor
-        run: python main.py --doctor --offline --state-dir tests/fixtures
+        run: python main.py --state-dir tests/fixtures state doctor
       - name: Offline state audit
-        run: python main.py --audit-state --offline --state-dir tests/fixtures
+        run: python main.py --state-dir tests/fixtures state audit

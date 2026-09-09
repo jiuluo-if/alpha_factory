@@ -100,3 +100,17 @@
 - fresh review 结论：无 Critical；配置变更仅触及 normalize/validator/CLI override 及其测试，未改 Agent、Client、Simulator、checkpoint 或研究策略代码。
 - 最终 fresh verification：490 tests OK；compileall 0；Ruff 0 errors；doctor `config_valid=true`；audit `ok=true`；`git diff --check` 通过。
 - 本阶段不提交、不推送；保留工作树中原有 `tests/test_agent_flow.py` 与 `wqb_agent/agent.py` 用户改动，并未将其混入本阶段配置 diff。
+
+## 2026-09-09 第二阶段 CLI 结构化重构
+
+- 已重新拉取并确认 `main` 与 `origin/main` 同为 `2c6355636cadbbd2d3e95c080fb9ce9b5f7abae6`。
+- 已完成只读源码/测试/文档检索；当前旧入口仍为 boolean flag explosion。
+- 基线：490 tests OK，compileall 通过，Ruff 通过，工作树干净。
+- 已新增 `wqb_agent/cli.py` 的 canonical `CLICommand`、结构化 argparse grammar 和有限 legacy adapter；`main.py` 仅消费 canonical representation。
+- TDD 红灯证据为缺失 `wqb_agent.cli` 导入失败；随后 CLI grammar、legacy（含 inline 值）、subprocess、lazy-client、lock、smoke 和 audit/preflight exit-code 测试已通过，当前 CLI 专项 18 tests OK。
+- 已更新根指南、研究政策、状态布局、操作速查表和 CI 的主命令示例；旧 flags 仅保留在兼容测试、adapter 与历史记录中。
+- 当前下一步：fresh code review 后执行最终 compileall、全量 unittest、Ruff、help、doctor/audit/preflight 和 diff 检查。
+
+- fresh review 返回 2 个 Critical 与 3 个 Suggestions：已修复 inline legacy 参数、smoke runtime exit code、README/prompt/Agent 用户提示和对应测试覆盖；中途引入的 docstring 缩进错误已即时修复。
+- 最终验证：`python -m unittest discover -s tests` 为 508 tests OK；compileall、Ruff、`git diff --check` 均通过；canonical help、doctor、audit、preflight 均已执行。
+- 完成审计中曾发现 `proposal_contract.py` 提示字符串更新造成的缩进回归（一次 compileall/test 失败）；已恢复合法缩进，py_compile、Ruff 和随后全量 508 tests 均重新通过。

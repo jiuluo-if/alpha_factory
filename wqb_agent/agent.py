@@ -220,7 +220,7 @@ class Agent:
 
     def run(self, max_rounds=None):
         raise RuntimeError(
-            "自动候选路径已退役：生产研究只能使用 --suggest 后再 --run-proposals。"
+            "自动候选路径已退役：生产研究只能使用 python main.py suggest 后再 python main.py run-proposals。"
         )
 
     def next_round_no(self):
@@ -353,7 +353,7 @@ class Agent:
         print(f"Fields ({len(fields)}): {[f['id'] for f in fields]}")
         print(f"Bundle written: {path}")
         print("-> read suggestions.json + context.md, write proposals.json, "
-              "then run --run-proposals")
+              "then run python main.py run-proposals")
         return bundle
 
     def optimizable_signal_records(self, limit=128):
@@ -1769,7 +1769,7 @@ class Agent:
 
     def _known_field_types(self, payload, cached_field_types=None):
         """Build a field-id -> type map from real discovery artifacts."""
-        # ``--suggest`` may carry an explicit field-type manifest assembled
+        # The ``suggest`` command may carry an explicit field-type manifest assembled
         # from the platform response.  Prefer it as the authoritative source
         # so manually/externally verified MATRIX fields are not lost when the
         # on-disk discovery cache is stale or incomplete.
@@ -1832,8 +1832,9 @@ class Agent:
     def run_one_round(self, round_no):
         """Reject the retired single-round shortcut.
 
-        Production research must pass through ``--suggest`` and
-        ``--run-proposals`` so discovery, preflight, checkpoint recovery, and
+        Production research must pass through ``python main.py suggest`` and
+        ``python main.py run-proposals`` so discovery, preflight, checkpoint
+        recovery, and
         exactly-once submission rules cannot be bypassed.
         """
         raise RuntimeError(

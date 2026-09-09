@@ -5,8 +5,8 @@
 ## 30 秒安全接管
 
 - 先读：`AGENTS.md` → `wqb_agent/research_api.py` → 当前任务目标 → 一个直接依赖和一个测试；不要递归扫描仓库。
-- 只读上下文：`python main.py --agent-context --compact`；机器读取加 `--json`。它复用 takeover preflight/audit/doctor，`BLOCKED` 时只做对账/恢复，不启动 Simulation。
-- 唯一执行入口：`python main.py --suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py --run-proposals`；不得绕过 `Agent.run_proposals()`。
+- 只读上下文：`python main.py context --compact`；机器读取加 `--json`。它复用 takeover preflight/audit/doctor，`BLOCKED` 时只做对账/恢复，不启动 Simulation。
+- 唯一执行入口：`python main.py suggest` → 审阅 `.wqb_state/proposals.json` → `python main.py run-proposals`；不得绕过 `Agent.run_proposals()`。
 - 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 的远端轻量元数据只按美国东部本地滚动 7 日窗口缓存，指标、轨迹、checkpoint 和证据不进入该缓存。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
 - 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。
@@ -42,7 +42,7 @@ inspect → discover → hypothesize → run → evaluate → record → iterate
 - production integrity 模式下，每个模板和候选必须具备 `economic_mechanism`、`direction`、`direction_transform`、`expected_horizon`、`falsification` 与 `self_correlation_impact`。
 - 自相关影响预测为 `HIGHER` 或 `BLOCK` 时拒绝；`SIMILAR/UNKNOWN` 只能 `REVIEW`，只有有依据的 `LOWER` 才能先验 `ALLOW`。Simulation 后必须真实获取平台 `SELF_CORRELATION`，待定或缺失不得冒充通过。
 
-Agent 接管现有项目先运行 `python main.py --takeover-preflight --offline`；若为 `BLOCKED`，先处理 checkpoint 和状态对账。异步自相关只用 `scripts/refresh_self_correlation.py` 做限窗只读回填，不新增第二套执行路径。
+Agent 接管现有项目先运行 `python main.py state preflight`；若为 `BLOCKED`，先处理 checkpoint 和状态对账。异步自相关只用 `scripts/refresh_self_correlation.py` 做限窗只读回填，不新增第二套执行路径。
 
 Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实验优先级、结果解释和继续/停止判断。Python 负责 BRAIN 事实、schema、字段/算子校验、去重、硬预算、Retry-After、checkpoint、reconciliation、持久化和确定性统计。
 
@@ -70,19 +70,19 @@ Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实
 ## 运行入口
 
 ```powershell
-python main.py --suggest
+python main.py suggest
 # Agent 审阅建议并写入 .wqb_state/proposals.json
-python main.py --run-proposals
+python main.py run-proposals
 ```
 
-特殊诊断、reconciliation 和兼容 factory 命令不属于默认 mental model。任何远程 Simulation 操作必须沿现有安全路径，任何状态事实以 BRAIN live response 和 append-only 证据为准。
+旧式 boolean flag 命令在有限兼容窗口内仍可使用，但会输出弃用提示；新文档和 CI 只使用结构化子命令。任何远程 Simulation 操作必须沿现有安全路径，任何状态事实以 BRAIN live response 和 append-only 证据为准。
 
 ## Alpha feed 定时约束
 
-- 每 3 小时工作周期执行一次 `python main.py --sync-alpha-feed`，再执行只读接管预检；提交 Alpha 与模拟 Alpha 必须同批次刷新。该约束由 Agent/代码遵守，不创建独立调度任务。
+- 每 3 小时工作周期执行一次 `python main.py alpha sync-feed`，再执行只读接管预检；提交 Alpha 与模拟 Alpha 必须同批次刷新。该约束由 Agent/代码遵守，不创建独立调度任务。
 - 同步必须分页拉取“当前工作日往前 7 个自然日”的数据，并按 `America/New_York` 本地日分桶；本地只保留轻量 ID、状态和时间戳，缓存更新时间写入 `updated_at`，过期时间写入 `expires_at`。
 - 周模拟元数据上限固定为 `11200（7*1600）`；超限时优先清理更早本地日，当前日优先保留。每次同步清理跨周缓存和超时临时资源。
-- 只有预检 `READY` 才能继续 `python main.py --factory-run --factory-hours 3`；`BLOCKED`、未完成 checkpoint、`SUBMIT_UNKNOWN` 或 stop 请求时只读对账并保持暂停。
+- 只有预检 `READY` 才能继续 `python main.py factory run --hours 3`；`BLOCKED`、未完成 checkpoint、`SUBMIT_UNKNOWN` 或 stop 请求时只读对账并保持暂停。
 
 ## 自主模拟双层研究约束
 

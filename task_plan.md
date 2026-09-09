@@ -45,6 +45,7 @@
 | 错误 | 尝试 | 处理 |
 |---|---:|---|
 | Superpowers 初始路径不存在 | 1 | 已定位实际安装路径，改用 `C:\\Users\\联想\\.agents\\skills\\superpowers\\...` |
+| 用户提示更新后的 proposal_contract 缩进错误 | 1 | 复查 diff 与 py_compile 发现，恢复 `if not profiles_by_id` 体缩进并重新通过全量测试 |
 
 ## 2026-09-09 增量修复阶段
 
@@ -89,3 +90,16 @@
 ## 当前下一步
 
 阶段完成：保留未提交工作树，交付配置边界、回归证据和 deferred/risk review。
+
+## 2026-09-09 第二阶段：结构化 CLI（设计门）
+
+- [x] 读取新阶段要求、最新 main、局部规则及直接依赖
+- [x] 确认基线 SHA、工作树、旧 CLI 引用和全量测试状态
+- [x] 用户确认 CLI canonical grammar、legacy adapter 和安全矩阵
+- [x] 先写 CLI grammar/safety 回归并观察红灯
+- [x] 实现单一 canonical command dispatch，不改 Agent/Client/Simulation 机制
+- [x] 更新文档、完成 fresh review 和完整验证
+
+## 当前下一步
+
+阶段实现与验证已完成；未触碰 Client、Simulator、checkpoint、quota、研究状态或远程 Simulation，Agent 仅更新了面向用户的 CLI 提示文字。

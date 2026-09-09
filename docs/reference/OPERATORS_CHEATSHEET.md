@@ -131,7 +131,7 @@
 | `vec_sum(x)` | 对 VECTOR 输入按内部元素求和，输出 MATRIX | 4 |
 
 输入必须是平台字段类型 `VECTOR`；不得把 `vec_avg/vec_sum` 套在已标记为 `MATRIX` 的字段上。r342 的 Vector 输入是语义有效实验；r343 将 vec_* 套在 MATRIX 字段上，平台以 `status=FAIL` 终止，不能作为绩效证据。
-> **2026-08-20 类型门控**：`--run-proposals` 会从 suggestions/fields_cache 读取真实字段类型；vec_* 输入类型未知或不为 VECTOR 时在 Simulation 前拒绝。
+> **2026-08-20 类型门控**：`run-proposals` 会从 suggestions/fields_cache 读取真实字段类型；vec_* 输入类型未知或不为 VECTOR 时在 Simulation 前拒绝。
 
 ## 6. Transformational：转换/交易控制算子
 

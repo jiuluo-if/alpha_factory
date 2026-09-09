@@ -37,7 +37,7 @@ takeover-preflight → inspect → discover → hypothesize → run → evaluate
 Agent 接管已有项目时先运行：
 
 ```powershell
-python main.py --takeover-preflight --offline
+python main.py state preflight
 ```
 
 若结果为 `BLOCKED`，先处理未完成 checkpoint、状态对账或认证/基础设施问题，不得直接开始新一轮实验。对最近已完成且除 `SELF_CORRELATION` 外全部通过的 Alpha，可用只读批量回填：
@@ -54,13 +54,15 @@ python scripts/refresh_self_correlation.py --since 2026-09-07 --until 2026-09-09
 - `get_experiment()`、`compare_experiments()`、`search_history()`：读取证据，不生成替代事实；
 - `reconcile()`：只读轮询已知远端 job；未知写结果不得重 POST。
 
-兼容 CLI：
+CLI：
 
 ```powershell
-python main.py --suggest
+python main.py suggest
 # Agent 审阅 suggestions 并写入 .wqb_state/proposals.json
-python main.py --run-proposals
+python main.py run-proposals
 ```
+
+旧式 boolean flag 形式在有限兼容窗口内仍可用，但不是主入口。
 
 ## 记忆与下一步
 

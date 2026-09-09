@@ -8,7 +8,7 @@
 
 新增 `AlphaColorWorkflow` 作为独立 CLI control/write workflow。它只接收窄 operation-shaped hooks：远端 `get_alpha`、远端 `set_alpha_color`，以及分类函数；核心 `sync(experiments, *, dry_run=False)` 不知道 `state_dir`、trajectory、Agent 或四个 AgentWorkflows。
 
-`alpha_colors.py` 只保留颜色常量、证据 predicate/classifier、轻量 evidence summary 和 `load_color_candidates`。旧 `sync_alpha_colors(experiments, client, state_dir, *, dry_run=False)` 暂时保留为兼容入口，但只构造 workflow 并委托，不再有第二个实现。
+`alpha_colors.py` 只保留颜色常量、证据 predicate/classifier、轻量 evidence summary 和 `load_color_candidates`。颜色同步统一由 `AlphaColorWorkflow.sync()` 负责，旧的转发入口已移除；CLI 直接构造 workflow 并委托，不保留第二个实现。
 
 `main.py` 继续拥有 CLI 控制面：取得 `sync-alpha-colors` 单实例锁、lazy 构造 `WQBClient`、加载候选、调用 workflow、输出既有 JSON schema、处理异常和 exit code。workflow 的唯一远端写 hook 是 `set_alpha_color(alpha_id, desired, verify=True)`。
 

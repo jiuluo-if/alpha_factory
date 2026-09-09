@@ -13,7 +13,7 @@ import time
 
 from .alpha_colors import classify_alpha_color
 from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
-from .alpha_feed_workflow import AlphaFeedHooks, remote_local_date
+from .alpha_feed_workflow import AlphaFeedHooks
 from .alpha_pool import build_pool_snapshot
 from .artifacts import iter_jsonl_objects
 from .behavior import extract_behavior_series
@@ -33,8 +33,6 @@ from .optimizer_workflow import OptimizerHooks
 from .proposal_contract import (
     SETTING_OVERRIDES,
     _operator_reference,
-    validate_proposal,  # noqa: F401 - compatibility export for legacy callers/tests
-    validate_vector_inputs,  # noqa: F401 - compatibility export for legacy callers/tests
 )
 from .proposal_execution import ProposalExecutionHooks
 from .research_evidence import ResearchEvidenceBundle, classify_research
@@ -48,7 +46,6 @@ from .search_outcome import (
 )
 from .search_snapshot import SearchSnapshot
 from .state import (
-    RECOVERABLE_STATUSES,  # noqa: F401 - compatibility export and architecture guard
     UNRESOLVED_STATUSES,
 )
 from .submission import (
@@ -310,10 +307,6 @@ class Agent:
         """兼容 facade：返回不含证据细节的优化 gate 计数。"""
         return self.optimizer_workflow.gate_report(parents)
 
-    @staticmethod
-    def _remote_local_date(value):
-        return remote_local_date(value)
-
     def refresh_remote_alpha_feed(self, *, limit=100):
         """兼容 facade：执行 Alpha Feed 的只读同步。"""
         return self.alpha_feed_workflow.refresh(limit=limit)
@@ -322,13 +315,6 @@ class Agent:
         """兼容 facade：生成受限的 evidence-backed CHILD proposals。"""
         return self.optimizer_workflow.generate(
             parents, max_candidates=max_candidates
-        )
-
-    def _rotate_stalled_research_space(self, research_space, round_no,
-                                       window=40, concentration=0.8):
-        """Compatibility wrapper for the workflow-owned rotation heuristic."""
-        return self.suggestion_workflow.rotate_stalled_research_space(
-            research_space, round_no, window=window, concentration=concentration
         )
 
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):

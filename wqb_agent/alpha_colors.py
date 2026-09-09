@@ -271,17 +271,6 @@ def _evidence_summary(experiment, classification):
     }
 
 
-def sync_alpha_colors(experiments, client, state_dir, *, dry_run=False):
-    """Compatibility wrapper for the explicit Alpha color workflow."""
-    del state_dir
-    from .alpha_color_workflow import AlphaColorWorkflow
-
-    return AlphaColorWorkflow(
-        get_alpha=client.get_alpha,
-        set_alpha_color=client.set_alpha_color,
-    ).sync(experiments, dry_run=dry_run)
-
-
 def load_color_candidates(state_dir):
     """Load the newest valid Experiment row per real Alpha id."""
     latest = {}

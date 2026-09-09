@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from wqb_agent.alpha_color_workflow import AlphaColorWorkflow
-from wqb_agent.alpha_colors import classify_alpha_color, sync_alpha_colors
+from wqb_agent.alpha_colors import classify_alpha_color
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -149,20 +149,6 @@ class TestAlphaColorWorkflow(unittest.TestCase):
         self.assertEqual(changes, [])
         self.assertEqual(transport.get_calls, [])
         self.assertEqual(transport.patch_calls, [])
-
-    def test_legacy_wrapper_delegates_to_same_behavior(self):
-        transport = ColorTransport(color=None)
-        from tests.test_alpha_colors import _experiment
-
-        changes = sync_alpha_colors(
-            [_experiment(quality="PROMISING", self_result=True)],
-            transport,
-            "ignored",
-        )
-
-        self.assertEqual(transport.patch_calls, [("alpha-1", "YELLOW", True)])
-        self.assertEqual(changes[0]["action"], "PATCHED")
-
 
 class TestAlphaColorWorkflowBoundaries(unittest.TestCase):
     def test_workflow_is_not_client_or_agent_constructed(self):

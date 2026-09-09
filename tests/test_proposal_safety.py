@@ -12,13 +12,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wqb_agent.agent import (
     SEED_HYPOTHESES,
     Agent,
-    validate_proposal,
-    validate_vector_inputs,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
 from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.memory import ExperienceMemory
+from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
 from wqb_agent.simulator import Simulator
 from wqb_agent.state import Experiment, Trajectory
@@ -456,7 +455,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertEqual(len(client.sim_calls), 0)
 
     def test_validate_proposal_requires_declared_field_in_expression(self):
-        from wqb_agent.agent import validate_proposal
+        from wqb_agent.proposal_contract import validate_proposal
 
         ok, problems = validate_proposal({
             "expression": "rank(returns)",
@@ -481,7 +480,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
     def test_expression_identifier_allowlist_covers_cheatsheet_operators(self):
         """2026-08-22 算子放开政策：cheatsheet 收录的算子（hump/ts_corr 等）
         与常用命名参数不得被当作未知字段拦截。回归：r622 hump 误拦。"""
-        from wqb_agent.agent import validate_proposal
+        from wqb_agent.proposal_contract import validate_proposal
 
         base = {
             "hypothesis": "h", "rationale": "e", "direction": "reversal",
@@ -791,7 +790,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertNotIn("typed_only", profiles)
 
     def test_proposal_requires_field_analysis_and_one_variable_child_contract(self):
-        from wqb_agent.agent import validate_proposal
+        from wqb_agent.proposal_contract import validate_proposal
 
         proposal = {
             "expression": "rank(returns)", "hypothesis": "return effect",
@@ -820,7 +819,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertTrue(ok, problems)
 
     def test_documented_ts_arg_min_is_not_treated_as_unknown_field(self):
-        from wqb_agent.agent import validate_proposal
+        from wqb_agent.proposal_contract import validate_proposal
 
         proposal = {
             "expression": "-rank(ts_zscore(close, 7))+0.2*rank(ts_arg_min(close, 30))",
@@ -842,7 +841,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertTrue(ok, problems)
 
     def test_documented_ts_arg_max_is_not_treated_as_unknown_field(self):
-        from wqb_agent.agent import validate_proposal
+        from wqb_agent.proposal_contract import validate_proposal
 
         proposal = {
             "expression": "rank(ts_zscore(close, 7))+0.2*rank(ts_arg_max(close, 30))",
@@ -864,7 +863,7 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertTrue(ok, problems)
 
     def test_documented_ts_decay_linear_is_not_treated_as_unknown_field(self):
-        from wqb_agent.agent import validate_proposal
+        from wqb_agent.proposal_contract import validate_proposal
 
         proposal = {
             "expression": "rank(ts_decay_linear(ts_zscore(close, 20), 5))",

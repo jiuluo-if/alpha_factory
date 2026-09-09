@@ -5,6 +5,7 @@ import dataclasses
 import os
 import re
 import unittest
+from pathlib import Path
 
 from wqb_agent.config import AppConfig
 
@@ -236,7 +237,6 @@ class TestArchitectureBoundaries(unittest.TestCase):
 
     def test_execution_readers_reuse_canonical_status_sets(self):
         expected = {
-            "agent.py": ("RECOVERABLE_STATUSES", "UNRESOLVED_STATUSES"),
             "simulator.py": ("UNKNOWN_STATUSES",),
             "search_outcome.py": ("UNRESOLVED_STATUSES", "UNKNOWN_STATUSES"),
         }
@@ -245,6 +245,15 @@ class TestArchitectureBoundaries(unittest.TestCase):
                 source = handle.read()
             for symbol in symbols:
                 self.assertIn(symbol, source, f"{filename} 未复用 state.py 的 {symbol}")
+
+    def test_agent_does_not_reexport_removed_legacy_symbols(self):
+        source = Path(PACKAGE_ROOT, "agent.py").read_text(encoding="utf-8")
+        for symbol in (
+            "validate_proposal",
+            "validate_vector_inputs",
+            "RECOVERABLE_STATUSES",
+        ):
+            self.assertNotIn(symbol, source)
 
     def test_expression_facts_reuse_analyze_expression(self):
         path = os.path.join(PACKAGE_ROOT, "alpha_factory.py")

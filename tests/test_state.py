@@ -13,13 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wqb_agent.agent import (
     SEED_HYPOTHESES,
     Agent,
-    validate_proposal,
-    validate_vector_inputs,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
 from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.memory import ExperienceMemory
+from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
 from wqb_agent.simulator import Simulator
 from wqb_agent.state import Experiment, Trajectory

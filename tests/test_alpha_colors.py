@@ -5,11 +5,11 @@ import threading
 import unittest
 from types import SimpleNamespace
 
+from wqb_agent.alpha_color_workflow import AlphaColorWorkflow
 from wqb_agent.alpha_colors import (
     classify_alpha_color,
     has_research_signal,
     load_color_candidates,
-    sync_alpha_colors,
 )
 from wqb_agent.client import WQBClient
 from wqb_agent.state import Experiment
@@ -83,6 +83,13 @@ class FakeColorClient:
     def submit_alpha(self, *args, **kwargs):
         self.submit_calls.append((args, kwargs))
         raise AssertionError("颜色同步不得调用 Alpha submit")
+
+
+def _color_workflow(client):
+    return AlphaColorWorkflow(
+        get_alpha=client.get_alpha,
+        set_alpha_color=client.set_alpha_color,
+    )
 
 
 class TestAlphaColorClassification(unittest.TestCase):
@@ -169,7 +176,7 @@ class TestAlphaColorSync(unittest.TestCase):
         exp = _experiment(quality="PROMISING", self_result=True)
         client = FakeColorClient(color="YELLOW")
         with tempfile.TemporaryDirectory() as tmp:
-            rows = sync_alpha_colors([exp], client, tmp, dry_run=False)
+            rows = _color_workflow(client).sync([exp], dry_run=False)
         self.assertEqual(client.patch_calls, [])
         self.assertEqual(rows[0]["old_color"], "YELLOW")
         self.assertEqual(rows[0]["new_color"], "YELLOW")
@@ -178,7 +185,7 @@ class TestAlphaColorSync(unittest.TestCase):
         exp = _experiment(quality="PROMISING", self_result=True)
         client = FakeColorClient(color=None)
         with tempfile.TemporaryDirectory() as tmp:
-            rows = sync_alpha_colors([exp], client, tmp, dry_run=True)
+            rows = _color_workflow(client).sync([exp], dry_run=True)
         self.assertEqual(client.patch_calls, [])
         self.assertEqual(rows[0]["new_color"], "YELLOW")
         self.assertFalse(os.path.exists(os.path.join(tmp, "alpha_color_evidence.json")))
@@ -187,7 +194,7 @@ class TestAlphaColorSync(unittest.TestCase):
         exp = _experiment(quality="PROMISING", self_result=True)
         client = FakeColorClient(color="GREEN")
         with tempfile.TemporaryDirectory() as tmp:
-            rows = sync_alpha_colors([exp], client, tmp, dry_run=False)
+            rows = _color_workflow(client).sync([exp], dry_run=False)
         self.assertEqual(client.patch_calls, [])
         self.assertEqual(rows[0]["action"], "OWNERSHIP_CONFLICT")
 
@@ -195,7 +202,7 @@ class TestAlphaColorSync(unittest.TestCase):
         exp = _experiment(quality="PROMISING", self_result=True)
         client = FakeColorClient(color=None)
         with tempfile.TemporaryDirectory() as tmp:
-            sync_alpha_colors([exp], client, tmp, dry_run=False)
+            _color_workflow(client).sync([exp], dry_run=False)
         self.assertEqual(client.submit_calls, [])
 
 

@@ -267,4 +267,4 @@
 
 - `git fetch origin` 后确认 `main`、本地 HEAD、`origin/main` 均为 `e9037d1`，工作树初始干净。
 - `context --compact` 为 SAFE、无未完成 checkpoint、`SUBMIT_UNKNOWN=0`；未启动真实 Simulation。
-- 已实现 frequency evidence 分级、bounded `assess_feasibility()` 和 assembly 前 runner 接入；下一步运行完整质量门。
+- 已实现 frequency evidence 分级、bounded `assess_feasibility()` 和 assembly 前 runner 接入；质量门、fresh review、commit 和 push 已完成。

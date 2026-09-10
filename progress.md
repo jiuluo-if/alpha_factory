@@ -256,7 +256,7 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 # 2026-09-10 当前重审与 feasibility probe
 
 - 已确认 `main == origin/main == e9037d1`，工作树初始干净；context 为 SAFE，无未完成 checkpoint 或 `SUBMIT_UNKNOWN`。
-- 新增 TDD 测试通过，Discovery + Factory 定向 78 tests 通过；尚未运行最终全量质量门，尚未 commit/push。
+- 新增 TDD 测试通过，Discovery + Factory 定向 78 tests 通过；最终全量质量门已通过，已 commit/push（`bcfdb9e`）。
 - 剩余风险：optimization handoff、Alpha Feed 周期 refresh、heartbeat 和机制族 bounded route 尚未完成。
 
 - fresh verification: `661 tests OK`、compileall、Ruff、mypy 9 frontier、coverage branch `77.7%`、`git diff --check` 均通过；测试未启动真实 Simulation。

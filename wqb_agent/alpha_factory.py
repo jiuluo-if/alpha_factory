@@ -784,6 +784,9 @@ class AlphaFactory:
             "novel_cross_dataset_relationship_count": 0,
             "proposal_contract_rejection_count": 0,
         }
+        candidate_fingerprints = set()
+        relationship_fingerprints = set()
+        mechanism_families = set()
         combinations_seen = 0
         for template in templates:
             slots = len(template.required_slots)
@@ -813,6 +816,10 @@ class AlphaFactory:
                     if admission == "REVIEW":
                         counts["relationship_unknown"] += 1
                     continue
+                mechanism_families.add(str(template.family))
+                relationship_fingerprints.add(
+                    f"{template.family}:{','.join(sorted(str(p.get('id')) for p in selected))}"
+                )
                 try:
                     values = {
                         slot: str(profile.get("id"))
@@ -831,6 +838,8 @@ class AlphaFactory:
                 if expression in candidate_expressions:
                     continue
                 candidate_expressions.add(expression)
+                if len(candidate_fingerprints) < 64:
+                    candidate_fingerprints.add(expression)
                 counts["candidates_after_dedupe"] += 1
                 datasets = {str(profile.get("dataset")) for profile in selected}
                 if len(datasets) > 1:
@@ -847,7 +856,7 @@ class AlphaFactory:
         elif counts["relationship_review"] and not counts["relationship_allow"]:
             taxonomy = "RELATIONSHIP_REVIEW"
         elif counts["candidates_before_dedupe"] and not counts["candidates_after_dedupe"]:
-            taxonomy = "HISTORICAL_EXPRESSIONS_EXHAUSTED"
+            taxonomy = "MECHANISM_FAMILY_EXHAUSTED"
         elif not counts["template_compatible_count"]:
             taxonomy = "TEMPLATE_INCOMPATIBLE"
         elif not counts["novel_cross_dataset_relationship_count"]:
@@ -859,6 +868,10 @@ class AlphaFactory:
             "inferred_frequency_count": frequency_counts["inferred"],
             "unknown_frequency_count": frequency_counts["unknown"],
             "dataset_count": len({str(p.get("dataset")) for p in profiles if p.get("dataset") is not None}),
+            "mechanism_family": sorted(mechanism_families)[0] if len(mechanism_families) == 1 else "mixed",
+            "dataset_route": sorted({str(p.get("dataset")) for p in profiles if p.get("dataset") is not None}),
+            "candidate_expression_fingerprints": sorted(candidate_fingerprints),
+            "relationship_fingerprints": sorted(relationship_fingerprints)[:64],
             "failure_taxonomy": taxonomy,
             "batch_gate": {
                 "feasible": counts["novel_cross_dataset_relationship_count"] > 0,

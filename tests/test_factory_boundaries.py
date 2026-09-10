@@ -322,10 +322,48 @@ class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
             report = agent.optimizer_gate_report([parent])
         self.assertEqual(report["done_parent_count"], 1)
         self.assertEqual(report["ready_parent_count"], 0)
-        self.assertEqual(report["blocked_reasons"]["missing_child_economic_hypothesis"], 1)
+        self.assertEqual(report["blocked_reasons"]["PARENT_INCREMENTAL_EVIDENCE_INSUFFICIENT"], 1)
 
 
 class TestFactoryBatchContract(unittest.TestCase):
+    def test_historical_exhaustion_is_mechanism_family_exhausted(self):
+        factory = AlphaFactory()
+        fields = [
+            {"id": "put_iv", "dataset": "pv1", "type": "MATRIX",
+             "description": "put option implied volatility", "frequency": "daily",
+             "category": "options", "semantic_status": "KNOWN"},
+            {"id": "call_iv", "dataset": "option8", "type": "MATRIX",
+             "description": "call option implied volatility", "frequency": "daily",
+             "category": "options", "semantic_status": "KNOWN"},
+        ]
+        baseline = factory.assess_feasibility(
+            {"id": "probe", "datasets": ["pv1", "option8"]}, fields, {},
+            excluded_expressions=[],
+        )
+        probe = factory.assess_feasibility(
+            {"id": "probe", "datasets": ["pv1", "option8"]}, fields, {},
+            excluded_expressions=baseline["candidate_expression_fingerprints"],
+        )
+        self.assertEqual(probe["failure_taxonomy"], "MECHANISM_FAMILY_EXHAUSTED")
+
+    def test_route_decision_stops_after_bounded_no_gain(self):
+        decision = AIFactoryRunner.route_decision(
+            {"failure_taxonomy": "CROSS_DATASET_FEASIBILITY_ZERO",
+             "candidate_expression_fingerprints": ["a"],
+             "relationship_fingerprints": ["r"],
+             "mechanism_family": "relationship",
+             "dataset_route": ["d1", "d2"]},
+            {"failure_taxonomy": "CROSS_DATASET_FEASIBILITY_ZERO",
+             "candidate_expression_fingerprints": ["a"],
+             "relationship_fingerprints": ["r"],
+             "mechanism_family": "relationship",
+             "dataset_route": ["d1", "d2"]},
+            route_attempt=2, no_gain_attempts=1, max_route_attempts=3,
+            max_no_gain_attempts=1,
+        )
+        self.assertFalse(decision["information_gain"])
+        self.assertEqual(decision["action"], "STOP")
+        self.assertEqual(decision["reason"], "NO_INFORMATION_GAIN")
     def test_factory_stats_retains_feasibility_probe_without_result_payload(self):
         stats = factory_batch_stats([], {
             "probe_id": "p1",
@@ -1085,17 +1123,29 @@ class TestFactoryBatchContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
             cloud_parent = Experiment(1, "h", "rank(cloud_field)", {}, ["cloud_field"])
+            cloud_parent.datasets = ["fundamental6"]
             cloud_parent.status = "DONE"
             cloud_parent.alpha_id = "cloud-alpha"
             cloud_parent.metrics = {"sharpe": 1.0}
+            cloud_parent.metrics["checks"] = [{"name": "SELF_CORRELATION", "status": "UNKNOWN"}]
             cloud_parent.field_understanding = {"cloud_field": "verified"}
             cloud_parent.field_analysis = {"cloud_field": {"data_type": "MATRIX"}}
+            cloud_parent.field_source = {"kind": "brain_api"}
+            cloud_parent.field_hypothesis_basis = {"cloud_field": {"mechanism": "变化"}}
+            cloud_parent.economic_mechanism = "信息变化导致相对定价差异"
+            cloud_parent.hypothesis_id = "h-cloud"
             current_parent = Experiment(2, "h", "rank(current_field)", {}, ["current_field"])
+            current_parent.datasets = ["fundamental6"]
             current_parent.status = "DONE"
             current_parent.alpha_id = "current-alpha"
             current_parent.metrics = {"sharpe": 1.0}
+            current_parent.metrics["checks"] = [{"name": "SELF_CORRELATION", "status": "UNKNOWN"}]
             current_parent.field_understanding = {"current_field": "verified"}
             current_parent.field_analysis = {"current_field": {"data_type": "MATRIX"}}
+            current_parent.field_source = {"kind": "brain_api"}
+            current_parent.field_hypothesis_basis = {"current_field": {"mechanism": "变化"}}
+            current_parent.economic_mechanism = "信息变化导致相对定价差异"
+            current_parent.hypothesis_id = "h-current"
             agent.trajectory.experiments = [current_parent, cloud_parent]
             today = agent.alpha_feed_cache.local_date
             agent.alpha_feed_cache.refresh({

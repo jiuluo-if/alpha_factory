@@ -226,3 +226,8 @@ Any future change touching a frozen boundary must include: (1) an observable cha
 # Feasibility diagnostics (2026-09-10)
 
 `AlphaFactory.assess_feasibility()` is a bounded, control-plane preflight. It may inspect field semantics, frequency evidence, relationship/template compatibility, historical expression exclusion, and cross-dataset novelty, but it does not create research state, metrics, checkpoints, or Simulation writes. `factory_runner` must run it before full factory assembly when the cross-dataset gate is enabled; its summary is embedded in existing batch audit metadata.
+# Bounded feasibility route and optimizer handoff (2026-09-10)
+
+Feasibility probes remain control-plane metadata only. A blocked probe records bounded candidate/relationship fingerprints, mechanism family and dataset route; `AIFactoryRunner.route_decision()` compares those fingerprints and chooses `REROUTE` or `STOP` after configured attempt/no-gain limits. A historical candidate set with zero post-dedupe candidates is classified as `MECHANISM_FAMILY_EXHAUSTED`. This route does not submit, reconstruct metrics, or create a second state owner.
+
+Optimizer evidence remains local and append-only: a settled `DONE` Simulation is recorded by the live-result hook into the shared `Trajectory`, then `optimizable_signal_records()` applies the complete parent evidence gate. Cloud Alpha metadata may affect priority only. Handoff counts and rejection taxonomy are control-plane diagnostics, not a result replica.

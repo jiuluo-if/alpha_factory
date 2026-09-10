@@ -50,6 +50,45 @@ class AIFactoryRunner:
     SESSION_FILE = "factory_session.json"
     CHECKPOINT_CACHE_MAX = 512
 
+    @staticmethod
+    def route_decision(previous_probe, current_probe, *, route_attempt,
+                       no_gain_attempts, max_route_attempts=3,
+                       max_no_gain_attempts=2):
+        """Make a bounded route decision from control-plane fingerprints."""
+        previous_probe = previous_probe if isinstance(previous_probe, dict) else {}
+        current_probe = current_probe if isinstance(current_probe, dict) else {}
+        current_taxonomy = str(current_probe.get("failure_taxonomy") or "UNKNOWN")
+        changed = any(
+            set(current_probe.get(key) or ()) != set(previous_probe.get(key) or ())
+            for key in (
+                "candidate_expression_fingerprints", "relationship_fingerprints",
+                "dataset_route", "mechanism_family",
+            )
+        )
+        information_gain = bool(changed)
+        next_no_gain = 0 if information_gain else int(no_gain_attempts) + 1
+        if int(route_attempt) >= int(max_route_attempts):
+            action, reason = "STOP", "ROUTE_ATTEMPTS_EXHAUSTED"
+        elif (not information_gain and
+              next_no_gain >= int(max_no_gain_attempts)):
+            action, reason = "STOP", "NO_INFORMATION_GAIN"
+        else:
+            action, reason = "REROUTE", current_taxonomy
+        return {
+            "action": action, "reason": reason,
+            "information_gain": information_gain,
+            "no_gain_attempts": next_no_gain,
+            "route_attempt": int(route_attempt),
+            "route_index": min(int(route_attempt) + 1, 4),
+            "route_name": (
+                "current_bundle" if int(route_attempt) == 0 else
+                "same_dataset_relationship" if int(route_attempt) == 1 else
+                "same_dataset_new_mechanism" if int(route_attempt) == 2 else
+                "new_dataset_composition" if int(route_attempt) == 3 else
+                "rediscovery"
+            ),
+        }
+
     @classmethod
     def read_session(cls, state_dir):
         """Read the single factory envelope without constructing an Agent."""
@@ -293,7 +332,10 @@ class AIFactoryRunner:
             session.setdefault("simulation_cap", weekly_cap)
             session.setdefault("rounds_completed", 0)
             session.setdefault("probe_offset", 0)
-        session.setdefault("stop_requested", False)
+            session.setdefault("stop_requested", False)
+        session.setdefault("route_attempt", 0)
+        session.setdefault("no_gain_attempts", 0)
+        session.setdefault("last_feasibility_probe", None)
         try:
             quota = self._prepare_quota(session, weekly_cap, daily_cap)
         except ValueError:
@@ -540,28 +582,47 @@ class AIFactoryRunner:
                         signal_records, max_candidates=min(4, batch_size - 1)
                     )
                 feasibility = None
-                if hasattr(self.factory, "assess_feasibility"):
-                    feasibility = self.factory.assess_feasibility(
+                probe_method = getattr(self.factory, "assess_feasibility", None)
+                if callable(probe_method):
+                    feasibility = probe_method(
                         hypothesis,
                         bundle.get("fields") or [],
                         bundle.get("operator_reference") or {},
                         excluded_expressions=self._known_expressions(),
                         probe_id=f"{hypothesis['id']}:round:{round_no}:probe:{probe_offset}",
                     )
-                    if (
-                        getattr(self.agent, "min_cross_dataset_pairs", 0) > 0
-                        and not feasibility.get("batch_gate", {}).get("feasible", False)
-                    ):
+                    if (isinstance(feasibility, dict) and
+                        getattr(self.agent, "min_cross_dataset_pairs", 0) > 0 and
+                        not feasibility.get("batch_gate", {}).get("feasible", False)):
+                        config = getattr(self.agent, "factory_config", {}) or {}
+                        decision = self.route_decision(
+                            session.get("last_feasibility_probe"), feasibility,
+                            route_attempt=session.get("route_attempt", 0),
+                            no_gain_attempts=session.get("no_gain_attempts", 0),
+                            max_route_attempts=config.get("max_route_attempts", 3),
+                            max_no_gain_attempts=config.get("max_no_gain_attempts", 2),
+                        )
+                        session["last_feasibility_probe"] = feasibility
+                        session["route_attempt"] = decision["route_attempt"] + 1
+                        session["no_gain_attempts"] = decision["no_gain_attempts"]
                         session["probe_offset"] = probe_offset + 1
-                        session["last_action"] = "WAIT_FACTORY_FEASIBILITY"
+                        session["last_action"] = (
+                            "STOP_MECHANISM_ROUTE" if decision["action"] == "STOP"
+                            else "REROUTE_FACTORY_FEASIBILITY"
+                        )
                         session["last_result"] = {
                             "round_no": round_no,
                             "proposals": 0,
                             "status": "FACTORY_FEASIBILITY_BLOCKED",
                             "failure_taxonomy": feasibility.get("failure_taxonomy"),
                             "feasibility_probe": feasibility,
+                            "route_decision": decision,
                         }
                         self._save_session(session)
+                        if decision["action"] == "STOP":
+                            session["status"] = "STOPPED"
+                            self._save_session(session)
+                            break
                         self._bounded_sleep(self._retry_delay(idle, session), session["deadline"])
                         continue
                 proposals = self.factory.generate_factory_batch(

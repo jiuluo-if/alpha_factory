@@ -77,3 +77,8 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 # Frequency evidence and feasibility (2026-09-10)
 
 Frequency is auditable evidence, not an unqualified field attribute. Platform metadata is `EXPLICIT_PLATFORM`; description-derived values are `DESCRIPTION_INFERRED`; missing, ambiguous, or conflicting values remain `UNKNOWN`/`CONFLICT` and cannot silently satisfy a relationship gate. A bounded feasibility probe must establish at least one novel, relationship-`ALLOW`, frequency-compatible, template-compatible cross-dataset candidate before full atomic batch assembly.
+# Bounded mechanism reroute and DONE parent eligibility (2026-09-10)
+
+When feasibility fails, the factory compares admissible relationships, canonical expressions, mechanism family and dataset composition. Seed changes alone do not count as information gain. Route attempts are bounded; repeated no-gain or exhausted route attempts produce a recorded STOP. REVIEW/UNKNOWN remains fail-closed.
+
+Only local trajectory evidence from a real settled `DONE` experiment can become an optimizer parent. The parent must retain metrics, checks (including explicit UNKNOWN where applicable), expression, field audit metadata, hypothesis and economic mechanism. Alpha Feed metadata cannot restore evidence.

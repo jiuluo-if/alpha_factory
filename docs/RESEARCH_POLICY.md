@@ -111,3 +111,8 @@ deprioritized, while an explicit alternative explanation remains eligible.
 This ordering never changes quota, reservation, checkpoint, route, or exact
 batch rules. Shortage is reported rather than filled with UNKNOWN/REVIEW,
 duplicates, or parameter variants.
+## 端到端 budget shortage 与 route 边界（2026-09-10）
+
+- 预算优先级只在 hard-gated 候选中派生，顺序固定为 HIGH → NORMAL → LOW；饱和计数来自当前候选池，属于本轮审计，不是新的研究状态。
+- route 负责判断是否换路线，budget 负责选择槽位。若 selected batch 因真实候选不足无法满足 exact-100，runner 使用实际 selected batch 的 expression/semantic/dataset fingerprints 进入既有 bounded route/no-gain 控制；重复无信息时停止，不以等待代替换路，也不降低语义门槛。
+- shortage 分支不调用 `run_proposals()`、不预留 quota、不创建 checkpoint；只有完整 hard-gated exact batch 才进入既有生产执行链。

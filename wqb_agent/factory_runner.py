@@ -21,6 +21,7 @@ import uuid
 from contextlib import redirect_stdout
 
 from .artifacts import atomic_write_json_if_changed
+from .diversity import field_concept_keys, semantic_mechanism_key
 from .expression import canonical_expression
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
@@ -111,6 +112,49 @@ class AIFactoryRunner:
                 "rediscovery"
             ),
         }
+
+    @staticmethod
+    def _selection_probe(proposals, feasibility, budget_audit):
+        """Project the actually selected batch into the route control plane."""
+        probe = dict(feasibility) if isinstance(feasibility, dict) else {}
+        items = [item for item in (proposals or []) if isinstance(item, dict)]
+        probe["candidate_expression_fingerprints"] = sorted({
+            canonical_expression(item.get("expression"))
+            for item in items
+            if canonical_expression(item.get("expression"))
+        })
+        probe["semantic_mechanism_fingerprints"] = sorted({
+            key for key in (semantic_mechanism_key(item) for item in items)
+            if key != "UNKNOWN"
+        })
+        probe["structural_family_fingerprints"] = sorted({
+            str(item.get("template_family") or item.get("template_id"))
+            for item in items
+            if item.get("template_family") or item.get("template_id")
+        })
+        probe["field_concept_fingerprints"] = sorted({
+            concept for item in items for concept in field_concept_keys(item)
+            if concept != "unknown"
+        })
+        probe["dataset_route"] = sorted({
+            str(dataset)
+            for item in items
+            for dataset in (item.get("datasets") or [])
+            if dataset is not None and str(dataset).strip()
+        })
+        probe["research_question_fingerprints"] = sorted({
+            str(item.get("experiment_question") or item.get("research_question")).strip().lower()
+            for item in items
+            if item.get("experiment_question") or item.get("research_question")
+        })
+        probe["budget_shortage_count"] = int(
+            budget_audit.get("shortage_count", 0)
+        ) if isinstance(budget_audit, dict) else 0
+        probe["budget_shortage_reason"] = (
+            budget_audit.get("shortage_reason")
+            if isinstance(budget_audit, dict) else None
+        )
+        return probe
 
     @classmethod
     def read_session(cls, state_dir):
@@ -359,6 +403,7 @@ class AIFactoryRunner:
         session.setdefault("route_attempt", 0)
         session.setdefault("no_gain_attempts", 0)
         session.setdefault("last_feasibility_probe", None)
+        session.setdefault("last_budget_probe", None)
         try:
             quota = self._prepare_quota(session, weekly_cap, daily_cap)
         except ValueError:
@@ -712,6 +757,50 @@ class AIFactoryRunner:
                         "BATCH_GATE", proposals=len(proposals) if isinstance(proposals, list) else 0,
                         valid=False, errors=len(batch_errors),
                     )
+                budget_audit = getattr(self.factory, "last_budget_audit", None)
+                shortage_count = (
+                    int(budget_audit.get("shortage_count", 0))
+                    if isinstance(budget_audit, dict) else 0
+                )
+                if shortage_count > 0:
+                    budget_probe = self._selection_probe(
+                        proposals, feasibility, budget_audit
+                    )
+                    config = getattr(self.agent, "factory_config", {}) or {}
+                    decision = self.route_decision(
+                        session.get("last_budget_probe"), budget_probe,
+                        route_attempt=session.get("route_attempt", 0),
+                        no_gain_attempts=session.get("no_gain_attempts", 0),
+                        max_route_attempts=config.get("max_route_attempts", 3),
+                        max_no_gain_attempts=config.get("max_no_gain_attempts", 2),
+                    )
+                    session["last_budget_probe"] = budget_probe
+                    session["route_attempt"] = decision["route_attempt"] + 1
+                    session["no_gain_attempts"] = decision["no_gain_attempts"]
+                    session["probe_offset"] = probe_offset + 1
+                    session["last_action"] = (
+                        "STOP_BUDGET_SHORTAGE"
+                        if decision["action"] == "STOP"
+                        else "REROUTE_BUDGET_SHORTAGE"
+                    )
+                    session["last_result"] = {
+                        "round_no": round_no,
+                        "proposals": len(proposals),
+                        "required": batch_size,
+                        "status": "FACTORY_BUDGET_SHORTAGE",
+                        "errors": batch_errors[:5],
+                        "budget_audit": budget_audit,
+                        "route_decision": decision,
+                    }
+                    self._save_session(session)
+                    if decision["action"] == "STOP":
+                        session["status"] = "STOPPED"
+                        self._save_session(session)
+                        break
+                    self._bounded_sleep(
+                        self._retry_delay(idle, session), session["deadline"]
+                    )
+                    continue
                 session["probe_offset"] = probe_offset + 1
                 session["last_action"] = "WAIT_FACTORY_BATCH"
                 session["last_result"] = {

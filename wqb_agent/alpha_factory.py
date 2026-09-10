@@ -2129,6 +2129,9 @@ class AlphaFactory:
         can retain provenance while the factory still owns the 100-slot
         envelope.
         """
+        # Do not expose the previous round's derived audit when this call
+        # exits before candidate selection (invalid input or an empty pool).
+        self.last_budget_audit = {}
         try:
             limit = max(0, int(target))
         except (TypeError, ValueError):

@@ -257,3 +257,9 @@ and records shortage/priority counts in the existing `factory_batch_stats`.
 It cannot alter route state, quota reservation, exact batch validation or
 checkpoint behavior; explicitly UNKNOWN candidates are not used to fill a
 batch.
+## 研究预算与端到端路由（2026-09-10）
+
+- `ExperienceMemory.context()` → suggestion bundle → `AIFactoryRunner` → `generate_factory_batch(research_context=...)` 是研究反馈进入预算选择的唯一现有传递链；预算 selector 不拥有 Memory 或持久化研究状态。
+- `select_budget_candidates()` 只对 hard-gated candidate pool 做确定性排序：优先级顺序为 HIGH、NORMAL、LOW；optimization 按 lineage 交错，exploration 按 semantic mechanism 交错，并在既有 `factory_batch_stats` 中记录 derived audit。
+- 候选池饱和是本轮派生审计，不建立第二套 budget state；explicit UNKNOWN 仍不能填充 exact batch。Factory 早退会清空 transient `last_budget_audit`，避免跨轮读取旧审计。
+- 当实际 selected batch 少于 exact-100 且存在 budget shortage audit 时，runner 将 selected-batch fingerprints 送入既有 bounded route/no-gain 控制面；重复无信息最终 `STOP_BUDGET_SHORTAGE`，不预留 quota、不调用 `run_proposals`。checkpoint、quota、Simulation POST owner 不变。

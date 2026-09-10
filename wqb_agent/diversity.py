@@ -21,6 +21,7 @@ from .expression import analyze_expression, canonical_expression
 from .metrics import score_of
 
 _FIELD_TOKEN_RE = re.compile(r"[a-z0-9_]+")
+_BUDGET_PRIORITY_ORDER = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
 
 
 def _clean(value):
@@ -305,12 +306,32 @@ def select_budget_candidates(optimization, exploration, *, target,
     except (TypeError, ValueError):
         optimization_cap = 0
 
+    optimization_items_raw = [
+        item for item in (optimization or ()) if isinstance(item, dict)
+    ]
+    exploration_items_raw = [
+        item for item in (exploration or ()) if isinstance(item, dict)
+    ]
+    eligible_raw = [
+        item for item in optimization_items_raw + exploration_items_raw
+        if str(item.get("semantic_status") or "").upper() != "UNKNOWN"
+    ]
+    saturation = {
+        "mechanisms": Counter(semantic_mechanism_key(item) for item in eligible_raw),
+        "lineages": Counter(
+            lineage for lineage in (_lineage_key(item) for item in eligible_raw)
+            if lineage
+        ),
+    }
+
     def prepare(items):
         prepared = []
         for item in items or []:
             if not isinstance(item, dict):
                 continue
-            view = derive_budget_priority(item, context=context)
+            view = derive_budget_priority(
+                item, context=context, saturation=saturation
+            )
             if str(item.get("semantic_status") or "").upper() == "UNKNOWN":
                 continue
             candidate = dict(item)
@@ -336,7 +357,13 @@ def select_budget_candidates(optimization, exploration, *, target,
                 item[0]["saturation"]["lineage_count"],
                 canonical_expression(item[1].get("expression") or ""),
             ))
-        ordered_groups = sorted(groups)
+        ordered_groups = sorted(
+            groups,
+            key=lambda key: (
+                _BUDGET_PRIORITY_ORDER.get(key[0], len(_BUDGET_PRIORITY_ORDER)),
+                key[1],
+            ),
+        )
         result = []
         while ordered_groups and len(result) < cap:
             next_groups = []
@@ -349,8 +376,8 @@ def select_budget_candidates(optimization, exploration, *, target,
             ordered_groups = next_groups
         return result
 
-    optimization_items = prepare(optimization)
-    exploration_items = prepare(exploration)
+    optimization_items = prepare(optimization_items_raw)
+    exploration_items = prepare(exploration_items_raw)
     unknown_count = sum(
         1 for item in list(optimization or []) + list(exploration or [])
         if isinstance(item, dict)
@@ -376,6 +403,14 @@ def select_budget_candidates(optimization, exploration, *, target,
             else "ELIGIBLE_CANDIDATE_SHORTAGE" if len(selected) < target else None
         ),
         "unknown_rejected": unknown_count,
+        "saturation": {
+            "mechanism_groups": sum(
+                1 for count in saturation["mechanisms"].values() if count > 1
+            ),
+            "lineage_groups": sum(
+                1 for count in saturation["lineages"].values() if count > 1
+            ),
+        },
         "priority_counts": {
             key.lower(): priority_counts.get(key, 0)
             for key in ("HIGH", "NORMAL", "LOW")
@@ -389,11 +424,11 @@ def select_budget_candidates(optimization, exploration, *, target,
         "saturation_dropped_or_deprioritized": {
             "mechanism": sum(
                 1 for item in (exploration_items + optimization_items)
-                if item[1].get("priority_reason") == "MECHANISM_SATURATION"
+                if item[0]["saturation"]["mechanism_count"] > 1
             ),
             "lineage": sum(
                 1 for item in (exploration_items + optimization_items)
-                if item[1].get("priority_reason") == "LINEAGE_SATURATION"
+                if item[0]["saturation"]["lineage_count"] > 1
             ),
         },
         "selected_mechanisms": dict(selected_mechanisms),

@@ -1162,6 +1162,8 @@ class FieldDiscovery:
             keyword_contribution = self._keyword_contribution(
                 haystack_id, haystack_name, haystack_desc, keywords
             )
+            if self.selection_mode == "semantic" and keyword_contribution <= 0:
+                continue
             coverage = normalize_coverage(field)
             coverage_score = (
                 0.0 if coverage is None else min(2.0, max(0.0, coverage * 2.0))
@@ -1280,5 +1282,6 @@ _STOPWORDS = {
     "with", "from", "that", "this", "will", "have", "been", "being",
     "into", "over", "under", "across", "about", "their", "there", "which",
     "while", "using", "should", "would", "where", "when", "after", "before",
+    "and", "or", "a", "an", "the", "of", "to", "in", "on", "for",
     "的", "了", "和", "与", "及", "在", "对", "将", "从", "是",
 }

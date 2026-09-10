@@ -789,6 +789,41 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
         self.assertIn("价格", tokens)
         self.assertIn("动量", tokens)
 
+    def test_hypothesis_keywords_ignore_english_function_words(self):
+        tokens = FieldDiscovery._keywords_from_hypothesis({
+            "statement": (
+                "Which liquidity and trading activity identify deterioration "
+                "or participation changes?"
+            ),
+            "tags": ["liquidity", "volume"],
+        })
+
+        self.assertIn("liquidity", tokens)
+        self.assertIn("volume", tokens)
+        self.assertNotIn("and", tokens)
+        self.assertNotIn("or", tokens)
+
+    def test_semantic_discovery_does_not_admit_coverage_only_fields(self):
+        class CoverageOnlyClient(FakeClient):
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                return [{
+                    "id": "sector",
+                    "description": "sector classification",
+                    "coverage": 0.95,
+                    "type": field_type,
+                }], 1
+
+        discovery = FieldDiscovery(
+            CoverageOnlyClient(), selection_mode="semantic", max_pages=1
+        )
+
+        fields = discovery.discover(
+            {"datasets": ["pv13"], "statement": "liquidity", "tags": ["liquidity"]},
+            target_count=1,
+        )
+
+        self.assertEqual(fields, [])
+
     def test_ranking_provenance_explains_each_selected_field(self):
         discovery = FieldDiscovery(
             self.client,

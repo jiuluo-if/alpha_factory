@@ -27,6 +27,11 @@ class OptimizerGateReport(TypedDict):
     done_parent_count: int
     ready_parent_count: int
     blocked_reasons: dict[str, int]
+    simulation_done: int
+    trajectory_recorded: int
+    optimizer_candidates: int
+    optimizer_rejected: int
+    child_generated: int
 
 
 class OptimizerWorkflow:
@@ -54,17 +59,47 @@ class OptimizerWorkflow:
         self.quality_policy = quality_policy
         self.operator_reference = operator_reference
         self.hooks = hooks
+        self.last_handoff_report: dict[str, int] = {}
+
+    @staticmethod
+    def _parent_rejections(parent):
+        if not isinstance(parent, dict):
+            return ["INVALID_PARENT"]
+        if str(parent.get("status") or "").upper() != "DONE":
+            return ["PARENT_NOT_DONE"]
+        reasons = []
+        metrics = parent.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            reasons.append("PARENT_METRICS_MISSING")
+        if not isinstance(metrics, dict) or "checks" not in metrics:
+            reasons.append("PARENT_CHECKS_INCOMPLETE")
+        if not parent.get("expression"):
+            reasons.append("PARENT_METRICS_MISSING")
+        field_missing = False
+        for key in ("fields_used", "datasets", "field_understanding",
+                    "field_analysis", "field_source", "field_hypothesis_basis"):
+            value = parent.get(key)
+            if not value:
+                field_missing = True
+        if field_missing:
+            reasons.append("PARENT_FIELD_EVIDENCE_MISSING")
+        if (not parent.get("hypothesis_id") or
+            not isinstance(parent.get("economic_mechanism"), str) or
+            not parent["economic_mechanism"].strip()):
+            reasons.append("PARENT_HYPOTHESIS_MISSING")
+        return reasons
 
     def optimizable_signal_records(self, limit=128):
         """返回 trajectory 中已有 DONE 证据，并按 cloud metadata 排序。"""
         records = []
+        rejected = 0
         cloud_ids = self._cloud_alpha_ids()
         for position, exp in enumerate(reversed(self.trajectory.recent(limit))):
-            if exp.status != "DONE" or not exp.metrics:
-                continue
-            if not exp.field_analysis or not exp.field_understanding:
-                continue
             record = exp.to_dict()
+            reasons = self._parent_rejections(record)
+            if reasons:
+                rejected += 1
+                continue
             # Keep evidence ownership separate from the compatibility source
             # label consumed by existing proposal/batch statistics.
             record["evidence_source"] = "local_trajectory"
@@ -84,6 +119,16 @@ class OptimizerWorkflow:
                 item.get("optimization_recency", 0),
             )
         )
+        self.last_handoff_report = {
+            "simulation_done": sum(
+                1 for exp in self.trajectory.recent(limit)
+                if str(getattr(exp, "status", "")).upper() == "DONE"
+            ),
+            "trajectory_recorded": len(records),
+            "optimizer_candidates": len(records),
+            "optimizer_rejected": rejected,
+            "child_generated": 0,
+        }
         return records
 
     def _cloud_alpha_ids(self):
@@ -148,6 +193,9 @@ class OptimizerWorkflow:
             "done_parent_count": 0,
             "ready_parent_count": 0,
             "blocked_reasons": {},
+            "simulation_done": 0, "trajectory_recorded": 0,
+            "optimizer_candidates": 0, "optimizer_rejected": 0,
+            "child_generated": 0,
         }
 
         def block(reason):
@@ -157,37 +205,29 @@ class OptimizerWorkflow:
         for parent in parents or []:
             report["parent_count"] += 1
             if not isinstance(parent, (dict, Experiment)):
-                block("invalid_parent")
+                block("INVALID_PARENT")
                 continue
             if str(self._optimizer_value(parent, "status", "")).upper() != "DONE":
-                block("parent_not_done")
+                block("PARENT_NOT_DONE")
                 continue
             report["done_parent_count"] += 1
-            missing = []
-            metrics = self._optimizer_value(parent, "metrics")
-            if not isinstance(metrics, dict) or not metrics:
-                missing.append("metrics")
-            if not self._optimizer_value(parent, "fields_used"):
-                missing.append("fields_used")
-            if not self._optimizer_value(parent, "datasets"):
-                missing.append("datasets")
-            if not isinstance(
-                self._optimizer_value(parent, "field_understanding"), dict
-            ):
-                missing.append("field_understanding")
-            if not isinstance(
-                self._optimizer_value(parent, "field_analysis"), dict
-            ):
-                missing.append("field_analysis")
-            if not isinstance(
-                self._optimizer_value(parent, "child_economic_hypothesis"), dict
-            ):
-                missing.append("child_economic_hypothesis")
+            missing = self._parent_rejections(
+                parent if isinstance(parent, dict) else parent.to_dict()
+            )
+            missing = list(missing)
+            if not isinstance(self._optimizer_value(parent, "child_economic_hypothesis"), dict):
+                missing.append("PARENT_INCREMENTAL_EVIDENCE_INSUFFICIENT")
             if missing:
                 for reason in missing:
-                    block(f"missing_{reason}")
+                    block(reason)
                 continue
             report["ready_parent_count"] += 1
+        report["simulation_done"] = report["done_parent_count"]
+        report["trajectory_recorded"] = report["ready_parent_count"]
+        report["optimizer_candidates"] = report["ready_parent_count"]
+        report["optimizer_rejected"] = max(
+            0, report["parent_count"] - report["ready_parent_count"]
+        )
         return report
 
     def generate(self, parents=None, *, max_candidates=4):
@@ -207,7 +247,7 @@ class OptimizerWorkflow:
             max_turnover=quality.get("max_turnover", 0.7),
         )
         agent_screened = self._agent_screen_optimization_parents(code_screened)
-        return self.alpha_factory.optimize_signal_proposals(
+        result = self.alpha_factory.optimize_signal_proposals(
             agent_screened,
             self.operator_reference,
             max_candidates=max_candidates,
@@ -217,3 +257,9 @@ class OptimizerWorkflow:
             min_turnover=quality.get("min_turnover", 0.01),
             max_turnover=quality.get("max_turnover", 0.7),
         )
+        self.last_handoff_report.update({
+            "optimizer_candidates": len(agent_screened),
+            "optimizer_rejected": max(0, len(parents) - len(agent_screened)),
+            "child_generated": len(result or []),
+        })
+        return result

@@ -21,7 +21,8 @@ def _parent(expression="rank(field)", *, alpha_id=None, child=None):
         "expression": expression,
         "fields_used": ["field"],
         "datasets": ["fundamental6"],
-        "metrics": {"sharpe": 1.1, "fitness": 0.8, "turnover": 0.2},
+        "metrics": {"sharpe": 1.1, "fitness": 0.8, "turnover": 0.2,
+                    "checks": [{"name": "SELF_CORRELATION", "status": "UNKNOWN"}]},
         "health": {"ok": True},
         "field_understanding": {"field": "已核验字段"},
         "field_analysis": {"field": {"data_type": "MATRIX"}},
@@ -30,6 +31,7 @@ def _parent(expression="rank(field)", *, alpha_id=None, child=None):
         "alpha_id": alpha_id,
         "child_economic_hypothesis": child,
         "hypothesis_id": "h1",
+        "economic_mechanism": "信息变化导致相对定价差异",
     }
 
 
@@ -67,6 +69,18 @@ class RecordingFactory:
 
 
 class TestOptimizerWorkflow(unittest.TestCase):
+    def test_done_parent_requires_complete_local_evidence_contract(self):
+        incomplete = _parent()
+        incomplete.pop("economic_mechanism")
+        incomplete.pop("field_source")
+        incomplete["metrics"].pop("checks")
+        workflow = self.workflow(FakeTrajectory([]))
+        records = workflow.optimizable_signal_records()
+        self.assertEqual(records, [])
+        report = workflow.gate_report([incomplete])
+        self.assertEqual(report["ready_parent_count"], 0)
+        self.assertGreater(report["blocked_reasons"].get("PARENT_CHECKS_INCOMPLETE", 0), 0)
+        self.assertGreater(report["blocked_reasons"].get("PARENT_HYPOTHESIS_MISSING", 0), 0)
     def workflow(self, trajectory, cache=None, factory=None, *, ensure=None,
                  terminal=None):
         return OptimizerWorkflow(
@@ -97,7 +111,8 @@ class TestOptimizerWorkflow(unittest.TestCase):
         incomplete = SimpleNamespace(
             status="DONE", metrics={"sharpe": 2.0},
             field_analysis={}, field_understanding={"field": "ok"},
-            alpha_id="incomplete-alpha", to_dict=lambda: _parent("rank(incomplete)"),
+            alpha_id="incomplete-alpha",
+            to_dict=lambda: dict(_parent("rank(incomplete)"), field_analysis={}),
         )
         cache = FakeCache({
             "days": {"2026-09-09": {"simulations": [
@@ -161,14 +176,13 @@ class TestOptimizerWorkflow(unittest.TestCase):
         self.assertEqual(report["done_parent_count"], 2)
         self.assertEqual(report["ready_parent_count"], 1)
         self.assertEqual(report["blocked_reasons"], {
-            "invalid_parent": 1,
-            "parent_not_done": 1,
-            "missing_metrics": 1,
-            "missing_fields_used": 1,
-            "missing_datasets": 1,
-            "missing_field_understanding": 1,
-            "missing_field_analysis": 1,
-            "missing_child_economic_hypothesis": 1,
+            "INVALID_PARENT": 1,
+            "PARENT_NOT_DONE": 1,
+            "PARENT_METRICS_MISSING": 2,
+            "PARENT_CHECKS_INCOMPLETE": 1,
+            "PARENT_FIELD_EVIDENCE_MISSING": 1,
+            "PARENT_HYPOTHESIS_MISSING": 1,
+            "PARENT_INCREMENTAL_EVIDENCE_INSUFFICIENT": 1,
         })
         self.assertEqual(parents, original)
         serialized = repr(report)

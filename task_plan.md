@@ -1,5 +1,14 @@
 # 任务计划：运行数据审查、清理与工厂/Agent 边界修复
 
+## 2026-09-10 当前阶段：机制换路与 DONE→Optimizer
+
+- [x] 读取 pasted task、重审远端/本地状态与既有 P0 实现
+- [x] 先写红测试并确认缺口
+- [x] 实现有界 feasibility route decision 与机制族耗尽分类
+- [x] 收紧本地 DONE parent evidence gate，记录 handoff 计数/拒绝原因
+- [ ] 完成全量验证、fresh code review、提交并推送每个验证阶段
+- [ ] 交付 start/current/remote SHA、未启动真实 Simulation、checkpoint/SUBMIT_UNKNOWN 不变及 deferred 范围
+
 ## 已完成目标
 
 审查最近运行产生的数据，诊断 Agent/执行链问题；核对并删除用户指定的外部 `.wqb_state`，以及本仓库中经过证据确认的多余生成物。

@@ -224,3 +224,19 @@
 
 - 当前最新 suggestion bundle 为 100 fields / 6 datasets，频率分布 `UNKNOWN=81、daily=14、annual=2、intraday=2、quarterly=1`；原 profile 未保存证据来源。
 - 原 runner 在完整 assembly 后才判断 cross-dataset gate；本阶段新增 frequency evidence 与 bounded feasibility probe，失败可区分 taxonomy 并在 assembly 前阻断。
+
+## 2026-09-10 机制路由与 optimizer handoff 当前重审
+
+- 本轮重新 `git fetch origin` 后确认 `main`、本地 HEAD、`origin/main` 均为 `ba919da7b6a2ea1be509d7b3c5fe3e67c8e14714`，工作树干净；`context --compact` 为 SAFE、无未完成 checkpoint、`SUBMIT_UNKNOWN=0`。此前状态结论不作为当前事实。
+- `factory_runner.py` 当前 feasibility 失败分支只写 `WAIT_FACTORY_FEASIBILITY`，然后递增 `probe_offset`；`generate_factory_batch()` 仍收到 seed 变化，但没有 mechanism family、dataset route、previous failure、information gain、bounded retry 或 STOP/REROUTE 决策。
+- 当前 `AlphaFactory.assess_feasibility()` 已有 `candidates_before_dedupe`、`candidates_after_dedupe`、`novel_cross_dataset_relationship_count`，但这些结果尚未转成 control decision；历史耗尽不会得到 `MECHANISM_FAMILY_EXHAUSTED`。
+- DONE handoff 的真实调用链已确认：`ProposalExecutionWorkflow._run_simulator()` → `Simulator.run(on_complete=Agent._record_live_result)` → `Agent._record_live_result()` 写完整本地结果并 `trajectory.add(exp)`；round close 的 `trajectory.add_many()` 由 ID 去重。因此同进程 DONE 已有进入 trajectory 的路径，不应从 checkpoint 重建 metrics。
+- `OptimizerWorkflow.optimizable_signal_records()` 当前只检查 `DONE`、非空 metrics、`field_analysis` 和 `field_understanding`；缺少 expression、fields/datasets、field source/basis、checks 状态、hypothesis/economic mechanism 的明确 rejection taxonomy，也没有 handoff 计数报告。`screen_optimization_parents()` 进一步检查部分字段，但同样不验证 checks/hypothesis/mechanism。
+- 本轮改动边界：复用现有 `factory_session.json`、`factory_batch_stats`、`AlphaFactory.assess_feasibility()`、`Trajectory` 和 `OptimizerWorkflow`；不新增 workflow/state machine，不扩展 checkpoint，不读取 Alpha Feed 作为 evidence，不实现 Alpha Feed/颜色/大型 heartbeat。
+
+## 2026-09-10 实现后复核
+
+- feasibility probe 现在输出有界的 canonical expression、relationship、mechanism family 与 dataset route fingerprints；前有候选、后被历史去重清空时 taxonomy 为 `MECHANISM_FAMILY_EXHAUSTED`。
+- runner 使用既有 factory session 保存 route attempt/no-gain/probe 与 decision；只在既有 cross-dataset gate 失败时触发 `REROUTE` 或 `STOP`，不产生新 POST，不写 checkpoint/result payload。
+- optimizer parent gate 统一要求本地 DONE、metrics、checks（含显式 UNKNOWN）、expression、字段审计、hypothesis 与 economic mechanism；拒绝原因使用 `PARENT_*` taxonomy，cloud metadata 仍只影响优先级。
+- 定向回归 59 tests OK；完整 unittest 664 tests OK，compileall、Ruff、typed frontier mypy、diff check 均通过。未启动真实 Simulation，checkpoint 与 `SUBMIT_UNKNOWN` 规则未改动。

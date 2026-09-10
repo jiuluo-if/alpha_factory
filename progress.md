@@ -1,5 +1,14 @@
 # 进度日志
 
+## 2026-09-10 机制换路与 optimizer handoff
+
+- 已完成当前 main 与远端、运行上下文及既有可行性实现的重审；无未完成 checkpoint、无 `SUBMIT_UNKNOWN`，未启动真实 Simulation。
+- 先写红测试并确认失败：历史耗尽未映射为机制族耗尽、runner 缺 route decision、DONE parent 缺完整证据未被拒绝。
+- 已实现 bounded route decision：比较 canonical expression/relationship/dataset/mechanism fingerprints，区分 `REROUTE`、`STOP`、`NO_INFORMATION_GAIN` 与 `ROUTE_ATTEMPTS_EXHAUSTED`；保留 fail-closed REVIEW/UNKNOWN。
+- 已将历史候选“前有后无”分类为 `MECHANISM_FAMILY_EXHAUSTED`，并把 route/no-gain metadata 写入既有 factory session，不增加 state owner、metrics 或 checkpoint payload。
+- 已收紧 optimizer parent：必须来自本地 DONE trajectory，具备 metrics/checks、expression、字段审计、hypothesis 与 economic mechanism；新增 handoff 计数与拒绝分类。
+- 定向验证：59 tests OK；下一步执行全量质量门、fresh code review 和分阶段提交/远端核验。
+
 ## 2026-09-08
 
 - 已读取项目 `AGENTS.md`。

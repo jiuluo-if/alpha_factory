@@ -328,28 +328,32 @@ class TestClassifiedExceptions(unittest.TestCase):
         self.client = WQBClient.__new__(WQBClient)
         self.client._local = threading.local()
 
-    def test_mapping(self):
-        c = self.client
-        self.assertIsInstance(c._classified_exception(401, "auth", "x"), WQBAuthError)
-        self.assertIsInstance(c._classified_exception(429, "slow", "x"), WQBRateLimitError)
-        self.assertIsInstance(c._classified_exception(422, "bad expr", "x"), WQBRejectedError)
-        self.assertIsInstance(c._classified_exception(400, "bad settings", "x"), WQBRejectedError)
-        self.assertIsInstance(c._classified_exception(404, "not found", "x"), WQBNotFoundError)
-        self.assertIsInstance(c._classified_exception(500, "boom", "x"), WQBSimulationError)
-
-    def test_kind_attribute(self):
-        self.assertEqual(WQBRejectedError.kind, FailureKind.SYNTAX)
-        self.assertEqual(WQBRateLimitError.kind, FailureKind.RATE_LIMIT)
-        self.assertEqual(WQBNotFoundError.kind, FailureKind.DATA)
-        self.assertEqual(WQBTimeoutError.kind, FailureKind.TIMEOUT)
-        self.assertEqual(WQBAuthError.kind, FailureKind.AUTH)
-
-    def test_all_are_wqberror(self):
+    def test_classified_exception_contract(self):
         from wqb_agent.client import WQBError
-        for exc in (WQBAuthError("a"), WQBRateLimitError("b"),
-                    WQBRejectedError("c"), WQBNotFoundError("d"),
-                    WQBTimeoutError("e")):
-            self.assertIsInstance(exc, WQBError)
+
+        mappings = (
+            (401, "auth", WQBAuthError, FailureKind.AUTH),
+            (429, "slow", WQBRateLimitError, FailureKind.RATE_LIMIT),
+            (422, "bad expr", WQBRejectedError, FailureKind.SYNTAX),
+            (400, "bad settings", WQBRejectedError, FailureKind.SYNTAX),
+            (404, "not found", WQBNotFoundError, FailureKind.DATA),
+            (500, "boom", WQBSimulationError, None),
+        )
+        for status, text, expected_type, expected_kind in mappings:
+            with self.subTest(status=status):
+                error = self.client._classified_exception(status, text, "x")
+                self.assertIsInstance(error, expected_type)
+                self.assertIsInstance(error, WQBError)
+                if expected_kind is not None:
+                    self.assertEqual(expected_type.kind, expected_kind)
+
+        for expected_type, expected_kind in (
+            (WQBTimeoutError, FailureKind.TIMEOUT),
+            (WQBAuthError, FailureKind.AUTH),
+        ):
+            with self.subTest(exception=expected_type.__name__):
+                self.assertIsInstance(expected_type("test"), WQBError)
+                self.assertEqual(expected_type.kind, expected_kind)
 
     def test_classify_experiment_new_names(self):
         exp = Experiment(1, "h", "rank(x)", {}, ["x"])

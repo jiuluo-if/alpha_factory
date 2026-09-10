@@ -12,9 +12,10 @@ from wqb_agent.diversity import (
 )
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.memory import ExperienceMemory
+from wqb_agent.optimizer_workflow import OptimizerHooks, OptimizerWorkflow
 from wqb_agent.proposal_contract import _operator_reference
 from wqb_agent.reflection import Reflector
-from wqb_agent.state import Experiment
+from wqb_agent.state import Experiment, Trajectory
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPERATOR_REFERENCE = _operator_reference(
@@ -94,10 +95,24 @@ class TestResearchLoopIntegration(unittest.TestCase):
     def test_real_optimizer_child_preserves_parent_lineage_into_budget(self):
         factory = AlphaFactory()
         parent = self._parent()
-        children = factory.optimize_signal_proposals(
-            [parent.to_dict()], OPERATOR_REFERENCE, max_candidates=1
+        trajectory = Trajectory(persist=False)
+        trajectory.add(parent)
+        optimizer = OptimizerWorkflow(
+            trajectory=trajectory,
+            alpha_feed_cache=SimpleNamespace(load=lambda: {}),
+            alpha_factory=factory,
+            quality_policy={},
+            operator_reference=OPERATOR_REFERENCE,
+            hooks=OptimizerHooks(
+                ensure_loaded=lambda: None,
+                terminal_expressions=lambda: set(),
+            ),
         )
+        records = optimizer.optimizable_signal_records()
+        children = optimizer.generate(records, max_candidates=1)
 
+        self.assertEqual(optimizer.last_handoff_report["trajectory_recorded"], 1)
+        self.assertEqual(optimizer.last_handoff_report["optimizer_candidates"], 1)
         self.assertEqual(len(children), 1)
         self.assertEqual(children[0]["lineage_id"], "lineage-parent")
         self.assertEqual(children[0]["research_layer"], "optimization")
@@ -106,6 +121,39 @@ class TestResearchLoopIntegration(unittest.TestCase):
         )
         self.assertEqual(selected[0]["lineage_key"], "lineage-parent")
         self.assertEqual(audit["optimization"]["unique_lineages"], 1)
+
+    def test_real_multifield_relationship_reaches_budget_with_audit(self):
+        factory = AlphaFactory()
+        fields = [
+            self._profile(
+                "put_iv", "put option implied volatility", "option8"
+            ) | {"category": "options"},
+            self._profile(
+                "call_iv", "call option implied volatility", "option8"
+            ) | {"category": "options"},
+        ]
+        proposals = factory.assemble_proposals(
+            {"id": "h-pair", "template_ids": ["relative_spread_change"]},
+            fields,
+            OPERATOR_REFERENCE,
+            max_candidates=1,
+        )
+
+        self.assertEqual(len(proposals), 1)
+        relationship = proposals[0]["relationship_audit"]
+        self.assertEqual(relationship["relationship_admission"], "ALLOW")
+        self.assertEqual(relationship["slot_assignment"], {
+            "p": "put_iv", "s": "call_iv",
+        })
+        selected, audit = select_budget_candidates(
+            proposals, [], target=1, optimization_cap=1,
+        )
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(
+            selected[0]["relationship_audit"], relationship
+        )
+        self.assertNotEqual(semantic_mechanism_key(selected[0]), "UNKNOWN")
+        self.assertEqual(audit["selected_count"], 1)
 
     def test_reflection_memory_context_reaches_real_optimizer_budget(self):
         question = "does normalization preserve the effect?"
@@ -184,6 +232,34 @@ class TestResearchLoopIntegration(unittest.TestCase):
             [], [low, normal], target=1
         )
         self.assertEqual(selected[0]["expression"], "rank(normal)")
+
+    def test_route_comparison_ignores_order_but_accepts_new_question(self):
+        previous = {
+            "candidate_expression_fingerprints": ["rank(a)"],
+            "semantic_mechanism_fingerprints": ["price:level:persistent"],
+            "relationship_fingerprints": ["pair:relative"],
+            "dataset_route": ["pv1", "fundamental6"],
+            "research_question_fingerprints": ["is the effect relative?"],
+        }
+        reordered = {
+            "candidate_expression_fingerprints": ["rank(b)"],
+            "semantic_mechanism_fingerprints": ["price:level:persistent"],
+            "relationship_fingerprints": ["pair:relative"],
+            "dataset_route": ["fundamental6", "pv1"],
+            "research_question_fingerprints": ["is the effect relative?"],
+        }
+        decision = AIFactoryRunner.route_decision(
+            previous, reordered, route_attempt=0, no_gain_attempts=0,
+        )
+        self.assertFalse(decision["information_gain"])
+        questioned = dict(reordered, research_question_fingerprints=[
+            "is the effect absolute or relative?"
+        ])
+        decision = AIFactoryRunner.route_decision(
+            previous, questioned, route_attempt=0, no_gain_attempts=0,
+        )
+        self.assertTrue(decision["information_gain"])
+        self.assertIn("question_change", decision["information_changes"])
 
     def test_budget_audit_reports_candidate_pool_saturation(self):
         def candidate(expression):
@@ -264,6 +340,78 @@ class TestResearchLoopIntegration(unittest.TestCase):
         self.assertIn("budget_audit", result["last_result"])
         self.assertGreater(result["last_result"]["budget_audit"]["shortage_count"], 0)
         agent.run_proposals.assert_not_called()
+
+    def test_restart_preserves_budget_route_and_no_gain_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now = [0.0]
+            profile = self._profile("close_a")
+
+            def build_agent(factory):
+                return SimpleNamespace(
+                    state_dir=tmp,
+                    alpha_factory=factory,
+                    factory_config={},
+                    min_factory_datasets=1,
+                    min_cross_dataset_pairs=0,
+                    next_round_no=lambda: 1,
+                    run_suggestion_round=lambda _round: {
+                        "research_space": {
+                            "id": "restart-scarce",
+                            "statement": "test restart scarcity",
+                            "datasets": ["pv1"],
+                        },
+                        "fields": [profile],
+                        "operator_reference": OPERATOR_REFERENCE,
+                        "field_source": {"kind": "test"},
+                        "context": {},
+                        "epoch_label": "rb-restart",
+                    },
+                    run_proposals=Mock(),
+                    checkpoints=CheckpointStore(tmp),
+                    memory=SimpleNamespace(seen_expressions=set()),
+                    trajectory=SimpleNamespace(experiments=[]),
+                )
+
+            def sleep(seconds):
+                now[0] += seconds
+
+            first_agent = build_agent(AlphaFactory())
+            first = AIFactoryRunner(
+                first_agent, factory=first_agent.alpha_factory,
+                clock=lambda: now[0], sleeper=sleep,
+            ).run(
+                duration_sec=1,
+                idle_sleep_sec=1,
+                max_simulations=100,
+                daily_simulation_cap=100,
+                weekly_simulation_cap=100,
+            )
+            self.assertEqual(first["last_action"], "REROUTE_BUDGET_SHORTAGE")
+            self.assertEqual(first["route_attempt"], 1)
+            self.assertEqual(first["no_gain_attempts"], 0)
+
+            restarted_agent = build_agent(AlphaFactory())
+            second = AIFactoryRunner(
+                restarted_agent, factory=restarted_agent.alpha_factory,
+                clock=lambda: now[0], sleeper=sleep,
+            ).run(
+                duration_sec=10,
+                idle_sleep_sec=1,
+                max_simulations=100,
+                daily_simulation_cap=100,
+                weekly_simulation_cap=100,
+            )
+            checkpoint_created = os.path.exists(
+                os.path.join(tmp, "round_1.checkpoint.json")
+            )
+
+        self.assertEqual(second["status"], "STOPPED")
+        self.assertEqual(second["last_action"], "STOP_BUDGET_SHORTAGE")
+        self.assertEqual(second["route_attempt"], 3)
+        self.assertEqual(second["no_gain_attempts"], 2)
+        self.assertEqual(second["simulations_reserved"], 0)
+        restarted_agent.run_proposals.assert_not_called()
+        self.assertFalse(checkpoint_created)
 
 
 if __name__ == "__main__":

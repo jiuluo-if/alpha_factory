@@ -361,6 +361,18 @@ class AIFactoryRunner:
                 session["status"] = "STOPPED"
                 session["last_action"] = "STOP_REQUESTED"
                 break
+            feed_hook = getattr(self.agent, "refresh_remote_alpha_feed_if_due", None)
+            if callable(feed_hook):
+                feed_result = feed_hook(limit=100)
+                if isinstance(feed_result, dict):
+                    session["feed_refresh"] = {
+                        key: feed_result.get(key)
+                        for key in (
+                            "status", "last_success_at", "age_sec", "next_due_at",
+                            "last_attempt_at", "last_attempt_status",
+                        )
+                    }
+                    self._save_session(session)
             if session.get("last_action") == "PROPOSALS_WRITE_ERROR":
                 # The new payload is not durable and the old canonical inbox
                 # may belong to another round; do not generate a replacement
@@ -591,6 +603,19 @@ class AIFactoryRunner:
                         excluded_expressions=self._known_expressions(),
                         probe_id=f"{hypothesis['id']}:round:{round_no}:probe:{probe_offset}",
                     )
+                    if isinstance(feasibility, dict):
+                        emit = getattr(self.agent, "emit_heartbeat", None)
+                        if callable(emit):
+                            emit(
+                                "FEASIBILITY",
+                                current_probe_id=feasibility.get("probe_id"),
+                                pair_examined=feasibility.get("pair_examined", 0),
+                                allow_count=feasibility.get("relationship_allow", 0),
+                                post_dedupe_candidates=feasibility.get("candidates_after_dedupe", 0),
+                                cross_dataset_candidates=feasibility.get("novel_cross_dataset_relationship_count", 0),
+                                route_attempt=session.get("route_attempt", 0),
+                                current_taxonomy=feasibility.get("failure_taxonomy"),
+                            )
                     if (isinstance(feasibility, dict) and
                         getattr(self.agent, "min_cross_dataset_pairs", 0) > 0 and
                         not feasibility.get("batch_gate", {}).get("feasible", False)):
@@ -636,6 +661,9 @@ class AIFactoryRunner:
                     # probe_offset is the bounded exploration retry identity.
                     seed=f"{hypothesis['id']}:round:{round_no}:probe:{probe_offset}",
                 )
+                emit = getattr(self.agent, "emit_heartbeat", None)
+                if callable(emit):
+                    emit("ASSEMBLY", proposals=len(proposals) if isinstance(proposals, list) else 0)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:
@@ -654,6 +682,12 @@ class AIFactoryRunner:
                 ),
             )
             if not batch_ok:
+                emit = getattr(self.agent, "emit_heartbeat", None)
+                if callable(emit):
+                    emit(
+                        "BATCH_GATE", proposals=len(proposals) if isinstance(proposals, list) else 0,
+                        valid=False, errors=len(batch_errors),
+                    )
                 session["probe_offset"] = probe_offset + 1
                 session["last_action"] = "WAIT_FACTORY_BATCH"
                 session["last_result"] = {

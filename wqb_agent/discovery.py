@@ -210,13 +210,14 @@ class FieldDiscovery:
                  require_platform_alpha_count=False,
                  dataset_sampling="stratified", min_datasets=2,
                  dataset_pool=None, persist_catalog=False,
-                 candidate_pool_size=100):
+                 candidate_pool_size=100, heartbeat=None):
         """Field discovery with a two-level cache: in-memory (per run) and
         on-disk (cross-run, keyed by dataset id, TTL-bounded). A large
         pagination walk is only re-done when the cache is missing or stale,
         which keeps repeated rounds cheap without freezing the catalog.
         """
         self.client = client
+        self.heartbeat = heartbeat
         self.pagination_limit = pagination_limit
         self.max_pages = max_pages
         self._cache = {}
@@ -969,6 +970,11 @@ class FieldDiscovery:
         self.last_excluded_high_usage = []
         self.last_excluded_unknown_usage = []
         self._candidate_counts = {}
+        if self.heartbeat is not None:
+            self.heartbeat.emit_stage(
+                "DISCOVERY", dataset_current=0, dataset_total=0,
+                fields_collected=0, retry_count=0,
+            )
         keywords = self._keywords_from_hypothesis(hypothesis)
         chosen = []
         seen = set()
@@ -1113,6 +1119,12 @@ class FieldDiscovery:
         # A discovery pass may touch several datasets. Persist the merged
         # cache once, after all fields for this pass have been collected.
         self._save_disk_cache()
+        if self.heartbeat is not None:
+            self.heartbeat.emit_stage(
+                "DISCOVERY", dataset_current=len(available),
+                dataset_total=len(dataset_ids), fields_collected=len(chosen),
+                retry_count=0,
+            )
         return chosen
 
     def _rank_fields_for_dataset(self, dataset_id, keywords, category, hypothesis):

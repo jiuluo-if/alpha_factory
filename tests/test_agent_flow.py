@@ -196,29 +196,16 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
             "UNRATED",
         )
 
-    def test_legacy_automatic_loop_is_blocked(self):
-        agent, client = make_agent(self._tmp, rounds=2)
-        with self.assertRaises(RuntimeError):
-            agent.run()
-        self.assertEqual(client.sim_calls, [])
-
-    def test_legacy_single_round_is_blocked(self):
-        agent, client = make_agent(self._tmp, rounds=2)
-        with self.assertRaises(RuntimeError):
-            agent.run_one_round(1)
-        self.assertEqual(client.sim_calls, [])
-
-    def test_legacy_path_cannot_resimulate_seen_expressions(self):
-        agent, client = make_agent(self._tmp, rounds=1)
-        with self.assertRaises(RuntimeError):
-            agent.run()
-        self.assertEqual(client.sim_calls, [])
-
-    def test_legacy_path_does_not_write_research_state(self):
-        agent, client = make_agent(self._tmp, rounds=1)
-        with self.assertRaises(RuntimeError):
-            agent.run_one_round(1)
-        self.assertFalse(os.path.exists(os.path.join(self._tmp, "context.md")))
+    def test_legacy_entrypoints_are_blocked_without_side_effects(self):
+        for entrypoint, args in (("run", ()), ("run_one_round", (1,))):
+            with self.subTest(entrypoint=entrypoint):
+                agent, client = make_agent(self._tmp, rounds=2)
+                with self.assertRaises(RuntimeError):
+                    getattr(agent, entrypoint)(*args)
+                self.assertEqual(client.sim_calls, [])
+                self.assertFalse(
+                    os.path.exists(os.path.join(self._tmp, "context.md"))
+                )
 
     def test_checkpoint_is_durable_before_submit_on_agent_path(self):
         from wqb_agent.client import WQBSubmitUnknownError

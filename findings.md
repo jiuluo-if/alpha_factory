@@ -287,3 +287,13 @@
   Keep quota reservation, exact batch validation, optimizer eligibility,
   checkpoint, route state and all existing hard gates unchanged; do not add a
   scheduler, workflow or second budget owner.
+
+## 2026-09-10 端到端审计：预算与研究闭环
+
+- 基线：工作树干净，当前提交为 `ec4ae51`；完整 unittest 基线已执行，输出包含既有 fake Simulation/恢复场景，未启动真实 Simulation。
+- 已确认调用链：`SuggestionWorkflow.run()` 从 `ExperienceMemory.context()` 写入 bundle `context`；`AIFactoryRunner` 将 `bundle.get("context")` 传给 `AlphaFactory.generate_factory_batch(..., research_context=...)`。
+- 已发现 P1：`diversity.select_budget_candidates.interleave()` 以 `(bucket, group)` 的字符串 tuple 排序，Python 顺序为 `HIGH, LOW, NORMAL`，因此 LOW 会在 NORMAL 前被选中；这是 priority contract 的真实实现错误。
+- 已发现 P1：`derive_budget_priority()` 支持 `saturation` 参数，但真实 `select_budget_candidates()` 调用不传 saturation，`saturation_dropped_or_deprioritized` 与 saturation counts 无法反映真实候选池，饱和不会影响实际选择。
+- 已验证真实链路：Factory proposal 保留 `field_analysis.semantic_traits`，`Experiment.to_dict()` → optimizer child 保留 `lineage_id`，Reflection → Memory → context → real optimizer child → budget selector 能使匹配 discriminating question 的候选获得 HIGH。
+- 已发现 P1：真实单字段 scarcity 只生成 10/100 个候选时，runner 原先重复 `WAIT_FACTORY_BATCH` 直到 deadline；已加入回归测试，要求实际 selected batch 进入现有 bounded route/no-gain 状态并最终 `STOP_BUDGET_SHORTAGE`，不调用 `run_proposals`。
+- 已先写红测试并完成最小修复：priority bucket 改为 `HIGH → NORMAL → LOW`；selector 传入候选池派生 saturation；Factory 早退时清空 stale `last_budget_audit`；runner 使用 selected-batch probe 处理 budget shortage。

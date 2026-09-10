@@ -300,3 +300,11 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 新增确定性的 HIGH/NORMAL/LOW 派生优先级：未解决/区分性问题、新机制和不同解释优先；已支持重复、矛盾精确重复、表达式-only novelty 降级；显式 UNKNOWN 不用于补齐批次。
 - 优化候选按 lineage 交错，探索候选按 semantic mechanism 交错；预算审计写入既有 `factory_batch_stats`，记录 eligible/selected、层级、优先级、饱和与 shortage。
 - 验证：688 tests OK、compileall、Ruff、mypy 9 frontier、branch coverage 78.0%、doctor/audit exit 0；未启动真实 Simulation。
+
+# 2026-09-10 端到端审计与测试瘦身阶段
+
+- 基线：40 个测试文件，当前提交 `ec4ae51`，工作树初始干净；未启动真实 Simulation。
+- 发现并复现：priority 字符串排序让 LOW 先于 NORMAL；saturation 参数未接入真实 selector；单字段仅 10/100 候选时 factory runner 会重复等待到 deadline。
+- 新增 7 个真实研究闭环回归：Factory semantic traits/key、Experiment→optimizer lineage、Reflection→Memory→context→budget、priority/saturation、stale audit、scarcity→bounded route/STOP。
+- 已完成最小修复：priority 显式排序、candidate-pool saturation 接入、early-return audit 清空、selected-batch probe 进入 bounded route/no-gain；合并 3 个重复 legacy entrypoint 测试为 1 个行为测试。
+- 当前下一步：运行完整 unittest/compileall/Ruff/mypy/coverage/doctor/audit，完成 fresh review 与 Test Audit 后提交。

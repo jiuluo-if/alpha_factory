@@ -300,3 +300,28 @@
 - `git fetch origin` 后确认 `main`、本地 HEAD、`origin/main` 均为 `e9037d1`，工作树初始干净。
 - `context --compact` 为 SAFE、无未完成 checkpoint、`SUBMIT_UNKNOWN=0`；未启动真实 Simulation。
 - 已实现 frequency evidence 分级、bounded `assess_feasibility()` 和 assembly 前 runner 接入；质量门、fresh review、commit 和 push 已完成。
+
+# 2026-09-10 Alpha Factory 端到端审计与测试瘦身
+
+## 目标
+
+审计完整 Alpha Research Loop，验证研究上下文、语义机制、budget、optimizer、evidence 与 route 的真实集成；只修复有证据的 P0/P1/P2 问题，并清理重复或实现细节绑定的测试。禁止真实 Simulation。
+
+## 阶段
+
+- [x] 建立基线与端到端调用图，核对当前工作树和关键安全状态
+- [x] 审计 research context → proposal → budget 的真实链路
+- [x] 审计 semantic identity、optimizer lineage、scarcity/route 与 evidence 闭环
+- [x] 盘点测试价值，设计最小合并/删除与真实集成回归
+- [x] 实施有证据的 production 修复与测试瘦身
+- [x] 完成质量门、Test Audit、fresh review、提交推送与 SHA/CI 对账
+
+## 约束
+
+- 保留 SUBMIT_UNKNOWN、checkpoint/quota exactly-once、evidence fail-closed、手工 Alpha submission 等核心边界。
+- 不以 coverage 或测试数量为目标；删除测试前必须有高层契约覆盖或明确低价值理由。
+- 不修改 WQBClient transport、checkpoint ownership、Discovery pagination、Reflector confirmation、field taxonomy、relationship contract，除非审计发现真实 regression。
+
+## Next Step
+
+已完成全量质量门、fresh review 与 Test Audit；待提交推送后轮询对应 CI run。

@@ -258,3 +258,32 @@
 - Feed 失败返回 `FEED_REFRESH_QUERY_TOO_BROAD`、`FEED_REFRESH_TRANSPORT_ERROR` 或 `FEED_REFRESH_INVALID_CACHE`，保留旧成功 timestamp；CLI `alpha sync-feed` 现在复用单实例锁。
 - `HeartbeatSink` 为进程内 transient observer，默认输出聚合事件并按 stage/progress/interval 节流；Discovery、Feasibility、Assembly/Batch gate、Feed split、Simulation settlement 已接入，不改变执行安全语义。
 - 定向验证 56 tests OK；全量普通/coverage unittest 各 672 tests OK，coverage 77.8%，architecture、compileall、Ruff、typed frontier mypy、diff check 均通过。未启动真实 Simulation；checkpoint、quota、`SUBMIT_UNKNOWN` 未改变。
+## 2026-09-10 Alpha Factory budget path re-review
+
+- `AIFactoryRunner.run()` currently reserves the existing 100-slot batch before
+  reading optimizer records, then prepends at most four Agent-authored
+  optimization proposals and asks `AlphaFactory.generate_factory_batch()` to
+  fill the remainder with exploration candidates. There is no independent
+  budget selector or persistent allocation state.
+- Optimization is therefore a small availability-driven prefix, ordered first
+  by the existing optimizer handoff (cloud metadata priority, then local
+  trajectory recency); exploration fills the rest in seeded field/template
+  order. The prefix can reduce exploration capacity, but the current hard
+  limit is four rather than a configurable ratio.
+- Existing diversity audit is batch-level only. It records semantic and
+  structural concentration but does not affect candidate ordering; unresolved
+  or discriminating questions are retained in research metadata but are not
+  consumed by the factory selection path.
+- Existing optimizer guards reject incomplete, parameter-only, direction-only
+  and overfit children, but there is no bounded same-lineage cap inside the
+  optimizer prefix. Supported/contradicted/inconclusive outcome context is not
+  currently a priority input to factory ordering.
+- Feasibility runs before assembly and can classify historical expression
+  exhaustion as `MECHANISM_FAMILY_EXHAUSTED`; exact batch validation still
+  happens after generation. Shortage remains an exact-100 batch failure and is
+  not filled by REVIEW/UNKNOWN candidates.
+- Scope conclusion: implement only a derived, deterministic priority view and
+  stable interleaving within the existing optimization prefix/exploration pool.
+  Keep quota reservation, exact batch validation, optimizer eligibility,
+  checkpoint, route state and all existing hard gates unchanged; do not add a
+  scheduler, workflow or second budget owner.

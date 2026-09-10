@@ -17,7 +17,7 @@
 import re
 from collections import Counter
 
-from .expression import analyze_expression
+from .expression import analyze_expression, canonical_expression
 from .metrics import score_of
 
 _FIELD_TOKEN_RE = re.compile(r"[a-z0-9_]+")
@@ -209,6 +209,196 @@ def diversity_audit(proposals):
         }
     result["layers"] = layers
     return result
+
+
+def _context_texts(context, *keys):
+    if not isinstance(context, dict):
+        return []
+    values = []
+    for key in keys:
+        raw = context.get(key) or []
+        if isinstance(raw, (str, int)):
+            raw = [raw]
+        for value in raw:
+            if isinstance(value, dict):
+                value = value.get("question") or value.get("learning") or value.get("mechanism")
+            if isinstance(value, str) and value.strip():
+                values.append(value.strip().lower())
+    return values
+
+
+def _question_matches(proposal, context):
+    questions = _context_texts(
+        context, "unresolved_questions", "next_discriminating_questions"
+    )
+    candidate = str(
+        proposal.get("experiment_question")
+        or proposal.get("research_question")
+        or proposal.get("next_discriminating_question")
+        or ""
+    ).strip().lower() if isinstance(proposal, dict) else ""
+    return bool(candidate and any(candidate in question or question in candidate
+                                 for question in questions))
+
+
+def derive_budget_priority(proposal, *, context=None, saturation=None):
+    """Derive an ordinal priority view after callers have applied hard gates."""
+    proposal = proposal if isinstance(proposal, dict) else {}
+    semantic_key = semantic_mechanism_key(proposal)
+    lineage = _lineage_key(proposal)
+    outcome = str(
+        proposal.get("hypothesis_outcome")
+        or proposal.get("outcome")
+        or proposal.get("parent_outcome")
+        or ""
+    ).upper()
+    confirmed = str(proposal.get("confirmation_status") or "").upper()
+    alternative = bool(
+        proposal.get("alternative_explanation")
+        or proposal.get("is_alternative_explanation")
+        or proposal.get("discriminates_competing_explanations")
+    )
+    if semantic_key == "UNKNOWN":
+        bucket, reason = "LOW", "UNKNOWN_SEMANTIC_EVIDENCE"
+    elif _question_matches(proposal, context):
+        bucket, reason = "HIGH", "MATCHES_UNRESOLVED_OR_DISCRIMINATING_QUESTION"
+    elif proposal.get("semantic_novelty") is True:
+        bucket, reason = "HIGH", "NEW_SEMANTIC_MECHANISM"
+    elif outcome == "INCONCLUSIVE":
+        bucket, reason = "HIGH", "INCONCLUSIVE_EVIDENCE"
+    elif alternative and outcome == "CONTRADICTED":
+        bucket, reason = "NORMAL", "ALTERNATIVE_TO_CONTRADICTED_MECHANISM"
+    elif outcome == "SUPPORTED" and confirmed == "INDEPENDENT_CONFIRMED":
+        bucket, reason = "LOW", "CONFIRMED_MECHANISM_REPEAT"
+    elif outcome == "CONTRADICTED":
+        bucket, reason = "LOW", "CONTRADICTED_MECHANISM_REPEAT"
+    else:
+        bucket, reason = "NORMAL", "ELIGIBLE_UNRESOLVED_RESEARCH"
+    saturation = saturation if isinstance(saturation, dict) else {}
+    mechanism_count = int(saturation.get("mechanisms", {}).get(semantic_key, 0))
+    lineage_count = int(saturation.get("lineages", {}).get(lineage, 0)) if lineage else 0
+    if bucket == "NORMAL" and mechanism_count > 0:
+        reason = "MECHANISM_SATURATION"
+    if bucket == "NORMAL" and lineage and lineage_count > 0:
+        reason = "LINEAGE_SATURATION"
+    return {
+        "bucket": bucket,
+        "priority_reason": reason,
+        "semantic_mechanism_key": semantic_key,
+        "lineage_key": lineage or "UNKNOWN",
+        "research_question_key": str(
+            proposal.get("experiment_question") or proposal.get("research_question") or ""
+        ).strip().lower() or "UNKNOWN",
+        "saturation": {"mechanism_count": mechanism_count, "lineage_count": lineage_count},
+    }
+
+
+def select_budget_candidates(optimization, exploration, *, target,
+                             context=None, optimization_cap=None):
+    """Select candidates with deterministic ordinal priority and round-robin groups."""
+    try:
+        target = max(0, int(target))
+    except (TypeError, ValueError):
+        target = 0
+    try:
+        optimization_cap = max(0, int(optimization_cap)) if optimization_cap is not None else len(optimization or [])
+    except (TypeError, ValueError):
+        optimization_cap = 0
+
+    def prepare(items):
+        prepared = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            view = derive_budget_priority(item, context=context)
+            if str(item.get("semantic_status") or "").upper() == "UNKNOWN":
+                continue
+            candidate = dict(item)
+            candidate["budget_priority"] = view["bucket"]
+            candidate["priority_reason"] = view["priority_reason"]
+            candidate["semantic_mechanism_key"] = view["semantic_mechanism_key"]
+            candidate["lineage_key"] = view["lineage_key"]
+            prepared.append((view, candidate))
+        return prepared
+
+    def interleave(prepared, cap, *, group_by_lineage=False):
+        groups = {}
+        for view, candidate in prepared:
+            group_key = (
+                view["bucket"],
+                view["lineage_key"] if group_by_lineage
+                else view["semantic_mechanism_key"],
+            )
+            groups.setdefault(group_key, []).append((view, candidate))
+        for values in groups.values():
+            values.sort(key=lambda item: (
+                item[0]["saturation"]["mechanism_count"],
+                item[0]["saturation"]["lineage_count"],
+                canonical_expression(item[1].get("expression") or ""),
+            ))
+        ordered_groups = sorted(groups)
+        result = []
+        while ordered_groups and len(result) < cap:
+            next_groups = []
+            for key in ordered_groups:
+                values = groups[key]
+                if values and len(result) < cap:
+                    result.append(values.pop(0)[1])
+                if values:
+                    next_groups.append(key)
+            ordered_groups = next_groups
+        return result
+
+    optimization_items = prepare(optimization)
+    exploration_items = prepare(exploration)
+    unknown_count = sum(
+        1 for item in list(optimization or []) + list(exploration or [])
+        if isinstance(item, dict)
+        and str(item.get("semantic_status") or "").upper() == "UNKNOWN"
+    )
+    selected_optimization = interleave(
+        optimization_items, min(target, optimization_cap), group_by_lineage=True
+    )
+    selected_exploration = interleave(
+        exploration_items, max(0, target - len(selected_optimization)),
+        group_by_lineage=False,
+    )
+    selected = selected_optimization + selected_exploration
+    priority_counts = Counter(item.get("budget_priority") for item in selected)
+    selected_mechanisms = Counter(item.get("semantic_mechanism_key") for item in selected)
+    selected_lineages = Counter(item.get("lineage_key") for item in selected)
+    return selected[:target], {
+        "eligible_count": len(optimization_items) + len(exploration_items),
+        "selected_count": len(selected[:target]),
+        "shortage_count": max(0, target - len(selected)),
+        "shortage_reason": (
+            "SEMANTIC_GATE_SCARCITY" if unknown_count and len(selected) < target
+            else "ELIGIBLE_CANDIDATE_SHORTAGE" if len(selected) < target else None
+        ),
+        "unknown_rejected": unknown_count,
+        "priority_counts": {
+            key.lower(): priority_counts.get(key, 0)
+            for key in ("HIGH", "NORMAL", "LOW")
+        },
+        "optimization": {"eligible": len(optimization_items), "selected": len(selected_optimization),
+                          "unique_lineages": len({item.get("lineage_key") for item in selected_optimization}),
+                          "unique_mechanisms": len({item.get("semantic_mechanism_key") for item in selected_optimization})},
+        "exploration": {"eligible": len(exploration_items), "selected": len(selected_exploration),
+                         "unique_mechanisms": len({item.get("semantic_mechanism_key") for item in selected_exploration}),
+                         "unique_concepts": len({key for item in selected_exploration for key in field_concept_keys(item)})},
+        "saturation_dropped_or_deprioritized": {
+            "mechanism": sum(
+                1 for item in (exploration_items + optimization_items)
+                if item[1].get("priority_reason") == "MECHANISM_SATURATION"
+            ),
+            "lineage": sum(
+                1 for item in (exploration_items + optimization_items)
+                if item[1].get("priority_reason") == "LINEAGE_SATURATION"
+            ),
+        },
+        "selected_mechanisms": dict(selected_mechanisms),
+        "selected_lineages": dict(selected_lineages),
+    }
 def extract_fields(expression, known_fields):
     r"""返回表达式里实际出现的 known_fields 子集。
 

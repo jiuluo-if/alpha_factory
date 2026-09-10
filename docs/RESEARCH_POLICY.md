@@ -99,3 +99,15 @@ unresolved bucket. Child proposals sharing one reliable parent lineage count
 as one independent lineage. Diversity is computed after the existing hard
 gates and is an audit/priority signal only; it cannot relax semantic
 compatibility or relationship admission.
+
+# Lightweight research budget ordering (2026-09-10)
+
+Within the existing 100-proposal contract, hard-gated candidates receive a
+derived ordinal priority and are deterministically interleaved: optimization
+uses independent lineage groups and exploration uses semantic-mechanism
+groups. Agent-authored unresolved/discriminating questions and INCONCLUSIVE
+evidence receive priority; confirmed repeats and contradicted repeats are
+deprioritized, while an explicit alternative explanation remains eligible.
+This ordering never changes quota, reservation, checkpoint, route, or exact
+batch rules. Shortage is reported rather than filled with UNKNOWN/REVIEW,
+duplicates, or parameter variants.

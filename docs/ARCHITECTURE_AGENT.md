@@ -249,3 +249,11 @@ evidence is recorded as unresolved and cannot increase known diversity. These
 are audit fields only: hard semantic/relationship/frequency/type gates still
 run first, and `route_decision()` treats expression-only changes as candidate
 changes rather than research information gain.
+
+`select_budget_candidates()` is a derived, in-memory ordering step inside the
+existing factory. It keeps the existing optimizer prefix cap and quota owner,
+interleaves optimization by lineage and exploration by semantic mechanism,
+and records shortage/priority counts in the existing `factory_batch_stats`.
+It cannot alter route state, quota reservation, exact batch validation or
+checkpoint behavior; explicitly UNKNOWN candidates are not used to fill a
+batch.

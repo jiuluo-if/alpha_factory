@@ -17,7 +17,12 @@ from wqb_agent.alpha_feed_workflow import AlphaFeedWorkflow
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.client import WQBQueryTooBroadError
 from wqb_agent.daily_cache import DailyResearchCache
-from wqb_agent.diversity import diversity_audit, semantic_mechanism_key
+from wqb_agent.diversity import (
+    derive_budget_priority,
+    diversity_audit,
+    select_budget_candidates,
+    semantic_mechanism_key,
+)
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
@@ -451,6 +456,72 @@ class TestFactoryBatchContract(unittest.TestCase):
             self._diversity_proposal("rank(a)", dataset="d1", lineage_id="l1"),
         ]
         self.assertEqual(diversity_audit(proposals), diversity_audit(list(proposals)))
+
+    def test_budget_selection_interleaves_mechanisms_after_hard_gates(self):
+        candidates = [
+            self._diversity_proposal(f"rank(a{i})", dataset="d1")
+            for i in range(8)
+        ] + [
+            self._diversity_proposal("rank(b)", concept="liquidity",
+                                     behavior="signed", dataset="d2"),
+            self._diversity_proposal("rank(c)", concept="analyst_revision",
+                                     measurement="change", behavior="event_driven",
+                                     dataset="d3"),
+        ]
+        selected, audit = select_budget_candidates([], candidates, target=10)
+        keys = [semantic_mechanism_key(item) for item in selected]
+        self.assertGreaterEqual(len(set(keys[:3])), 3)
+        self.assertEqual(audit["selected_count"], 10)
+        self.assertEqual(audit["priority_counts"]["normal"], 10)
+
+    def test_same_parent_optimization_children_are_interleaved_by_lineage(self):
+        optimization = [
+            self._diversity_proposal(f"rank(child_a{i})", lineage_id="parent-a",
+                                     layer="optimization")
+            for i in range(4)
+        ] + [
+            self._diversity_proposal("rank(child_b)", lineage_id="parent-b",
+                                     layer="optimization"),
+            self._diversity_proposal("rank(child_c)", lineage_id="parent-c",
+                                     layer="optimization"),
+        ]
+        selected, audit = select_budget_candidates(
+            optimization, [], target=4, optimization_cap=4,
+        )
+        self.assertEqual(audit["optimization"]["selected"], 4)
+        self.assertGreaterEqual(len({item["lineage_id"] for item in selected}), 3)
+
+    def test_question_and_outcome_context_drive_ordinal_priority(self):
+        context = {
+            "unresolved_questions": ["does normalization preserve the effect?"],
+            "next_discriminating_questions": [],
+        }
+        high = self._diversity_proposal("rank(high)")
+        high["experiment_question"] = "Does normalization preserve the effect?"
+        inconclusive = self._diversity_proposal("rank(inconclusive)")
+        inconclusive["hypothesis_outcome"] = "INCONCLUSIVE"
+        supported = self._diversity_proposal("rank(supported)")
+        supported.update({"hypothesis_outcome": "SUPPORTED",
+                          "confirmation_status": "INDEPENDENT_CONFIRMED"})
+        self.assertEqual(derive_budget_priority(high, context=context)["bucket"], "HIGH")
+        self.assertEqual(derive_budget_priority(inconclusive, context=context)["bucket"], "HIGH")
+        self.assertEqual(derive_budget_priority(supported, context=context)["bucket"], "LOW")
+
+    def test_unknown_semantics_cannot_receive_novelty_priority(self):
+        unknown = self._diversity_proposal("rank(unknown)", concept="unknown")
+        unknown["semantic_status"] = "UNKNOWN"
+        unknown["semantic_novelty"] = True
+        priority = derive_budget_priority(unknown, context={})
+        self.assertEqual(priority["bucket"], "LOW")
+        self.assertIn("UNKNOWN", priority["priority_reason"])
+
+    def test_explicit_unknown_candidates_are_not_selected_to_fill_budget(self):
+        unknown = self._diversity_proposal("rank(unknown)", concept="fundamental")
+        unknown["semantic_status"] = "UNKNOWN"
+        selected, audit = select_budget_candidates([], [unknown], target=1)
+        self.assertEqual(selected, [])
+        self.assertEqual(audit["shortage_reason"], "SEMANTIC_GATE_SCARCITY")
+        self.assertEqual(audit["unknown_rejected"], 1)
 
     def test_historical_exhaustion_is_mechanism_family_exhausted(self):
         factory = AlphaFactory()

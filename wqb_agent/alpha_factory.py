@@ -14,8 +14,13 @@ import random
 from dataclasses import dataclass
 
 from .discovery import frequency_evidence, normalize_coverage
-from .diversity import extract_fields, semantic_mechanism_key_from_traits
+from .diversity import (
+    extract_fields,
+    select_budget_candidates,
+    semantic_mechanism_key_from_traits,
+)
 from .expression import analyze_expression, canonical_expression
+from .proposal_contract import FACTORY_BATCH_SIZE
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 
 
@@ -748,6 +753,7 @@ class AlphaFactory:
         self.neutralization = str(neutralization or "SUBINDUSTRY").lower()
         self.registry = registry or AlphaTemplateRegistry()
         self.last_feasibility = None
+        self.last_budget_audit = {}
 
     def assess_feasibility(self, hypothesis, fields, operator_reference,
                            *, excluded_expressions=(), probe_id=None,
@@ -1725,6 +1731,14 @@ class AlphaFactory:
                 "field_analysis": parent.get("field_analysis"),
                 "field_source": parent.get("field_source"),
                 "field_hypothesis_basis": parent.get("field_hypothesis_basis"),
+                "hypothesis_outcome": parent.get("hypothesis_outcome")
+                or parent.get("outcome"),
+                "confirmation_status": parent.get("confirmation_status"),
+                "mechanism_learning": parent.get("mechanism_learning"),
+                "unresolved_question": parent.get("unresolved_question"),
+                "next_discriminating_question": parent.get(
+                    "next_discriminating_question"
+                ),
             }
             if (not fields or not datasets or not common["field_understanding"]
                     or not common["field_analysis"] or not common["field_source"]
@@ -2104,7 +2118,8 @@ class AlphaFactory:
 
     def generate_factory_batch(self, hypothesis, fields, operator_reference,
                                target=100, optimized=(),
-                               excluded_expressions=None, seed=None):
+                               excluded_expressions=None, seed=None,
+                               research_context=None):
         """Generate one large, structurally diverse factory batch.
 
         The factory owns breadth.  It cycles verified field profiles through
@@ -2121,6 +2136,8 @@ class AlphaFactory:
         if limit <= 0 or not isinstance(fields, list):
             return []
         result = []
+        optimized_pool = []
+        exploration_pool = []
         seen_slot_scopes = {
             (
                 proposal.get("template_id"),
@@ -2156,13 +2173,17 @@ class AlphaFactory:
             item = dict(proposal)
             item.setdefault("proposal_origin", "agent_optimizer")
             item.setdefault("research_layer", "optimization")
-            result.append(item)
+            optimized_pool.append(item)
             excluded.add(identity)
-            if len(result) >= limit:
-                return result[:limit]
+            if len(optimized_pool) >= limit:
+                break
 
         templates = list(self.registry.economic_templates())
         if not templates:
+            result, self.last_budget_audit = select_budget_candidates(
+                optimized_pool, [], target=limit, context=research_context,
+                optimization_cap=min(4, len(optimized_pool)),
+            )
             return result
         verified = [
             field for field in fields
@@ -2179,8 +2200,9 @@ class AlphaFactory:
             str(seed if seed is not None else hypothesis.get("id", "factory"))
         )
         rng.shuffle(verified)
+        pool_limit = max(limit, min(limit * 2, FACTORY_BATCH_SIZE * 2))
         for offset, profile in enumerate(verified):
-            if len(result) >= limit:
+            if len(optimized_pool) + len(exploration_pool) >= pool_limit:
                 break
             ranked = self.rank_compatible_templates(profile, templates)
             if not ranked:
@@ -2206,7 +2228,7 @@ class AlphaFactory:
                 if item not in pool:
                     pool.append(item)
             for ranked_template in pool:
-                if len(result) >= limit:
+                if len(optimized_pool) + len(exploration_pool) >= pool_limit:
                     break
                 template = ranked_template["template"]
                 # Pair templates require a semantically reviewed secondary
@@ -2245,6 +2267,10 @@ class AlphaFactory:
                 proposal["exploration_objective"] = "signal_discovery"
                 proposal["research_role"] = "EXPLORE"
                 proposal["experiment_stage"] = "BASELINE"
-                result.append(proposal)
+                exploration_pool.append(proposal)
                 excluded.add(canonical_expression(proposal["expression"]))
-        return result[:limit]
+        result, self.last_budget_audit = select_budget_candidates(
+            optimized_pool, exploration_pool, target=limit, context=research_context,
+            optimization_cap=min(4, len(optimized_pool)),
+        )
+        return result

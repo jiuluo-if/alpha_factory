@@ -293,3 +293,10 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 剩余风险：optimization handoff、Alpha Feed 周期 refresh、heartbeat 和机制族 bounded route 尚未完成。
 
 - fresh verification: `661 tests OK`、compileall、Ruff、mypy 9 frontier、coverage branch `77.7%`、`git diff --check` 均通过；测试未启动真实 Simulation。
+
+# 2026-09-10 Alpha Factory 预算分配
+
+- 审计现有 100 proposal 路径：保留优化层上限、探索层补齐、quota/reservation/checkpoint/route owner 与 exact-100 gate；未新增 scheduler、workflow 或持久化 budget state。
+- 新增确定性的 HIGH/NORMAL/LOW 派生优先级：未解决/区分性问题、新机制和不同解释优先；已支持重复、矛盾精确重复、表达式-only novelty 降级；显式 UNKNOWN 不用于补齐批次。
+- 优化候选按 lineage 交错，探索候选按 semantic mechanism 交错；预算审计写入既有 `factory_batch_stats`，记录 eligible/selected、层级、优先级、饱和与 shortage。
+- 验证：688 tests OK、compileall、Ruff、mypy 9 frontier、branch coverage 78.0%、doctor/audit exit 0；未启动真实 Simulation。

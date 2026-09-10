@@ -9,6 +9,14 @@
 - 已收紧 optimizer parent：必须来自本地 DONE trajectory，具备 metrics/checks、expression、字段审计、hypothesis 与 economic mechanism；新增 handoff 计数与拒绝分类。
 - 定向验证：59 tests OK；下一步执行全量质量门、fresh code review 和分阶段提交/远端核验。
 
+## 2026-09-10 阶段收尾
+
+- [x] 全量 unittest 664 tests OK（普通与 branch coverage 均通过）
+- [x] compileall、Ruff、typed frontier mypy、git diff check 通过；coverage 总体 77.7%
+- [x] route 阶段提交 `b104b81` 并推送；DONE→Optimizer 阶段提交 `2cca407` 并推送，远端 SHA 已对齐
+- [x] 未启动真实 Simulation；未改变 checkpoint、trajectory 恢复边界或 `SUBMIT_UNKNOWN` exactly-once 规则
+- [x] Alpha Feed、颜色同步、heartbeat 与大规模日志按本轮范围 deferred
+
 ## 2026-09-08
 
 - 已读取项目 `AGENTS.md`。

@@ -15,7 +15,7 @@ from wqb_agent.agent import (
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
 from wqb_agent.candidate import CandidateBuilder
-from wqb_agent.discovery import FieldDiscovery, normalize_coverage
+from wqb_agent.discovery import FieldDiscovery, normalize_coverage, normalize_frequency
 from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
@@ -736,6 +736,21 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
         self.assertEqual(normalize_coverage({"coverage": 0}), 0.0)
         for value in (-1, 101, float("nan"), "not-a-number"):
             self.assertIsNone(normalize_coverage({"coverage": value}))
+
+    def test_frequency_normalization_uses_explicit_description_evidence(self):
+        self.assertEqual(
+            normalize_frequency({"description": "daily close price"}),
+            "daily",
+        )
+        self.assertEqual(
+            normalize_frequency({"description": "quarterly earnings estimate"}),
+            "quarterly",
+        )
+        self.assertIsNone(normalize_frequency({"description": "model score"}))
+        profile = self.discovery._profile_from_field(
+            "pv1", {"id": "close", "description": "daily close price"}, 1.0, "price"
+        )
+        self.assertEqual(profile["frequency"], "daily")
 
     def test_chinese_hypothesis_produces_stable_useful_tokens(self):
         tokens = FieldDiscovery._keywords_from_hypothesis({

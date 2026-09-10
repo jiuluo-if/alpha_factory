@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.reconcile_pending import collect
 from wqb_agent.agent import (
     SEED_HYPOTHESES,
     Agent,
@@ -612,6 +613,18 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
             self.assertTrue(json.load(f)["complete"])
         self.assertTrue(os.path.exists(os.path.join(self._tmp, "stale_skip_log.jsonl")))
         self.assertEqual(client.sim_calls, [])
+
+    def test_reconcile_collect_includes_known_url_from_unfinished_checkpoint(self):
+        exp = Experiment(1798, "h-1798", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
+        exp.status = "UNKNOWN"
+        exp.progress_url = "https://api.worldquantbrain.com/simulations/remote-1798"
+        checkpoint_path = os.path.join(self._tmp, "round_1798.checkpoint.json")
+        with open(checkpoint_path, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 1798, "complete": False,
+                       "hypothesis": {"id": "h-1798"},
+                       "experiments": [exp.to_dict()]}, handle)
+        targets = collect(self._tmp)
+        self.assertEqual([row["progress_url"] for row in targets], [exp.progress_url])
 
     def test_explicit_force_new_round_preserves_old_checkpoint(self):
         agent, client = make_agent(self._tmp, rounds=1)

@@ -182,3 +182,84 @@
 ## 本阶段当前下一步
 
 已完成关系契约实现、绕过入口回归、完整质量门、只读状态审计，并提交推送；真实工作区仍按既有 BLOCKED checkpoint 保持暂停。
+
+## 2026-09-10 长期自主研究接管
+
+目标：恢复当前未完成研究状态；仅在预检 `READY` 时沿唯一安全入口持续开展有经济机制、稳健、低相关的 Alpha 研究，并记录可复用的研究/工程证据。除用户明确暂停或停止外，不把一轮结束视为任务完成。
+
+- [x] 只读接管：确认 checkpoint、SUBMIT_UNKNOWN、session、锁、进程和 live preflight
+- [x] 安全恢复检查：执行只读 reconcile；当前无已有 `progress_url`，无 URL UNKNOWN 禁止重发
+- [ ] READY 后：同步必要 Alpha Feed，选择 information gain 最高的 exploration/optimization 方向
+- [ ] 研究循环：生成完整实验假设，沿 factory/proposal execution 执行，评估全指标并记录结果
+- [ ] 工程证据：按结构化格式记录重复异常、吞吐、无效实验和恢复摩擦；重复证据后再提出局部改进
+- [ ] 每轮结束：更新 progress/findings，重新 preflight；BLOCKED 时回到安全恢复阶段
+
+## 当前下一步
+
+下一步：等待用户对无 URL `SUBMIT_UNKNOWN`/控制状态作明确人工处置；在此之前不生成 proposals、不启动 Simulation。
+
+## 2026-09-10 工厂字段生成效率优化计划（只读设计，待实施）
+
+目标：在不放宽字段语义、跨 dataset 关系、表达式去重、quota、checkpoint 或唯一 Simulation 入口的前提下，把“100 个生成 proposal”转化为“可审计、可执行的有效批次”。当前证据为 100 个字段覆盖 6 个 dataset，历史表达式排除后跨 dataset 多字段候选为 0，当前 factory session 尚未预留 Simulation。
+
+### Phase 0 — 观测补全（P0，先做）
+
+- 为每次 probe 记录 discovery 耗时、字段总数/已知数、dataset 数、带明确 frequency 的字段数、模板兼容字段对数、排除表达式数、生成数、跨 dataset 数、gate 错误和新颖表达式数。
+- 将“字段发现不足”“关系证据不足”“历史表达式全部排除”“proposal contract 失败”分开，不再统一显示为 `FACTORY_BATCH_NOT_READY`。
+- 记录每次 probe 相对上一 probe 的新增字段关系和新增表达式；连续无新增时进入机制级换路，而不是继续等待。
+- 验收：诊断只读、不会写 Simulation/checkpoint，不改变 fail-closed 判定；可由单元测试覆盖零字段、零 pair、全排除和成功批次。
+
+### Phase 1 — 先做 pair feasibility，再组装 100（P0/P1）
+
+- 在 `generate_factory_batch` 前按 `(dataset, field_id)` 建索引，先筛选有真实 semantic/frequency/relationship evidence 的跨 dataset field pair/triple。
+- 只有确认至少一个可审计 pair 后才进入完整 proposal assembly；否则直接输出诊断并换 discovery route/template pool，避免先生成 100 个注定被拒的 proposal。
+- pair 选择采用 dataset-stratified、semantic bucket 和 frequency compatibility 的 bounded sampling；不做窗口、权重、符号或随机参数扫描。
+- 保留 exact canonical expression dedupe；换路只能改变经济机制、字段关系或数据来源，不能靠反号或微调制造“新颖性”。
+- 目标：每个可执行批次至少 1 个 cross-dataset pair；参考此前成功批次的 20/100，优先恢复可重复的两位数候选而非盲目追求满 quota。
+
+### Phase 2 — 兼容路线与历史排除协同（P1）
+
+- 当当前 bundle 在排除历史表达式后 pair 数为 0，优先请求新的兼容字段组合或新的经济模板族；不要对同一 bundle 仅递增 seed 重试。
+- 为每个失败 family 设 bounded retry budget：达到阈值后记录 STOP 原因并换机制（例如 liquidity/dispersion、fundamental/news revision、option relative），不持续微调失败 family。
+- 维护“候选 pair → 可用模板 → 被排除原因”的轻量诊断，不把指标、trajectory 或远端结果写入 Alpha Feed metadata cache。
+
+### Phase 3 — 恢复 optimization evidence 链（P1）
+
+- 先审计为什么 round checkpoint 有 DONE 而 live `trajectory_records=0`；补充一个只读、可测试的 handoff/recovery diagnosis。
+- 只有真实 trajectory DONE evidence 才生成 CHILD；每个 CHILD 只改变一个经济意义变量，并完整记录 hypothesis、falsification、horizon、self-correlation impact。
+- 不把 checkpoint 中的精简状态伪装成 metrics，也不从 Alpha Feed 恢复表达式或证据。
+
+### Phase 4 — 真实 Simulation 与评估（P1）
+
+- 仅在 preflight READY、批次 gate 通过且无未完成 checkpoint/UNKNOWN 时沿 `Agent.run_proposals()` 执行。
+- 逐批记录 reserved、DONE/FAILED/UNKNOWN、Fitness、Sharpe、Turnover、Returns、Drawdown、yearly stability、checks、SELF_CORRELATION、复杂度和增量价值。
+- 结果按 PROMOTE/CONTINUE/STOP/RECONCILE 分类；缺失或 UNKNOWN 指标保持 UNKNOWN，不进入支持结论或人工审核池。
+
+### Phase 5 — 可观测性与颜色同步（P2）
+
+- 增加 batch/probe 摘要和等待阶段心跳，区分远端 discovery 等待、组装耗时和 Simulation settlement 等待。
+- 分组上色继续作为显式 `alpha sync-colors` 工作流，只对已有候选做远端 color metadata 同步；不让 factory 自动写颜色、不把颜色当作 Alpha 质量证据。
+
+### 暂不采取的方案
+
+- 不放宽 cross-dataset gate、frequency REVIEW、semantic UNKNOWN 或 relationship admission。
+- 不把 100 拆成绕过原子批次的零散提交。
+- 不做窗口/权重/符号暴力扫描、随机参数微调、简单反号或无机制叠加。
+- 不在当前运行实例存活期间启动第二个 factory，不手改 `.wqb_state`。
+
+### 成功判据
+
+1. 连续 probe 能报告可解释的 pair/template/排除证据，而非只有统一失败字符串。
+2. 可执行 bundle 在组装前能证明至少一个跨 dataset 多字段候选；批次 gate 通过率和每批有效 cross-dataset 数量可统计。
+3. 通过的批次真实进入 checkpoint/trajectory，且评估证据完整；未通过的 family 有明确 STOP 或换路记录。
+4. 优化层只消费 DONE trajectory，探索层只承担 signal discovery，二者来源和结果可审计。
+
+## 接管证据（2026-09-10）
+
+- live `context --compact` / `state preflight`: `BLOCKED`，`round_11.checkpoint.json` 未完成，`SUBMIT_UNKNOWN=1`，`network_write=false`。
+- round 11 checkpoint：`DONE=59, FAILED=8, PENDING=32, SUBMIT_UNKNOWN=1`；未知项 proposal `p-52b9c26b61b4e283` 无 `progress_url`，32 个 PENDING 也均无 `progress_url`。
+- `scripts/reconcile_pending.py --timeout 1`：`[SCAN] 0 reconcilable experiments with progress_url`，无远端任务可只读轮询。
+- `factory_session.json`：`status=RUNNING` 但 `stop_requested=true`、`last_action=STOP_REQUESTED`；不能在未解决 checkpoint 上清除控制状态或新开轮次。
+- `state audit`：`ok=true`、无 errors；doctor 报 `LEDGER_MISSING`、`checkpoint_consistency=UNRESOLVED`，属于恢复证据缺口而非可自动修复项。
+
+结论：保持暂停；不执行 `suggest`、`run-proposals`、`factory run`、`skip-submit-unknown` 或任何 POST。恢复需要用户明确授权的人工处理（确认无 URL UNKNOWN 的处置，并补齐/重建合法 ledger 或按既有 recovery contract 处理）。

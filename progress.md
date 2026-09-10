@@ -188,3 +188,68 @@
 - 定向 Factory 边界测试为 `59 tests OK`；新增的优化前缀绕过测试先红后绿。
 - 最终 fresh 验证已通过：compileall、Ruff、9 个 typed frontier 的 mypy、全量 `636 tests OK`、configured coverage `77.6%`；doctor/audit 正常，preflight/context 明确保留既有 `round_11.checkpoint.json` 与 `SUBMIT_UNKNOWN` 的 BLOCKED 状态，未启动 Simulation。
 - `git diff --check` 通过，当前仅包含本阶段 `alpha_factory.py`、Factory 边界测试和规划证据文件；下一步提交 `fix：收紧多字段Alpha关系与槽位约束` 并推送后核对远端 SHA。
+
+## 2026-09-10 长期自主接管：恢复阻塞证据
+
+round | family | action | result | next
+---|---|---|---|---
+11 | checkpoint/reconciliation | context + preflight + checkpoint/session 对账 | BLOCKED；59 DONE、8 FAILED、32 PENDING、1 SUBMIT_UNKNOWN；全部未决项无 `progress_url` | 等待人工处置 UNKNOWN/stop control；不启动 Simulation
+11 | recovery | `scripts/reconcile_pending.py --timeout 1` | 0 个可对账远端任务；未发 POST | 保持 exactly-once 边界，重新检查 preflight
+N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+stop_requested | 恢复证据不足，暂不提出架构修改 | 累积重复证据后再做局部改进评估
+11 | recovery recheck | 第三次 live preflight + factory status + reconcile | checkpoint/session 修改时间未变；仍 `BLOCKED`，reconcile=0，未发 POST | 已达到连续三轮同一外部阻塞，无法在无人工处置时继续 | 用户确认 UNKNOWN 处置并恢复控制面后重新接管
+11 | resumed blocked audit #1 | 重新读取 AGENTS.md，并复核 context/preflight/status/checkpoint/reconcile | 外部状态未变化；仍 `BLOCKED`，ledger=false，全部未决项无 URL | 新 blocked 周期第 1 次确认，尚未再次标记 blocked | 等待外部状态变化或人工授权
+11 | resumed blocked audit #2 | context/preflight/status/checkpoint/reconcile 二次复核 | checkpoint/session 时间戳未变；仍 `BLOCKED`，`reconcile=0`，未发 POST | 新 blocked 周期第 2 次确认 | 若下轮仍相同，按规则重新标记 blocked
+11 | resumed blocked audit #3 | 最小 live context/preflight/status/reconcile 复核 | 状态仍完全相同：`BLOCKED`、无 URL 未决项、ledger=false、stop_requested=true | 新 blocked 周期第 3 次确认，无法安全前进 | 等待人工处置或外部状态变化
+11 | root-cause investigation | 追踪 client → simulator → checkpoint → doctor/preflight → factory session 数据流 | 主因是无 URL ambiguous POST；PENDING 为连带暂停，ledger 为 warning，session 为未收尾控制状态；无现成安全反查身份 | 已完成阻塞原因核查，未修改研究状态 | 等待人工确认 UNKNOWN 处置后恢复
+11 | canonical recovery | 执行 `python main.py run-proposals` 并复核时间戳/状态 | 仅恢复 checkpoint、重建 100 条内存结果；无 POST，checkpoint/session 未变化；deadline 尚未到期 | 证明现有安全入口正确停在 exactly-once 边界 | 保持 active，等待可验证的外部身份或人工处置
+11 | read-only platform diagnosis | `python main.py smoke`；启动 `alpha sync-feed` 后观察 PID 39672 | smoke PASS（datasets=14、fields=10）；sync-feed 30 秒无输出但进程仍存活，缓存未更新 | 排除整体网络/凭据故障，发现分页等待可观测性不足 | 继续观察 PID，不重复启动；不影响 Simulation 安全边界
+11 | observation | 复核 PID 39672、cache/checkpoint/session 时间戳与 cache metadata | feed 进程随后退出并更新 `.alpha_feed_cache/weekly.json`（04:23:43 +08）；checkpoint/session 未改写，cache `updated_at`/`expires_at` 已刷新 | 元数据同步完成，但不改变无 URL UNKNOWN 的恢复边界；未修改 canonical research state | 继续只读对账；等待 `5d49051762fc` 获得可验证远端身份或人工处置
+11 | reconcile recheck | 再次运行 `scripts/reconcile_pending.py --timeout 1` 与 `context --compact` | `[SCAN] 0 reconcilable experiments with progress_url`；workspace 仍 `BLOCKED`，`round_11.checkpoint.json` 与 1 条 `SUBMIT_UNKNOWN` 仍未决 | 现有安全恢复入口已确认无可执行只读目标；没有安全的新 Simulation 路径 | 保持 active，等待外部远端身份或人工处置，不清除 UNKNOWN/stop control
+11 | recovery boundary audit | 查看 `recovery --help` 及 `state/factory` CLI 边界 | `skip-submit-unknown` 明确要求人工授权；`finalize-round` 只收尾已记录轮次，不能恢复无 URL UNKNOWN；未执行任何写操作 | 确认阻塞不是遗漏 CLI，而是缺少远端身份且安全契约要求人工决策 | 保持 active；不执行授权动作，继续等待外部状态变化
+## 2026-09-10 长期自主接管
+
+- `context --compact` 与 `state preflight`：`BLOCKED`；未完成 `round_11.checkpoint.json`，`SUBMIT_UNKNOWN=1`，`network_write=false`。
+- 只读核对：round 11 为 `DONE=59 / FAILED=8 / PENDING=32 / SUBMIT_UNKNOWN=1`；未知项及所有 PENDING 均无 `progress_url`。
+- `scripts/reconcile_pending.py --timeout 1`：`0 reconcilable experiments with progress_url`；无可安全轮询的远程身份。
+- `state audit`：`ok=true`、无 errors；doctor 的 `LEDGER_MISSING` 与 `checkpoint_consistency=UNRESOLVED` 仍是恢复证据缺口。
+- 无工厂进程；session 为 `status=RUNNING`、`stop_requested=true`、`last_action=STOP_REQUESTED`。未清除控制状态，未启动新轮次，未执行任何 POST。
+- 状态：`round_11 | recovery | 无 URL UNKNOWN 无法自动收敛 | BLOCKED | 等待合法人工处置后重新 preflight`。
+## 2026-09-10 持续目标阻塞复核
+
+- 重新执行 `context --compact` / `state preflight`：结果仍为 `BLOCKED`，`round_11.checkpoint.json` 未完成，`SUBMIT_UNKNOWN=1`，`network_write=false`。
+- checkpoint 状态仍为 `DONE=59 / FAILED=8 / PENDING=32 / SUBMIT_UNKNOWN=1`；33 个未完成项均无 `progress_url`。
+- `factory_session.json` 未变化：`RUNNING`、`stop_requested=true`、`last_action=STOP_REQUESTED`；未发现研究工厂进程。
+- 结论：同一无 URL exactly-once 阻塞已连续多次复核；不执行新 Simulation、不清除 UNKNOWN、不跳过 checkpoint，等待人工/平台侧合法处置。
+## 2026-09-10 新轮次恢复与频率证据修复
+
+- 用户明确确认清除旧 live 状态；旧 `round_11.checkpoint.json`、`factory_session.json`、`proposals.json` 移入 `docs/archive/abandoned_round_11_20260910`，不是物理删除，保留回收路径。
+- 已完成旧 `round_1`–`round_10` checkpoint 安全归档；未完成状态未直接手改。
+- 首次新 factory 因 `min_cross_dataset_pairs=1` 与 live 字段 `frequency=null` 冲突，100 候选均被 `FACTORY_BATCH_NOT_READY` 拒绝；7 个多字段模板的可用 cross/same pairs 均为 0。
+- TDD 修复：`wqb_agent.discovery.normalize_frequency()` 仅从显式频率 metadata 或字段描述中的明确频率词推导频率；普通描述保持 UNKNOWN/None。新增 discovery 回归；既有 frequency-review 安全回归保留。
+- 质量门：`656 tests OK`、compileall 通过、Ruff `All checks passed`。
+- 修复后新 session `e6ec789108544cb2` 进入 round 1 `RUN_PROPOSALS`，预留 100 次；提案层级 `exploration=100`，跨 dataset 题案 20 个。
+- 当前只读状态：`DONE=4 / FAILED=2 / PENDING=91 / RUNNING=3`，无 `SUBMIT_UNKNOWN`；沿同一进程继续等待结算。
+- 后续状态：`DONE=6 / FAILED=2 / PENDING=89 / RUNNING=3`；已核验跨 dataset 样例 `rank(ts_zscore(ts_corr(open, rel_ret_all, 20), 60))`，关系 `ALLOW`、频率 `daily/daily`。
+- 过程错误：一次 PowerShell 内联 Python 因引号解析失败；一次定向 unittest 使用了错误测试类/方法名。均未修改研究状态，随后改用管道脚本并运行正确测试。
+
+## 工程证据
+
+`2026-09-10 09:18 | factory_runner/alpha_factory | batch gate repeated FACTORY_BATCH_NOT_READY | live 100 fields across 6 datasets, all frequency null; diagnostic generated 100 candidates, multi_dataset=0; all 7 relation templates had 0 admissible pairs | repeated discovery/local semantic work consumed time with zero Simulation | derive only explicit frequency evidence in discovery and preserve review rejection for unknown frequency | P1`
+
+`2026-09-10 09:27 | discovery | explicit description frequency fallback enabled 17/100 fields in first refreshed bundle | fields such as daily/calendar-day descriptions now carry auditable daily frequency; no arbitrary defaults | gate obtained real relation candidates without weakening relationship contract | keep inference marker/source visible in profile/audit and monitor false positives | P1`
+
+`2026-09-10 09:30 | factory_runner | new batch admitted after frequency evidence repair | reserved=100, exploration=100, cross_dataset=20, checkpoint active; no SUBMIT_UNKNOWN | restored research throughput while preserving 100-item atomic gate | retain batch stats and monitor settlement quality across mechanisms | P1`
+## 2026-09-10 Alpha Feed 核查
+
+- 当前 factory session `e6ec789108544cb2` 正在 `RUN_PROPOSALS`，由 `factory_runner.py` 直接执行 discovery/batch/proposals；调用图中没有 `refresh_remote_alpha_feed`。
+- `.alpha_feed_cache/weekly.json` 最近更新时间为 `2026-09-09T20:23:43Z`，覆盖 6 个纽约本地日、3483 条 simulations 元数据；缓存 `local_date=2026-09-09`，但没有 2026-09-09 日桶，且 `expires_at=2026-09-10T04:00:00Z`。
+- 根因：`alpha sync-feed` 是独立 CLI 路径，factory 未按 AGENTS 的每 3 小时约束自动触发；当前单实例 `run.lock` 也不允许并行同步。缓存设计只保留 ID/状态/时间戳，不是指标或表达式数据源。
+- 工程改进候选：在不让 AlphaFeedWorkflow 依赖 Simulator/Agent 编排的前提下，为 3 小时 factory 控制周期增加同批只读 feed refresh 调度/可观测标记；优先级 P1。
+
+`2026-09-10 | factory_runner | round_3 batch gate repeated without execution | session probe_offset=12, last_action=WAIT_FACTORY_BATCH, simulations_reserved=0; current proposals file validates only for a prior snapshot and no round_3 checkpoint exists | prolonged probe time with zero information gain and no Simulation | expose current-bundle gate diagnostics (admissible cross-dataset pair count and field evidence) before retry sleep; retain fail-closed gate | P1`
+
+`2026-09-10 | factory_runner | repeated probe retries still produce no admissible cross-dataset multi-field candidate | live session probe_offset=21, process remains active, simulations_reserved=0, last_status=FACTORY_BATCH_NOT_READY; no checkpoint created | increasing wait time without new research evidence and prolonged quota under-utilization | add bounded retry escalation with current-bundle diagnostics and a mechanism-level fallback, while preserving the fail-closed batch gate | P1`
+
+`2026-09-10 | optimizer/evidence-chain | prior DONE results remain only in round checkpoints while live trajectory is empty | context --compact --json reports trajectory_records=0; round_1 and round_2 checkpoints contain 78 DONE each; optimizable_signal_records() consumes trajectory only | autonomous optimization has no eligible parent evidence despite completed simulations | add a tested checkpoint-to-trajectory finalization/recovery audit or expose the missing handoff as a fail-closed gate diagnostic; do not import checkpoint metrics directly into Alpha Feed | P1`
+
+`2026-09-10 | factory_runner/alpha_factory | cross-dataset gate remains unsatisfied after historical-expression exclusion | current suggestions contain 100 fields across 6 datasets; static generation without exclusions yields 17 cross-dataset multi-field candidates, while excluding complete round_1/2 expressions yields 0 and validate_factory_batch fails | repeated discovery/probe cycles consume time with zero quota and no Simulation | add a bounded cross-dataset compatibility diagnostic and force a new compatible field-pair discovery/template route when the admissible set is empty; preserve expression dedupe and fail-closed gate | P1`

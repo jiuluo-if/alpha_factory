@@ -189,3 +189,34 @@
 - `field_hypothesis_basis.mechanism` 继续由字段 traits 与 fit reason 组合，不复制 template rationale；semantic UNKNOWN/REVIEW 不宣称强 economic mechanism。
 - 固定 seed 的字段顺序与兼容模板探索保持稳定；companion selection 仍是 bounded linear scan，无 Cartesian product。
 - 关系契约红灯已转绿；新增优化前缀 REVIEW 绕过测试验证 `generate_factory_batch` 也 fail-closed。
+
+## 2026-09-10 工厂字段生成效率诊断与优化计划
+
+- 当前 live factory session `6df26582cf244dc8` 仍为 `RUNNING`，round 3 最近结果为 `FACTORY_BATCH_NOT_READY`，`simulations_reserved=0`。
+- 当前字段 bundle 有 100 个字段、6 个 dataset（`fundamental6/news18/option8/option9/pv1/pv13`）；静态诊断显示不排除历史表达式时可生成 17 个跨 dataset 多字段候选，排除 round 1/2 完成表达式后为 0，说明主要损耗在“历史去重后的关系兼容性”，不是字段数量不足。
+- `generate_factory_batch()` 对 verified fields 逐字段排名模板，并通过 `assemble_proposals(..., max_candidates=1)` 逐模板尝试；批次门禁在完整组装后才发现跨 dataset pair 为 0，导致 100 个 proposal 生成工作不能转化为可执行批次。
+- 优先优化顺序：先记录 pair feasibility/排除原因，再在组装前做 bounded pair feasibility；pair 数为 0 时切换兼容 discovery/template route，禁止对同一 bundle 只递增 seed 重试；保留 canonical expression dedupe 与 relationship fail-closed。
+- `trajectory_records=0` 而历史 checkpoint 有 DONE 是独立的 optimization evidence handoff 缺口；不得把 checkpoint 精简状态或 Alpha Feed metadata 当作 metrics，需先做只读诊断和回归测试。
+- 建议验收指标：每个可执行 bundle 组装前至少 1 个可审计 cross-dataset pair；记录每 probe 的 discovery/pair/template/排除/assembly/gate 时间与数量；成功批次参考历史 20/100 cross-dataset 候选，失败 family 达到 bounded retry 后 STOP/换机制。
+## 2026-09-10 长期自主接管：恢复阻塞证据
+
+| time | component | symptom | evidence | impact | proposed_improvement | priority |
+|---|---|---|---|---|---|---|
+| 2026-09-10 Asia/Shanghai | checkpoint/reconciliation | 未完成 round 无法自动收敛 | `round_11.checkpoint.json`: `PENDING=32`、`SUBMIT_UNKNOWN=1`，全部 `progress_url=null`；reconcile 扫描 0 个目标 | 阻止新 Simulation，也无法证明未知 POST 的远端结果 | 为无 URL UNKNOWN 建立仅人工授权的、可审计的外部对账输入/处置流程；不得自动重 POST | P0 |
+| 2026-09-10 Asia/Shanghai | TrialLedger/doctor | checkpoint 一致性缺少 ledger 证据 | preflight: `ledger_status=MISSING`、`checkpoint_consistency=UNRESOLVED`；state audit 仍 `ok=true` | 恢复摩擦高，无法把 checkpoint 安全推进到 READY | 研究 ledger 缺失的稳定产生条件；若重复出现，再设计局部诊断或恢复工具，不改变 owner 边界 | P1 |
+| 2026-09-10 Asia/Shanghai | factory control plane | 持久 session 同时 `RUNNING` 与 `stop_requested=true` | `factory_session.json` `last_action=STOP_REQUESTED`；新 run 会受控暂停/可能覆盖边界 | 长期无人值守无法自行接续 | 增加只读诊断明确区分“用户停止请求”和“checkpoint 安全阻塞”；清除控制状态仍需人工授权 | P1 |
+
+## 2026-09-10 阻塞根因核查结论
+
+- **主阻塞是未知提交的 exactly-once 边界**：round 11 唯一 `SUBMIT_UNKNOWN` 为 `id=5d49051762fc`、`proposal_id=p-52b9c26b61b4e283`；`submission_started_at=2026-09-09 08:16:55 +08:00`，`progress_url=null`。`Simulator._simulate_one()` 已先持久化 `SUBMITTING`，随后任何不能证明 POST 未被 BRAIN 接受的异常都会变成 `SUBMIT_UNKNOWN`；自动重发会有重复 Simulation 风险。
+- **具体传输异常已不可从当前状态判定**：`WQBClient.submit_simulation()` 对 ambiguous POST 的超时/网络异常、无契约 429、`WQBSubmitUnknownError`、缺少 `Location` 都走同一安全分支；`CheckpointStore.write()` 的 allow-list 刻意不保存 `error`，所以当前 checkpoint 只能证明“提交结果未知”，不能证明是哪一种异常。无 URL 时也没有可安全调用的 `GET /simulations/{id}` 身份。
+- **32 个 PENDING 是连带暂停，不是 32 个独立失败**：它们的 `submission_started_at=null` 且 `progress_url=null`；同一 checkpoint 存在无 URL UNKNOWN 时，恢复逻辑只允许已有 URL 的任务只读轮询，并过滤无 URL PENDING，避免在未知 POST 未对账前新增写入。
+- **ledger 缺失不是主要因果点**：当前 runtime composition 使用 `persist=False`，接管后的 `state audit` 在 `lifecycle_persistent=false` 下仍为 `ok=true`；doctor 的 `LEDGER_MISSING` 与 `PNL_CAPABILITY_UNAVAILABLE` 是证据能力警告。preflight 的硬 blocking 列表实际只有未完成 `round_11.checkpoint.json`。
+- **停止状态是控制面收尾不完整**：session 最后修改于 `2026-09-09 08:27:20 +08:00`，记录 `stop_requested=true`、`last_action=STOP_REQUESTED`、`status=RUNNING`；当前无 factory 进程。代码只有运行器下一次循环观察到 stop 后才写 `STOPPED`，因此停止请求后若进程在最终保存前退出，会留下这组矛盾字段。它阻止无人值守接续，但没有改变未知提交的远端事实。
+- **当前工具能力的边界**：`reconcile_pending.py` 只从 trajectory 提取已知 `progress_url`；round 11 的 trajectory 不存在，checkpoint 中也没有 URL，因此扫描为 0。`/users/self/alphas` 只提供 Alpha ID/状态/时间元数据，当前 Alpha Feed 还会主动丢弃表达式/提交指纹，不能可靠反查这个未知 POST。
+
+判定：这是“ambiguous POST 的远端身份未返回 + 最小 checkpoint 未保留错误上下文 + 进程停止前未完成 session 收尾”的恢复证据缺口，不是可通过重试网络或重新运行 factory 自动解决的问题。未经用户人工确认，不执行 `skip-submit-unknown`、清除 stop 控制、手工补 ledger、覆盖 checkpoint 或新 Simulation。
+
+补充实测：在当前 workspace 沿 canonical `python main.py run-proposals` 执行恢复，输出只包含 `Round 11 checkpoint resume`、保留 `SUBMIT_UNKNOWN` 不重发和 `RESULTS CACHE`；未产生 POST。随后 checkpoint/session 的状态与修改时间均未变化，证明现有恢复入口会安全停留在该边界，而不会误派发 32 个 PENDING。
+
+补充诊断：只读 `python main.py smoke` 成功返回 `datasets=14`、`fields=10`，排除当前凭据/网络整体不可用。随后单独启动的 `python main.py alpha sync-feed` 在 30 秒观察窗内无输出，PID `39672` 仍存活，`.alpha_feed_cache/weekly.json` 时间戳未更新；该进程仍需继续观察，当前不能据此判定失败或重复启动。它暴露了 Alpha Feed 分页等待期间缺少进度可见性的工程瓶颈，但与 round 11 未知提交没有直接因果关系。

@@ -41,7 +41,14 @@ def _scalar_key(value):
 
 def _history_key(entry):
     """Normalize a reconciliation identity without admitting list/dict keys."""
-    raw = tuple(entry.get(key) for key in ("simulation_id", "outcome", "alpha_id"))
+    outcome = entry.get("outcome")
+    keys = ("simulation_id", "outcome", "alpha_id")
+    if outcome in {"STALE", "UNKNOWN"}:
+        # Repeated stale observations are evidence for the explicit
+        # skip-stale threshold; their timestamp makes each observation
+        # auditable while COMPLETE/ERROR states remain idempotent.
+        keys += ("reconciled_at",)
+    raw = tuple(entry.get(key) for key in keys)
     normalized = tuple(
         _scalar_key(value) if value is not None else None for value in raw
     )
@@ -119,9 +126,26 @@ def collect(state_dir):
     # active row and then materialising a second list.  This matters after a
     # day-long run with repeated UNKNOWN/PENDING observations.
     uniq = {}
-    if not os.path.exists(path):
-        return []
-    for e in iter_jsonl_objects(path):
+    sources = []
+    if os.path.exists(path):
+        sources.append(iter_jsonl_objects(path))
+    # A checkpoint may predate the first trajectory append.  Include its
+    # recoverable, known-URL experiments so read-only reconciliation can
+    # produce the audit evidence required by skip-stale.
+    for checkpoint_path in sorted(
+        os.path.join(state_dir, name)
+        for name in os.listdir(state_dir)
+        if name.endswith(".checkpoint.json")
+    ):
+        try:
+            with open(checkpoint_path, encoding="utf-8") as handle:
+                checkpoint = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if checkpoint.get("complete"):
+            continue
+        sources.append(iter(checkpoint.get("experiments") or []))
+    for e in (item for source in sources for item in source):
         if e.get("status") not in RECOVERABLE_STATUSES:
             continue
         progress_url = e.get("progress_url")

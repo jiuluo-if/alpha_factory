@@ -69,6 +69,37 @@ CATEGORY_KEYWORDS = {
 }
 
 
+def normalize_frequency(field):
+    """Return frequency only when the field metadata states it explicitly."""
+    if not isinstance(field, dict):
+        return None
+    for key in ("frequency", "dataFrequency", "updateFrequency"):
+        value = field.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    description = str(field.get("description") or "").lower()
+    markers = (
+        ("intraday", "intraday"),
+        ("minute", "intraday"),
+        ("hour", "intraday"),
+        ("daily", "daily"),
+        ("day", "daily"),
+        ("weekly", "weekly"),
+        ("week", "weekly"),
+        ("monthly", "monthly"),
+        ("month", "monthly"),
+        ("quarterly", "quarterly"),
+        ("quarter", "quarterly"),
+        ("annual", "annual"),
+        ("yearly", "annual"),
+        ("year", "annual"),
+    )
+    for marker, normalized in markers:
+        if re.search(rf"\b{re.escape(marker)}\b", description):
+            return normalized
+    return None
+
+
 def normalize_coverage(field):
     """Return coverage as a bounded 0.0-1.0 value, or None when unusable.
 
@@ -1126,10 +1157,7 @@ class FieldDiscovery:
             "description": field.get("description") or "",
             "coverage": normalize_coverage(field),
             "alpha_count": alpha_count,
-            "frequency": (
-                field.get("frequency") or field.get("dataFrequency")
-                or field.get("updateFrequency")
-            ),
+            "frequency": normalize_frequency(field),
             "semantic_status": "KNOWN" if field.get("description") else "UNKNOWN",
             "category": category or "preferred",
             "dataset": str(dataset_id),

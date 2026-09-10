@@ -17,6 +17,22 @@
 - [x] 未启动真实 Simulation；未改变 checkpoint、trajectory 恢复边界或 `SUBMIT_UNKNOWN` exactly-once 规则
 - [x] Alpha Feed、颜色同步、heartbeat 与大规模日志按本轮范围 deferred
 
+## 2026-09-10 Feed freshness 与 heartbeat 阶段
+
+- 已完成真实调用图复核并先写入 findings：显式 CLI Feed 路径存在，factory 长运行路径原先没有周期 refresh。
+- 已先写红测试，随后实现 typed positive refresh interval、due/freshness snapshot、失败状态与 last-attempt/last-success 分离。
+- 已实现单进程 Agent lifecycle refresh hook；factory runner 只调用窄 hook，不实现分页、不启动子进程、不改变 quota/checkpoint/Simulation owner。
+- 已实现 transient throttled `HeartbeatSink`，覆盖 Discovery、Feasibility、Assembly/Batch gate、Feed split 和 Simulation settlement 聚合状态。
+- 定向验证 55 tests OK；全量质量门与分阶段提交待完成。
+
+## 2026-09-10 阶段收尾
+
+- [x] Feed freshness、失败 taxonomy、last attempt/success、due/expiry 和 NY rollover 边界完成
+- [x] 单进程 Agent/factory lifecycle refresh hook 与 CLI lock 完成；无 subprocess/第二 scheduler
+- [x] transient throttled heartbeat 覆盖 Discovery、FEASIBILITY、ASSEMBLY/BATCH_GATE、Feed split、SIMULATION_SETTLEMENT
+- [x] 全量 unittest 672 tests OK；coverage 77.8%；compileall、Ruff、mypy、architecture、diff check 通过
+- [x] 待提交阶段文件均为代码、测试、文档；未写入真实 `.wqb_state`、checkpoint、quota、trajectory 或 Feed evidence payload
+
 ## 2026-09-08
 
 - 已读取项目 `AGENTS.md`。

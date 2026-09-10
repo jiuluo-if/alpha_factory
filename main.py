@@ -171,11 +171,19 @@ def main(argv=None):
             agent.run_suggestion_round()
             return
         if command_key == ("alpha", "sync-feed"):
-            snapshot = agent.refresh_remote_alpha_feed(limit=100)
-            print(json.dumps({
-                **snapshot,
-                "network_write": False,
-            }, ensure_ascii=False, indent=2))
+            feed_lock = acquire_single_instance_lock(
+                typed_config.runtime.state_dir, operation="sync-alpha-feed"
+            )
+            if feed_lock is None:
+                sys.exit(1)
+            try:
+                snapshot = agent.refresh_remote_alpha_feed(limit=100)
+                print(json.dumps({
+                    **snapshot,
+                    "network_write": False,
+                }, ensure_ascii=False, indent=2))
+            finally:
+                release_single_instance_lock(feed_lock)
             return
         operation_by_command = {
             ("factory", "run"): "factory-run",

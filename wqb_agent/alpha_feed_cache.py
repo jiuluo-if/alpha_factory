@@ -14,6 +14,19 @@ WEEKLY_SIMULATION_CAP = 7 * 1600
 TEMP_RESOURCE_TTL_SEC = 7 * 24 * 60 * 60
 
 
+def refresh_due(now, last_refresh, interval_sec=3 * 3600):
+    """Return whether a feed refresh is due, failing safe on bad timestamps."""
+    try:
+        current = float(now)
+        previous = float(last_refresh)
+        interval = float(interval_sec)
+    except (TypeError, ValueError, OverflowError):
+        return True
+    if interval <= 0 or current < previous:
+        return True
+    return current - previous >= interval
+
+
 def _local_date(timestamp):
     return datetime.fromtimestamp(timestamp, tz=UTC).astimezone(
         NEW_YORK
@@ -215,3 +228,34 @@ class WeeklyAlphaFeedCache:
                 pass
             return None
         return payload
+
+    def freshness_snapshot(self, *, now=None, interval_sec=3 * 3600):
+        """Expose cache freshness without exposing research evidence."""
+        current = self._clock() if now is None else now
+        payload = self.load()
+        if not isinstance(payload, dict):
+            return {"freshness": "UNKNOWN", "last_success_at": None,
+                    "age_sec": None, "next_due_at": None}
+        try:
+            updated = datetime.fromisoformat(
+                str(payload["updated_at"]).replace("Z", "+00:00")
+            ).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return {"freshness": "UNKNOWN", "last_success_at": None,
+                    "age_sec": None, "next_due_at": None}
+        age = float(current) - updated
+        try:
+            expires = datetime.fromisoformat(
+                str(payload["expires_at"]).replace("Z", "+00:00")
+            ).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError):
+            expires = None
+        stale = refresh_due(current, updated, interval_sec)
+        if expires is not None and float(current) >= expires:
+            stale = True
+        return {
+            "freshness": "FRESH" if not stale else "STALE",
+            "last_success_at": updated,
+            "age_sec": age if age >= 0 else None,
+            "next_due_at": updated + float(interval_sec),
+        }

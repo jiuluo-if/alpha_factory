@@ -108,6 +108,8 @@ class AgentRuntimeConfig:
     trajectory_window: int = 100
     context_experiments: int = 10
     fields_cache_ttl_sec: float = 7 * 24 * 3600
+    alpha_feed_refresh_interval_sec: float = 3 * 3600
+    heartbeat_interval_sec: float = 20.0
     max_field_alpha_count: int | None = None
     factory: dict = field(default_factory=dict)
     research_allocation: dict = field(default_factory=dict)
@@ -562,6 +564,16 @@ def parse_config(raw):
             agent.get("fields_cache_ttl_sec", 7 * 24 * 3600),
             key="config.agent.fields_cache_ttl_sec",
             minimum=0.0,
+        ),
+        alpha_feed_refresh_interval_sec=_finite_float(
+            agent.get("alpha_feed_refresh_interval_sec", 3 * 3600),
+            key="config.agent.alpha_feed_refresh_interval_sec",
+            minimum=1.0, maximum=7 * 24 * 3600,
+        ),
+        heartbeat_interval_sec=_finite_float(
+            agent.get("heartbeat_interval_sec", 20.0),
+            key="config.agent.heartbeat_interval_sec",
+            minimum=1.0, maximum=300.0,
         ),
         max_field_alpha_count=_optional_int_in_range(
             field_selection.get("max_alpha_count"),

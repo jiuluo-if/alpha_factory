@@ -16,6 +16,22 @@
 - [x] handoff commit/push `2cca40741ed70a57fb54194bc5eea56e9b0c41dd`
 - [x] current local/remote SHA 已一致；真实 Simulation 未运行，checkpoint 与 `SUBMIT_UNKNOWN` 未改变
 
+## 2026-09-10 Feed 与 heartbeat 阶段
+
+- [x] 重审远端、调用图、cache/lock/failure 边界并写 findings
+- [x] 先写 freshness、failure、Feed split heartbeat、fake-clock throttling 红测试
+- [x] 实现 Agent lifecycle refresh hook 与 typed interval
+- [x] 实现 transient heartbeat 及 Discovery/Feed/assembly/settlement 接入
+- [ ] 完成 full quality gates、architecture review、两阶段 commit/push 与 SHA 对账
+
+## 阶段结果
+
+- [x] freshness policy 使用 typed `alpha_feed_refresh_interval_sec`，默认 3 小时且正值有界
+- [x] Feed 只读、失败保留旧成功时间、单进程 lifecycle hook、CLI lock
+- [x] transient heartbeat 通过 fake clock 节流并覆盖主要等待阶段
+- [x] full tests/coverage/compileall/Ruff/mypy/architecture/diff check 已通过
+- [ ] 依次完成 Feed 与 heartbeat 两个 commit/push，并核对 local/remote SHA
+
 ## 已完成目标
 
 审查最近运行产生的数据，诊断 Agent/执行链问题；核对并删除用户指定的外部 `.wqb_state`，以及本仓库中经过证据确认的多余生成物。

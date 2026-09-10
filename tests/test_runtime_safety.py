@@ -25,6 +25,17 @@ from wqb_agent.workspace_snapshot import read_workspace_snapshot
 
 
 class TestRuntimeSafety(unittest.TestCase):
+    def test_feed_and_heartbeat_intervals_are_typed_positive_and_bounded(self):
+        typed = parse_config({"simulation": {}, "agent": {
+            "alpha_feed_refresh_interval_sec": 3600,
+            "heartbeat_interval_sec": 10,
+        }})
+        self.assertEqual(typed.runtime.alpha_feed_refresh_interval_sec, 3600)
+        self.assertEqual(typed.runtime.heartbeat_interval_sec, 10)
+        with self.assertRaisesRegex(ValueError, "alpha_feed_refresh_interval_sec"):
+            parse_config({"simulation": {}, "agent": {"alpha_feed_refresh_interval_sec": 0}})
+        with self.assertRaisesRegex(ValueError, "heartbeat_interval_sec"):
+            parse_config({"simulation": {}, "agent": {"heartbeat_interval_sec": 301}})
     def test_normalize_config_is_the_only_raw_config_boundary(self):
         raw = {"simulation": {}, "agent": {"max_rounds": 3}}
         typed = normalize_config(raw)

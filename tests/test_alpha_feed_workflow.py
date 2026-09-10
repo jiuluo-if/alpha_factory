@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from wqb_agent.agent import Agent
-from wqb_agent.alpha_feed_cache import WeeklyAlphaFeedCache
+from wqb_agent.alpha_feed_cache import WeeklyAlphaFeedCache, refresh_due
 from wqb_agent.alpha_feed_workflow import (
     AlphaFeedWorkflow,
     remote_local_date,
@@ -66,6 +66,57 @@ class TestAlphaFeedWorkflow(unittest.TestCase):
             weekly_cache=self.weekly,
             now=now or self.clock,
         )
+
+    def test_refresh_due_is_fail_safe_for_missing_malformed_rollback_and_expiry(self):
+        self.assertTrue(refresh_due(100.0, None, 10.0))
+        self.assertFalse(refresh_due(100.0, 95.0, 10.0))
+        self.assertTrue(refresh_due(100.0, 90.0, 10.0))
+        self.assertTrue(refresh_due(90.0, 100.0, 10.0))
+        self.assertTrue(refresh_due(100.0, "bad", 10.0))
+        self.assertTrue(refresh_due(100.0, 95.0, 0.0))
+
+    def test_cache_freshness_exposes_success_age_and_due_without_payload_evidence(self):
+        self.assertEqual(self.weekly.freshness_snapshot(now=self.now)["freshness"], "UNKNOWN")
+        self.workflow(FeedReader()).refresh()
+        snapshot = self.weekly.freshness_snapshot(now=self.now + 10)
+        self.assertEqual(snapshot["freshness"], "FRESH")
+        self.assertEqual(snapshot["last_success_at"], self.now)
+        self.assertEqual(snapshot["next_due_at"], self.now + 3 * 3600)
+        self.assertFalse(any(key in snapshot for key in ("metrics", "expression", "checks")))
+
+    def test_agent_due_hook_distinguishes_not_due_and_failed_without_resetting_success(self):
+        self.workflow(FeedReader()).refresh()
+        agent = Agent.__new__(Agent)
+        agent.alpha_feed_cache = self.weekly
+        agent.alpha_feed_refresh_interval_sec = 3 * 3600
+        agent._feed_last_attempt_status = "FEED_REFRESH_OK"
+        agent._feed_last_attempt_at = self.now
+        agent.refresh_remote_alpha_feed = mock.Mock(side_effect=RuntimeError("offline"))
+        with mock.patch("wqb_agent.agent.time.time", return_value=self.now + 60):
+            not_due = agent.refresh_remote_alpha_feed_if_due()
+        self.assertEqual(not_due["status"], "FEED_REFRESH_NOT_DUE")
+        agent.alpha_feed_refresh_interval_sec = 10
+        with mock.patch("wqb_agent.agent.time.time", return_value=self.now + 60):
+            failed = agent.refresh_remote_alpha_feed_if_due()
+        self.assertEqual(failed["status"], "FEED_REFRESH_TRANSPORT_ERROR")
+        self.assertEqual(failed["last_success_at"], self.now)
+        self.assertEqual(failed["last_attempt_at"], self.now + 60)
+
+    def test_heartbeat_is_aggregated_and_throttled_during_feed_split(self):
+        class SplittingReader(FeedReader):
+            def get_all_user_alphas(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                if len(self.calls) == 1:
+                    raise WQBQueryTooBroadError("too broad")
+                return []
+        reader = SplittingReader()
+        heartbeat = mock.Mock()
+        workflow = self.workflow(reader)
+        workflow.heartbeat = heartbeat
+        workflow.refresh()
+        self.assertTrue(heartbeat.emit_stage.called)
+        calls = [call.args[0] for call in heartbeat.emit_stage.call_args_list]
+        self.assertTrue(any(item == "ALPHA_FEED_REFRESH" for item in calls))
 
     def test_normal_refresh_keeps_query_split_result_schema_and_cache_fields(self):
         reader = FeedReader({

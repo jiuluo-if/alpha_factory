@@ -82,3 +82,9 @@ Frequency is auditable evidence, not an unqualified field attribute. Platform me
 When feasibility fails, the factory compares admissible relationships, canonical expressions, mechanism family and dataset composition. Seed changes alone do not count as information gain. Route attempts are bounded; repeated no-gain or exhausted route attempts produce a recorded STOP. REVIEW/UNKNOWN remains fail-closed.
 
 Only local trajectory evidence from a real settled `DONE` experiment can become an optimizer parent. The parent must retain metrics, checks (including explicit UNKNOWN where applicable), expression, field audit metadata, hypothesis and economic mechanism. Alpha Feed metadata cannot restore evidence.
+
+# Feed freshness and heartbeat policy (2026-09-10)
+
+Alpha Feed periodic refresh is read-only freshness maintenance, not Alpha evidence recovery. It reads `/users/self/alphas`, keeps only existing lightweight metadata, and reports `FEED_REFRESH_OK`, `FEED_REFRESH_NOT_DUE`, `FEED_REFRESH_QUERY_TOO_BROAD`, or `FEED_REFRESH_TRANSPORT_ERROR` without changing safe Simulation settlement. `last_attempt_at` is distinct from `last_success_at`; stale or unknown cache state never claims freshness.
+
+Heartbeat is observability only. Throttled stage events may report stalls and aggregate progress, but cannot retry POST, skip UNKNOWN, cancel Simulation, clear checkpoint, reserve quota, reroute research, or update research state.

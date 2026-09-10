@@ -37,6 +37,8 @@ class AgentRuntimePolicy:
     min_factory_datasets: int
     min_cross_dataset_pairs: int
     dataset_pool: tuple[str, ...]
+    alpha_feed_refresh_interval_sec: float = 3 * 3600
+    heartbeat_interval_sec: float = 20.0
 
 
 def build_agent_runtime_policy(config: AppConfig) -> AgentRuntimePolicy:
@@ -85,4 +87,6 @@ def build_agent_runtime_policy(config: AppConfig) -> AgentRuntimePolicy:
             field_selection.get("min_cross_dataset_pairs", 0)
         ),
         dataset_pool=tuple(field_selection.get("dataset_pool") or ()),
+        alpha_feed_refresh_interval_sec=runtime.alpha_feed_refresh_interval_sec,
+        heartbeat_interval_sec=runtime.heartbeat_interval_sec,
     )

@@ -44,6 +44,7 @@ def build_agent_workflows(
     hooks: AgentWorkflowHooks,
     daily_cache,
     weekly_cache,
+    heartbeat=None,
 ) -> AgentWorkflows:
     """使用既有组件、缓存和显式 hooks 构造 workflow。"""
     suggestion = SuggestionWorkflow(
@@ -85,6 +86,7 @@ def build_agent_workflows(
         alpha_reader=hooks.alpha_feed.get_all_user_alphas,
         daily_cache=daily_cache,
         weekly_cache=weekly_cache,
+        heartbeat=heartbeat,
     )
     optimizer = OptimizerWorkflow(
         trajectory=components.trajectory,

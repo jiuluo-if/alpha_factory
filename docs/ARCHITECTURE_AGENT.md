@@ -231,3 +231,9 @@ Any future change touching a frozen boundary must include: (1) an observable cha
 Feasibility probes remain control-plane metadata only. A blocked probe records bounded candidate/relationship fingerprints, mechanism family and dataset route; `AIFactoryRunner.route_decision()` compares those fingerprints and chooses `REROUTE` or `STOP` after configured attempt/no-gain limits. A historical candidate set with zero post-dedupe candidates is classified as `MECHANISM_FAMILY_EXHAUSTED`. This route does not submit, reconstruct metrics, or create a second state owner.
 
 Optimizer evidence remains local and append-only: a settled `DONE` Simulation is recorded by the live-result hook into the shared `Trajectory`, then `optimizable_signal_records()` applies the complete parent evidence gate. Cloud Alpha metadata may affect priority only. Handoff counts and rejection taxonomy are control-plane diagnostics, not a result replica.
+
+# Alpha Feed freshness and transient heartbeat (2026-09-10)
+
+`Agent.refresh_remote_alpha_feed_if_due()` is the narrow in-process lifecycle hook used by the legacy factory loop between rounds. It delegates all querying and cache updates to `AlphaFeedWorkflow`; it does not spawn a process, acquire a second scheduler, submit Simulation/Alpha, modify checkpoint/quota, or restore optimizer evidence. Feed freshness is derived from the existing weekly cache timestamp, with a typed positive interval defaulting to three hours. Failed refreshes return a status and preserve the prior successful timestamp.
+
+`HeartbeatSink` is transient and injected into the existing Agent/discovery/Feed lifecycle. It emits throttled aggregate `DISCOVERY`, `FEASIBILITY`, `ASSEMBLY`, `BATCH_GATE`, `ALPHA_FEED_REFRESH`, and `SIMULATION_SETTLEMENT` events. It owns no file, trajectory, checkpoint, ledger, cache, metrics, retry, reroute, cancellation, or quota behavior.

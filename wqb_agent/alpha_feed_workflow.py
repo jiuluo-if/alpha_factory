@@ -42,6 +42,7 @@ class AlphaFeedWorkflow:
         weekly_cache,
         local_date_provider=None,
         now=None,
+        heartbeat=None,
     ):
         self.alpha_reader = alpha_reader
         self.daily_cache = daily_cache
@@ -50,6 +51,7 @@ class AlphaFeedWorkflow:
             local_date_provider or (lambda: self.daily_cache.local_date)
         )
         self._now = now or time.time
+        self.heartbeat = heartbeat
 
     @staticmethod
     def _remote_local_date(value):
@@ -63,6 +65,13 @@ class AlphaFeedWorkflow:
         current_day = date.fromisoformat(local_date)
         week_start = current_day - timedelta(days=6)
         days: dict[str, dict[str, list[dict[str, object]]]] = {}
+        windows_completed = {"SUBMITTED": 0, "UNSUBMITTED": 0}
+        rows_fetched = {"SUBMITTED": 0, "UNSUBMITTED": 0}
+        if self.heartbeat is not None:
+            self.heartbeat.emit_stage(
+                "ALPHA_FEED_REFRESH", query_kind="SUBMITTED",
+                split_depth=0, windows_completed=0, rows_fetched=0,
+            )
 
         def fetch_window(status, field):
             start = datetime.combine(
@@ -90,7 +99,17 @@ class AlphaFeedWorkflow:
                         "date_submitted_before": end_at.isoformat(),
                     })
                 try:
-                    return self.alpha_reader(**kwargs)
+                    rows = self.alpha_reader(**kwargs)
+                    windows_completed[status] += 1
+                    rows_fetched[status] += len(rows) if isinstance(rows, list) else 0
+                    if self.heartbeat is not None:
+                        self.heartbeat.emit_stage(
+                            "ALPHA_FEED_REFRESH", query_kind=status,
+                            split_depth=depth,
+                            windows_completed=windows_completed[status],
+                            rows_fetched=rows_fetched[status],
+                        )
+                    return rows
                 except WQBQueryTooBroadError:
                     if depth >= 12 or end_at - start_at <= timedelta(minutes=1):
                         raise

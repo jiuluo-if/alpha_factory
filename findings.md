@@ -240,3 +240,21 @@
 - runner 使用既有 factory session 保存 route attempt/no-gain/probe 与 decision；只在既有 cross-dataset gate 失败时触发 `REROUTE` 或 `STOP`，不产生新 POST，不写 checkpoint/result payload。
 - optimizer parent gate 统一要求本地 DONE、metrics、checks（含显式 UNKNOWN）、expression、字段审计、hypothesis 与 economic mechanism；拒绝原因使用 `PARENT_*` taxonomy，cloud metadata 仍只影响优先级。
 - 定向回归 59 tests OK；完整 unittest 664 tests OK，compileall、Ruff、typed frontier mypy、diff check 均通过。未启动真实 Simulation，checkpoint 与 `SUBMIT_UNKNOWN` 规则未改动。
+
+## 2026-09-10 Alpha Feed freshness 与 heartbeat 当前重审
+
+- 本轮重新 `git fetch origin` 后确认 `main`、本地 HEAD、`origin/main` 均为 `c213a084473039c270b640b6987081f5e8ea2437`，工作树干净；最近 10 个提交已核对。指定源码与文档已完整通读。
+- 当前调用图为 `main.py alpha sync-feed` → 构造 `WQBClient`/`Agent` → `Agent.refresh_remote_alpha_feed()` → `AlphaFeedWorkflow.refresh()` → `DailyResearchCache.put_*()` 与 `WeeklyAlphaFeedCache.refresh()`。Feed reader 仅为 `get_all_user_alphas`，请求源为 `/users/self/alphas`。
+- 当前 long-running factory path 为 `main.py factory run` → 单实例锁 → `AIFactoryRunner.run()`；复核未发现它调用 `refresh_remote_alpha_feed()` 或 AlphaFeedWorkflow。现有“每 3 小时同批刷新”只有文档约束，没有 typed interval、due helper 或运行时 hook。
+- 当前 weekly cache 以 `updated_at`/`expires_at` 写入，但 `load()` 只校验 schema/timezone/week_start，未提供 freshness snapshot、last attempt/success 分离或失败保留旧 timestamp；`AlphaFeedWorkflow.refresh()` 失败前不会写 cache，但没有统一失败 taxonomy/heartbeat。
+- 当前没有可注入 heartbeat abstraction；只有 `DiagnosticEvent`（静态诊断记录）和若干 print。Discovery、assembly/gate、settlement、Feed split 均缺聚合 throttled progress hook。
+- 当前 lock owner 是 CLI `main.py` 的 `acquire_single_instance_lock()`；`sync-feed` 分支本身未显式 acquire lock，而 factory/run-proposals/sync-colors 会 acquire。Feed workflow 不依赖 Simulator/ProposalExecutionWorkflow，不改 quota/checkpoint/metrics/optimizer evidence；颜色同步仍是独立显式命令。
+- 本轮范围：增加最小 typed freshness policy、单进程窄 refresh hook、只读失败状态与 transient heartbeat；不改 mechanism routing、optimizer parent、checkpoint schema、color classification 或 persistent trajectory。
+
+## 2026-09-10 实现后复核
+
+- Feed freshness 已由 `WeeklyAlphaFeedCache.freshness_snapshot()` 基于既有 `updated_at`、`expires_at` 和 typed interval 判定；缺失/损坏/回拨时间 fail-safe 为 due/UNKNOWN，不把失败伪装为成功。
+- `Agent.refresh_remote_alpha_feed_if_due()` 是唯一周期 hook；factory runner 仅在生命周期边界调用它，Feed 分页与 cache 写入仍归 `AlphaFeedWorkflow`/`WeeklyAlphaFeedCache`，不启动 subprocess 或第二 scheduler。
+- Feed 失败返回 `FEED_REFRESH_QUERY_TOO_BROAD`、`FEED_REFRESH_TRANSPORT_ERROR` 或 `FEED_REFRESH_INVALID_CACHE`，保留旧成功 timestamp；CLI `alpha sync-feed` 现在复用单实例锁。
+- `HeartbeatSink` 为进程内 transient observer，默认输出聚合事件并按 stage/progress/interval 节流；Discovery、Feasibility、Assembly/Batch gate、Feed split、Simulation settlement 已接入，不改变执行安全语义。
+- 定向验证 56 tests OK；全量普通/coverage unittest 各 672 tests OK，coverage 77.8%，architecture、compileall、Ruff、typed frontier mypy、diff check 均通过。未启动真实 Simulation；checkpoint、quota、`SUBMIT_UNKNOWN` 未改变。

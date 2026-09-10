@@ -12,7 +12,7 @@ import os
 import time
 
 from .alpha_colors import classify_alpha_color
-from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
+from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache, refresh_due
 from .alpha_feed_workflow import AlphaFeedHooks
 from .alpha_pool import build_pool_snapshot
 from .artifacts import iter_jsonl_objects
@@ -21,6 +21,7 @@ from .config import normalize_config
 from .daily_cache import DailyResearchCache
 from .evidence import overlay_cached_checks, refresh_self_correlation_cache
 from .expression import canonical_expression, submission_fingerprint
+from .heartbeat import HeartbeatSink
 from .identity import candidate_identity
 from .incremental_value import build_incremental_value
 from .metrics import (
@@ -128,6 +129,7 @@ class Agent:
         self._install_components(components)
         self._init_iteration_state()
         self._init_caches()
+        self._init_heartbeat()
         operator_path = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "..", "docs", "reference",
@@ -163,6 +165,8 @@ class Agent:
         self.min_factory_datasets = policy.min_factory_datasets
         self.min_cross_dataset_pairs = policy.min_cross_dataset_pairs
         self.dataset_pool = list(policy.dataset_pool)
+        self.alpha_feed_refresh_interval_sec = policy.alpha_feed_refresh_interval_sec
+        self.heartbeat_interval_sec = policy.heartbeat_interval_sec
 
     def _install_components(self, components):
         """将唯一的基础组件集中投影为现有 Agent 属性。"""
@@ -198,6 +202,11 @@ class Agent:
             feed_cache_path,
             weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
         )
+
+    def _init_heartbeat(self):
+        """Create one transient observer and share it with read workflows."""
+        self.heartbeat = HeartbeatSink(interval_sec=self.heartbeat_interval_sec)
+        self.discovery.heartbeat = self.heartbeat
 
     def _build_workflow_hooks(self):
         """集中绑定 Agent-owned 操作，不把 Agent 对象泄漏给 workflow。"""
@@ -262,6 +271,7 @@ class Agent:
             hooks=self._build_workflow_hooks(),
             daily_cache=self.daily_cache,
             weekly_cache=self.alpha_feed_cache,
+            heartbeat=self.heartbeat,
         )
         self.suggestion_workflow = workflows.suggestion
         self.proposal_execution = workflows.proposal_execution
@@ -310,6 +320,42 @@ class Agent:
     def refresh_remote_alpha_feed(self, *, limit=100):
         """兼容 facade：执行 Alpha Feed 的只读同步。"""
         return self.alpha_feed_workflow.refresh(limit=limit)
+
+    def refresh_remote_alpha_feed_if_due(self, *, limit=100):
+        """Refresh Feed in-process at a lifecycle boundary, never as a scheduler."""
+        now = time.time()
+        cache_exists = os.path.exists(self.alpha_feed_cache.path)
+        freshness = self.alpha_feed_cache.freshness_snapshot(
+            now=now, interval_sec=self.alpha_feed_refresh_interval_sec
+        )
+        last_attempt = getattr(self, "_feed_last_attempt_at", None)
+        if not refresh_due(now, freshness.get("last_success_at"),
+                           self.alpha_feed_refresh_interval_sec):
+            result = {"status": "FEED_REFRESH_NOT_DUE", **freshness,
+                      "last_attempt_at": last_attempt,
+                      "last_attempt_status": getattr(self, "_feed_last_attempt_status", None)}
+            return result
+        self._feed_last_attempt_at = now
+        try:
+            snapshot = self.refresh_remote_alpha_feed(limit=limit)
+        except Exception as exc:
+            status = "FEED_REFRESH_INVALID_CACHE" if (
+                cache_exists and freshness.get("freshness") == "UNKNOWN"
+            ) else (
+                "FEED_REFRESH_QUERY_TOO_BROAD"
+                if exc.__class__.__name__ == "WQBQueryTooBroadError"
+                else "FEED_REFRESH_TRANSPORT_ERROR"
+            )
+            self._feed_last_attempt_status = status
+            return {"status": status, **self.alpha_feed_cache.freshness_snapshot(
+                now=now, interval_sec=self.alpha_feed_refresh_interval_sec
+            ), "last_attempt_at": now, "last_attempt_status": status}
+        self._feed_last_attempt_status = "FEED_REFRESH_OK"
+        return {"status": "FEED_REFRESH_OK", **snapshot,
+                **self.alpha_feed_cache.freshness_snapshot(
+                    now=now, interval_sec=self.alpha_feed_refresh_interval_sec
+                ), "last_attempt_at": now,
+                "last_attempt_status": "FEED_REFRESH_OK"}
 
     def generate_optimized_proposals(self, parents=None, *, max_candidates=4):
         """兼容 facade：生成受限的 evidence-backed CHILD proposals。"""
@@ -848,6 +894,17 @@ class Agent:
             pass
 
     def _on_simulation_update(self, experiment, round_no, hypothesis, experiments):
+        if hasattr(self, "heartbeat"):
+            statuses = [str(item.status).upper() for item in experiments]
+            self.heartbeat.emit_stage(
+                "SIMULATION_SETTLEMENT",
+                done=statuses.count("DONE"), failed=statuses.count("FAILED"),
+                running=statuses.count("RUNNING"), pending=statuses.count("PENDING"),
+                unknown=statuses.count("UNKNOWN"),
+                submit_unknown=statuses.count("SUBMIT_UNKNOWN"),
+                known_progress_url=sum(bool(item.progress_url) for item in experiments),
+                last_settlement_progress=experiment.status,
+            )
         if experiment.status in {"RUNNING", "SUBMIT_UNKNOWN"}:
             self._record_trial_phase(
                 experiment, "submitted", outcome=experiment.status
@@ -859,6 +916,12 @@ class Agent:
         self._write_proposal_checkpoint(
             round_no, hypothesis, experiments, complete=False
         )
+
+    def emit_heartbeat(self, stage, **metadata):
+        """Narrow transient diagnostic hook for compatibility orchestration."""
+        if hasattr(self, "heartbeat"):
+            return self.heartbeat.emit_stage(stage, **metadata)
+        return False
 
     def _attach_candidate_meta(self, experiment, candidate):
         experiment.hypothesis_id = candidate.get("parent") or experiment.hypothesis_id

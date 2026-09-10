@@ -88,3 +88,14 @@ Only local trajectory evidence from a real settled `DONE` experiment can become 
 Alpha Feed periodic refresh is read-only freshness maintenance, not Alpha evidence recovery. It reads `/users/self/alphas`, keeps only existing lightweight metadata, and reports `FEED_REFRESH_OK`, `FEED_REFRESH_NOT_DUE`, `FEED_REFRESH_QUERY_TOO_BROAD`, or `FEED_REFRESH_TRANSPORT_ERROR` without changing safe Simulation settlement. `last_attempt_at` is distinct from `last_success_at`; stale or unknown cache state never claims freshness.
 
 Heartbeat is observability only. Throttled stage events may report stalls and aggregate progress, but cannot retry POST, skip UNKNOWN, cancel Simulation, clear checkpoint, reserve quota, reroute research, or update research state.
+
+# Semantic diversity audit (2026-09-10)
+
+Factory batch uniqueness is not treated as mechanism diversity. The audit keeps
+expression, structural family, semantic mechanism, field concept, dataset, and
+independent lineage counts separate. Semantic keys use derived traits and
+relationship metadata without field IDs; missing or UNKNOWN traits remain an
+unresolved bucket. Child proposals sharing one reliable parent lineage count
+as one independent lineage. Diversity is computed after the existing hard
+gates and is an audit/priority signal only; it cannot relax semantic
+compatibility or relationship admission.

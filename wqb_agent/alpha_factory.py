@@ -14,7 +14,7 @@ import random
 from dataclasses import dataclass
 
 from .discovery import frequency_evidence, normalize_coverage
-from .diversity import extract_fields
+from .diversity import extract_fields, semantic_mechanism_key_from_traits
 from .expression import analyze_expression, canonical_expression
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 
@@ -787,6 +787,12 @@ class AlphaFactory:
         candidate_fingerprints = set()
         relationship_fingerprints = set()
         mechanism_families = set()
+        semantic_mechanism_fingerprints = set()
+        structural_family_fingerprints = set()
+        field_concept_fingerprints = {
+            str(_derive_field_semantic_traits(profile).get("concept") or "unknown")
+            for profile in profiles
+        }
         combinations_seen = 0
         for template in templates:
             slots = len(template.required_slots)
@@ -817,6 +823,15 @@ class AlphaFactory:
                         counts["relationship_unknown"] += 1
                     continue
                 mechanism_families.add(str(template.family))
+                selected_traits = [
+                    _derive_field_semantic_traits(profile) for profile in selected
+                ]
+                semantic_mechanism_fingerprints.add(
+                    semantic_mechanism_key_from_traits(
+                        selected_traits, template.family, relation.get("relationship_type")
+                    )
+                )
+                structural_family_fingerprints.add(str(template.family))
                 relationship_fingerprints.add(
                     f"{template.family}:{','.join(sorted(str(p.get('id')) for p in selected))}"
                 )
@@ -872,6 +887,9 @@ class AlphaFactory:
             "dataset_route": sorted({str(p.get("dataset")) for p in profiles if p.get("dataset") is not None}),
             "candidate_expression_fingerprints": sorted(candidate_fingerprints),
             "relationship_fingerprints": sorted(relationship_fingerprints)[:64],
+            "semantic_mechanism_fingerprints": sorted(semantic_mechanism_fingerprints)[:64],
+            "structural_family_fingerprints": sorted(structural_family_fingerprints),
+            "field_concept_fingerprints": sorted(field_concept_fingerprints),
             "failure_taxonomy": taxonomy,
             "batch_gate": {
                 "feasible": counts["novel_cross_dataset_relationship_count"] > 0,

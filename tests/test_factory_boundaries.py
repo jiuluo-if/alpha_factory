@@ -17,6 +17,7 @@ from wqb_agent.alpha_feed_workflow import AlphaFeedWorkflow
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.client import WQBQueryTooBroadError
 from wqb_agent.daily_cache import DailyResearchCache
+from wqb_agent.diversity import diversity_audit, semantic_mechanism_key
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
@@ -326,6 +327,131 @@ class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
 
 
 class TestFactoryBatchContract(unittest.TestCase):
+    @staticmethod
+    def _diversity_proposal(expression, *, concept="fundamental", measurement="level",
+                            behavior="slow_moving", template_family="persistent_level",
+                            dataset="fundamental6", lineage_id=None, layer="exploration",
+                            relationship_type=None):
+        traits = {
+            "concept": concept, "measurement": measurement, "behavior": behavior,
+            "status": "KNOWN" if concept != "unknown" else "UNKNOWN",
+        }
+        item = {
+            "expression": expression,
+            "template_family": template_family,
+            "research_layer": layer,
+            "field_analysis": {"field": {"semantic_traits": traits}},
+            "field_refs": [{"id": "field", "dataset": dataset}],
+            "datasets": [dataset],
+        }
+        if lineage_id is not None:
+            item["lineage_id"] = lineage_id
+        if relationship_type is not None:
+            item["relationship_audit"] = {"relationship_type": relationship_type}
+        return item
+
+    def test_semantic_key_ignores_field_id_and_uses_derived_traits(self):
+        first = self._diversity_proposal("rank(field_a)")
+        second = self._diversity_proposal("rank(field_b)")
+        self.assertEqual(semantic_mechanism_key(first), semantic_mechanism_key(second))
+        self.assertNotIn("field_a", semantic_mechanism_key(first))
+
+    def test_diversity_audit_separates_expression_structure_and_semantics(self):
+        proposals = [
+            self._diversity_proposal(f"rank(field_{i})", dataset=f"d{i}")
+            for i in range(10)
+        ]
+        stats = diversity_audit(proposals)
+        self.assertEqual(stats["expression"]["unique_count"], 10)
+        self.assertEqual(stats["structure"]["unique_family_count"], 1)
+        self.assertEqual(stats["semantic"]["known_mechanism_count"], 1)
+        self.assertEqual(stats["datasets"]["unique_count"], 10)
+
+    def test_same_structure_different_concepts_increase_semantic_only(self):
+        proposals = [
+            self._diversity_proposal("persistent_level(a)", concept="analyst_revision",
+                                     measurement="change", behavior="event_driven"),
+            self._diversity_proposal("persistent_level(b)", concept="liquidity",
+                                     measurement="level", behavior="signed"),
+        ]
+        stats = diversity_audit(proposals)
+        self.assertEqual(stats["structure"]["unique_family_count"], 1)
+        self.assertEqual(stats["semantic"]["known_mechanism_count"], 2)
+
+    def test_different_structures_same_mechanism_increase_structure_only(self):
+        proposals = [
+            self._diversity_proposal("rank(a)", template_family="rank_level"),
+            self._diversity_proposal("zscore(b)", template_family="zscore_level"),
+        ]
+        stats = diversity_audit(proposals)
+        self.assertEqual(stats["structure"]["unique_family_count"], 2)
+        self.assertEqual(stats["semantic"]["known_mechanism_count"], 1)
+
+    def test_unknown_semantics_and_child_count_do_not_create_diversity(self):
+        proposals = [
+            self._diversity_proposal(f"rank(unknown_{i})", concept="unknown",
+                                     dataset=f"unknown_d{i}", lineage_id="parent-a")
+            for i in range(20)
+        ]
+        stats = diversity_audit(proposals)
+        self.assertEqual(stats["semantic"]["known_mechanism_count"], 0)
+        self.assertEqual(stats["semantic"]["unknown_mechanism_count"], 20)
+        self.assertEqual(stats["lineages"]["unique_independent_count"], 1)
+        self.assertEqual(stats["lineages"]["unknown_count"], 0)
+
+    def test_batch_stats_contains_diversity_audit_and_layer_counts(self):
+        proposals = [
+            self._diversity_proposal("rank(a)", layer="optimization", lineage_id="p"),
+            self._diversity_proposal("rank(b)", layer="exploration", lineage_id="e"),
+        ]
+        stats = factory_batch_stats(proposals)
+        self.assertEqual(stats["diversity_layers"]["optimization"]["count"], 1)
+        self.assertEqual(stats["diversity_layers"]["exploration"]["mechanism_count"], 1)
+
+    def test_route_ignores_expression_only_change_but_accepts_semantic_or_relationship_change(self):
+        base = {
+            "candidate_expression_fingerprints": ["a"],
+            "relationship_fingerprints": ["r"],
+            "semantic_mechanism_fingerprints": ["fundamental:level:persistent_level"],
+            "structural_family_fingerprints": ["persistent_level"],
+            "dataset_route": ["d1"],
+        }
+        expression_only = dict(base, candidate_expression_fingerprints=["b"])
+        decision = AIFactoryRunner.route_decision(
+            base, expression_only, route_attempt=0, no_gain_attempts=1,
+            max_no_gain_attempts=2,
+        )
+        self.assertFalse(decision["information_gain"])
+        self.assertEqual(decision["change_type"], "candidate_change_only")
+        semantic_change = dict(expression_only,
+                                semantic_mechanism_fingerprints=["liquidity:level:rank_level"])
+        decision = AIFactoryRunner.route_decision(
+            base, semantic_change, route_attempt=0, no_gain_attempts=1,
+            max_no_gain_attempts=2,
+        )
+        self.assertTrue(decision["information_gain"])
+        self.assertIn("semantic_change", decision["information_changes"])
+
+    def test_route_accepts_new_relationship_family_as_information_gain(self):
+        previous = {
+            "semantic_mechanism_fingerprints": ["fundamental:level:slow_moving"],
+            "relationship_fingerprints": ["pair:co_movement"],
+            "dataset_route": ["d1", "d2"],
+        }
+        current = dict(previous, relationship_fingerprints=["pair:relative_spread"])
+        decision = AIFactoryRunner.route_decision(
+            previous, current, route_attempt=1, no_gain_attempts=1,
+        )
+        self.assertTrue(decision["information_gain"])
+        self.assertEqual(decision["change_type"], "research_information_change")
+
+    def test_diversity_audit_is_deterministic_for_fixed_input(self):
+        proposals = [
+            self._diversity_proposal("rank(b)", dataset="d2", lineage_id="l2"),
+            self._diversity_proposal("rank(a)", dataset="d1", lineage_id="l1"),
+        ]
+        self.assertEqual(diversity_audit(proposals), diversity_audit(list(proposals)))
+
     def test_historical_exhaustion_is_mechanism_family_exhausted(self):
         factory = AlphaFactory()
         fields = [
@@ -376,6 +502,22 @@ class TestFactoryBatchContract(unittest.TestCase):
             "RELATIONSHIP_REVIEW",
         )
         self.assertNotIn("metrics", stats["feasibility_probe"])
+
+    def test_feasibility_probe_exposes_separate_semantic_and_structural_fingerprints(self):
+        fields = [
+            {"id": "eps_revision", "dataset": "analyst4", "type": "MATRIX",
+             "description": "analyst EPS estimate revision", "frequency": "daily",
+             "category": "analyst", "semantic_status": "KNOWN"},
+            {"id": "book_value", "dataset": "fundamental6", "type": "MATRIX",
+             "description": "fundamental book value", "frequency": "quarterly",
+             "category": "fundamental", "semantic_status": "KNOWN"},
+        ]
+        probe = AlphaFactory().assess_feasibility(
+            {"id": "fingerprints"}, fields, {}, max_combinations=32,
+        )
+        self.assertIn("semantic_mechanism_fingerprints", probe)
+        self.assertIn("structural_family_fingerprints", probe)
+        self.assertIn("field_concept_fingerprints", probe)
 
     def test_feasibility_probe_reports_bounded_cross_dataset_diagnosis(self):
         root = os.path.dirname(os.path.dirname(__file__))

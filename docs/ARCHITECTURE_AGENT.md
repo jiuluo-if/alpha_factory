@@ -237,3 +237,15 @@ Optimizer evidence remains local and append-only: a settled `DONE` Simulation is
 `Agent.refresh_remote_alpha_feed_if_due()` is the narrow in-process lifecycle hook used by the legacy factory loop between rounds. It delegates all querying and cache updates to `AlphaFeedWorkflow`; it does not spawn a process, acquire a second scheduler, submit Simulation/Alpha, modify checkpoint/quota, or restore optimizer evidence. Feed freshness is derived from the existing weekly cache timestamp, with a typed positive interval defaulting to three hours. Failed refreshes return a status and preserve the prior successful timestamp.
 
 `HeartbeatSink` is transient and injected into the existing Agent/discovery/Feed lifecycle. It emits throttled aggregate `DISCOVERY`, `FEASIBILITY`, `ASSEMBLY`, `BATCH_GATE`, `ALPHA_FEED_REFRESH`, and `SIMULATION_SETTLEMENT` events. It owns no file, trajectory, checkpoint, ledger, cache, metrics, retry, reroute, cancellation, or quota behavior.
+
+# Factory semantic diversity audit (2026-09-10)
+
+`diversity.py` derives a stable semantic mechanism key from existing field
+semantic traits and relationship metadata; it never uses field IDs or free-form
+mechanism prose as identity. `factory_batch_stats()` reports expression,
+structural-family, semantic-mechanism, field-concept, dataset, and independent
+lineage diversity, with separate optimization/exploration summaries. UNKNOWN
+evidence is recorded as unresolved and cannot increase known diversity. These
+are audit fields only: hard semantic/relationship/frequency/type gates still
+run first, and `route_decision()` treats expression-only changes as candidate
+changes rather than research information gain.

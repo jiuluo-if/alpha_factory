@@ -135,6 +135,8 @@ def validate_factory_batch(proposals, target=FACTORY_BATCH_SIZE,
 
 def factory_batch_stats(proposals, feasibility=None):
     """Return auditable composition counts without retaining result payloads."""
+    from .diversity import diversity_audit
+
     stats = {
         "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
         "layer_counts": {"optimization": 0, "exploration": 0, "unknown": 0},
@@ -146,6 +148,9 @@ def factory_batch_stats(proposals, feasibility=None):
         "dual_or_multi_field_count": 0,
         "cross_dataset_pair_count": 0,
     }
+    diversity = diversity_audit(proposals or [])
+    stats["diversity"] = diversity
+    stats["diversity_layers"] = diversity["layers"]
     if isinstance(feasibility, dict):
         stats["feasibility_probe"] = dict(feasibility)
     for proposal in proposals or []:

@@ -15,11 +15,200 @@
 """
 
 import re
+from collections import Counter
 
 from .expression import analyze_expression
 from .metrics import score_of
 
 _FIELD_TOKEN_RE = re.compile(r"[a-z0-9_]+")
+
+
+def _clean(value):
+    value = str(value or "").strip().lower()
+    return value if value and value not in {"unknown", "none", "null"} else "unknown"
+
+
+def _is_known_traits(traits):
+    return isinstance(traits, dict) and (
+        str(traits.get("status") or "").upper() == "KNOWN"
+        or str(traits.get("semantic_admission") or "").upper() == "ALLOW"
+    ) and _clean(traits.get("concept")) != "unknown"
+
+
+def _proposal_traits(proposal):
+    if not isinstance(proposal, dict):
+        return []
+    traits = []
+    analyses = proposal.get("field_analysis") or {}
+    if isinstance(analyses, dict):
+        for value in analyses.values():
+            if isinstance(value, dict) and isinstance(value.get("semantic_traits"), dict):
+                traits.append(value["semantic_traits"])
+    if traits:
+        return traits
+    basis = proposal.get("field_hypothesis_basis") or {}
+    if isinstance(basis, dict):
+        for value in basis.values():
+            if isinstance(value, dict) and isinstance(value.get("semantic_traits"), dict):
+                traits.append(value["semantic_traits"])
+    return traits
+
+
+def semantic_mechanism_key_from_traits(traits, template_family=None,
+                                       relationship_type=None):
+    """Build a coarse mechanism identity from derived semantic evidence.
+
+    Field IDs and free-form economic-mechanism prose are intentionally absent:
+    changing either must not manufacture semantic diversity.
+    """
+    traits = [item for item in (traits or []) if isinstance(item, dict)]
+    known = [item for item in traits if _is_known_traits(item)]
+    if not known or len(known) != len(traits):
+        return "UNKNOWN"
+    concepts = sorted({
+        ":".join(_clean(item.get(key)) for key in ("concept", "measurement", "behavior"))
+        for item in known
+    })
+    relationship = _clean(relationship_type)
+    if len(concepts) > 1 or relationship != "unknown":
+        return f"{'+'.join(concepts)}:{relationship}"
+    return concepts[0]
+
+
+def semantic_mechanism_key(proposal):
+    """Return a stable semantic key for one proposal, or ``UNKNOWN``."""
+    if not isinstance(proposal, dict):
+        return "UNKNOWN"
+    explicit = proposal.get("semantic_mechanism_family")
+    if isinstance(explicit, str) and _clean(explicit) != "unknown":
+        return explicit.strip().lower()
+    audit = proposal.get("relationship_audit") or {}
+    return semantic_mechanism_key_from_traits(
+        _proposal_traits(proposal),
+        proposal.get("template_family") or proposal.get("template_id"),
+        audit.get("relationship_type") if isinstance(audit, dict) else None,
+    )
+
+
+def structural_family_key(proposal):
+    if not isinstance(proposal, dict):
+        return "UNKNOWN"
+    return _clean(proposal.get("template_family") or proposal.get("template_id"))
+
+
+def field_concept_keys(proposal):
+    return {
+        _clean(item.get("concept"))
+        for item in _proposal_traits(proposal)
+        if _is_known_traits(item)
+    }
+
+
+def _lineage_key(proposal):
+    if not isinstance(proposal, dict):
+        return None
+    for key in ("lineage_id", "parent_id", "hypothesis_id"):
+        value = proposal.get(key)
+        if isinstance(value, (str, int)) and str(value).strip():
+            return str(value).strip()
+    provenance = proposal.get("optimizer_provenance")
+    if isinstance(provenance, dict):
+        for key in ("lineage_id", "parent_id", "hypothesis_id"):
+            value = provenance.get(key)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return str(value).strip()
+    return None
+
+
+def _share(counter):
+    total = sum(counter.values())
+    if not total:
+        return None
+    return max(counter.values()) / total
+
+
+def _dominant(counter):
+    return counter.most_common(1)[0][0] if counter else None
+
+
+def _audit_subset(proposals):
+    expressions = {
+        str(proposal.get("expression")).strip()
+        for proposal in proposals
+        if isinstance(proposal, dict) and str(proposal.get("expression") or "").strip()
+    }
+    structures = Counter(structural_family_key(item) for item in proposals)
+    mechanisms = Counter(semantic_mechanism_key(item) for item in proposals)
+    known_mechanisms = Counter({key: value for key, value in mechanisms.items()
+                                if key != "UNKNOWN"})
+    concepts = set()
+    unknown_concepts = 0
+    datasets = set()
+    lineage_keys = set()
+    for proposal in proposals:
+        traits = _proposal_traits(proposal)
+        known_traits = [item for item in traits if _is_known_traits(item)]
+        concepts.update(_clean(item.get("concept")) for item in known_traits)
+        unknown_concepts += len(traits) - len(known_traits) if traits else 1
+        for value in proposal.get("datasets") or [] if isinstance(proposal, dict) else []:
+            if value is not None and str(value).strip():
+                datasets.add(str(value).strip())
+        lineage = _lineage_key(proposal)
+        if lineage is not None:
+            lineage_keys.add(lineage)
+    warnings = []
+    if _share(known_mechanisms) is not None and _share(known_mechanisms) > 0.4:
+        warnings.append("MECHANISM_CONCENTRATED")
+    if _share(structures) is not None and _share(structures) > 0.4:
+        warnings.append("STRUCTURE_CONCENTRATED")
+    if lineage_keys:
+        lineage_counter = Counter(_lineage_key(item) for item in proposals if _lineage_key(item))
+        if _share(lineage_counter) > 0.4:
+            warnings.append("LINEAGE_CONCENTRATED")
+    lineage_counter = Counter(_lineage_key(item) for item in proposals if _lineage_key(item))
+    result = {
+        "proposal_count": len(proposals),
+        "expression": {"unique_count": len(expressions),
+                        "diversity_ratio": len(expressions) / len(proposals) if proposals else 0.0},
+        "structure": {"unique_family_count": len(structures),
+                       "dominant_family": _dominant(structures),
+                       "dominant_share": _share(structures)},
+        "semantic": {"known_mechanism_count": len(known_mechanisms),
+                      "unknown_mechanism_count": mechanisms.get("UNKNOWN", 0),
+                      "dominant_mechanism": _dominant(known_mechanisms),
+                      "dominant_share": _share(known_mechanisms)},
+        "field_concepts": {"unique_known_count": len(concepts),
+                            "unknown_count": unknown_concepts},
+        "datasets": {"unique_count": len(datasets)},
+        "lineages": {"unique_independent_count": len(lineage_keys),
+                      "unknown_count": len(proposals) - sum(lineage_counter.values()),
+                      "dominant_lineage_share": _share(lineage_counter)},
+        "warnings": warnings,
+    }
+    result["dominant_mechanism"] = result["semantic"]["dominant_mechanism"]
+    result["dominant_mechanism_share"] = result["semantic"]["dominant_share"]
+    result["dominant_structure"] = result["structure"]["dominant_family"]
+    result["dominant_structure_share"] = result["structure"]["dominant_share"]
+    return result
+
+
+def diversity_audit(proposals):
+    """Compute one-pass, deterministic semantic diversity statistics."""
+    items = [item for item in (proposals or []) if isinstance(item, dict)]
+    result = _audit_subset(items)
+    layers = {}
+    for layer in ("optimization", "exploration"):
+        subset = [item for item in items
+                  if str(item.get("research_layer") or "").lower() == layer]
+        audit = _audit_subset(subset)
+        layers[layer] = {
+            "count": len(subset),
+            "mechanism_count": audit["semantic"]["known_mechanism_count"],
+            "lineage_count": audit["lineages"]["unique_independent_count"],
+            "field_concept_count": audit["field_concepts"]["unique_known_count"],
+        }
+    result["layers"] = layers
+    return result
 def extract_fields(expression, known_fields):
     r"""返回表达式里实际出现的 known_fields 子集。
 

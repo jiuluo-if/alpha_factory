@@ -58,14 +58,31 @@ class AIFactoryRunner:
         previous_probe = previous_probe if isinstance(previous_probe, dict) else {}
         current_probe = current_probe if isinstance(current_probe, dict) else {}
         current_taxonomy = str(current_probe.get("failure_taxonomy") or "UNKNOWN")
-        changed = any(
-            set(current_probe.get(key) or ()) != set(previous_probe.get(key) or ())
-            for key in (
-                "candidate_expression_fingerprints", "relationship_fingerprints",
-                "dataset_route", "mechanism_family",
-            )
+        candidate_changed = (
+            set(current_probe.get("candidate_expression_fingerprints") or ())
+            != set(previous_probe.get("candidate_expression_fingerprints") or ())
         )
-        information_gain = bool(changed)
+        new_metadata = any(
+            key in previous_probe or key in current_probe
+            for key in ("semantic_mechanism_fingerprints", "structural_family_fingerprints",
+                        "field_concept_fingerprints", "research_question_fingerprints")
+        )
+        changes = []
+        for name, key in (
+            ("semantic_change", "semantic_mechanism_fingerprints"),
+            ("relationship_change", "relationship_fingerprints"),
+            ("dataset_change", "dataset_route"),
+            ("question_change", "research_question_fingerprints"),
+        ):
+            if set(current_probe.get(key) or ()) != set(previous_probe.get(key) or ()):
+                changes.append(name)
+        if candidate_changed:
+            changes.insert(0, "candidate_change")
+        information_gain = bool(
+            any(item in changes for item in
+                ("semantic_change", "relationship_change", "dataset_change", "question_change"))
+            if new_metadata else changes
+        )
         next_no_gain = 0 if information_gain else int(no_gain_attempts) + 1
         if int(route_attempt) >= int(max_route_attempts):
             action, reason = "STOP", "ROUTE_ATTEMPTS_EXHAUSTED"
@@ -77,6 +94,12 @@ class AIFactoryRunner:
         return {
             "action": action, "reason": reason,
             "information_gain": information_gain,
+            "information_changes": changes,
+            "change_type": (
+                "none" if not changes else
+                "candidate_change_only" if changes == ["candidate_change"] else
+                "research_information_change"
+            ),
             "no_gain_attempts": next_no_gain,
             "route_attempt": int(route_attempt),
             "route_index": min(int(route_attempt) + 1, 4),

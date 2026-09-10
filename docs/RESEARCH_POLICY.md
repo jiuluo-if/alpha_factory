@@ -74,3 +74,6 @@ DONE 结果至少结合 Sharpe、Fitness、Turnover、Returns、Drawdown、Margi
 ## Agent 接管与效率
 
 接管已有 workspace 的第一步是 `python main.py state preflight`。该命令只读汇总未完成 checkpoint、状态审计、proposal/cache 概况和 trajectory 计数；`BLOCKED` 时先恢复或对账，不直接启动新实验。自相关回填使用 `scripts/refresh_self_correlation.py` 的时间窗和数量上限，避免重复扫描全部历史。它只调用现有 evidence cache GET 路径，不创建第二套 Simulation 或 submission API。
+# Frequency evidence and feasibility (2026-09-10)
+
+Frequency is auditable evidence, not an unqualified field attribute. Platform metadata is `EXPLICIT_PLATFORM`; description-derived values are `DESCRIPTION_INFERRED`; missing, ambiguous, or conflicting values remain `UNKNOWN`/`CONFLICT` and cannot silently satisfy a relationship gate. A bounded feasibility probe must establish at least one novel, relationship-`ALLOW`, frequency-compatible, template-compatible cross-dataset candidate before full atomic batch assembly.

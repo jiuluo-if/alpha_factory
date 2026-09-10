@@ -223,3 +223,6 @@ Runtime identity is tested: Agent, ProposalExecutionWorkflow and OptimizerWorkfl
 ### Change rules after freeze
 
 Any future change touching a frozen boundary must include: (1) an observable characterization or regression test, (2) an owner/dependency update here, (3) the full local/CI quality gates, and (4) an explicit explanation of the owner change. New orchestration must not accumulate back into `Agent`; structural changes require a concrete feature or bug justification rather than a continuous refactoring objective.
+# Feasibility diagnostics (2026-09-10)
+
+`AlphaFactory.assess_feasibility()` is a bounded, control-plane preflight. It may inspect field semantics, frequency evidence, relationship/template compatibility, historical expression exclusion, and cross-dataset novelty, but it does not create research state, metrics, checkpoints, or Simulation writes. `factory_runner` must run it before full factory assembly when the cross-dataset gate is enabled; its summary is embedded in existing batch audit metadata.

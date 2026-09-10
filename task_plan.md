@@ -263,3 +263,8 @@
 - `state audit`：`ok=true`、无 errors；doctor 报 `LEDGER_MISSING`、`checkpoint_consistency=UNRESOLVED`，属于恢复证据缺口而非可自动修复项。
 
 结论：保持暂停；不执行 `suggest`、`run-proposals`、`factory run`、`skip-submit-unknown` 或任何 POST。恢复需要用户明确授权的人工处理（确认无 URL UNKNOWN 的处置，并补齐/重建合法 ledger 或按既有 recovery contract 处理）。
+# 2026-09-10 当前远端重审与 feasibility 诊断阶段
+
+- `git fetch origin` 后确认 `main`、本地 HEAD、`origin/main` 均为 `e9037d1`，工作树初始干净。
+- `context --compact` 为 SAFE、无未完成 checkpoint、`SUBMIT_UNKNOWN=0`；未启动真实 Simulation。
+- 已实现 frequency evidence 分级、bounded `assess_feasibility()` 和 assembly 前 runner 接入；下一步运行完整质量门。

@@ -253,3 +253,10 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 `2026-09-10 | optimizer/evidence-chain | prior DONE results remain only in round checkpoints while live trajectory is empty | context --compact --json reports trajectory_records=0; round_1 and round_2 checkpoints contain 78 DONE each; optimizable_signal_records() consumes trajectory only | autonomous optimization has no eligible parent evidence despite completed simulations | add a tested checkpoint-to-trajectory finalization/recovery audit or expose the missing handoff as a fail-closed gate diagnostic; do not import checkpoint metrics directly into Alpha Feed | P1`
 
 `2026-09-10 | factory_runner/alpha_factory | cross-dataset gate remains unsatisfied after historical-expression exclusion | current suggestions contain 100 fields across 6 datasets; static generation without exclusions yields 17 cross-dataset multi-field candidates, while excluding complete round_1/2 expressions yields 0 and validate_factory_batch fails | repeated discovery/probe cycles consume time with zero quota and no Simulation | add a bounded cross-dataset compatibility diagnostic and force a new compatible field-pair discovery/template route when the admissible set is empty; preserve expression dedupe and fail-closed gate | P1`
+# 2026-09-10 当前重审与 feasibility probe
+
+- 已确认 `main == origin/main == e9037d1`，工作树初始干净；context 为 SAFE，无未完成 checkpoint 或 `SUBMIT_UNKNOWN`。
+- 新增 TDD 测试通过，Discovery + Factory 定向 78 tests 通过；尚未运行最终全量质量门，尚未 commit/push。
+- 剩余风险：optimization handoff、Alpha Feed 周期 refresh、heartbeat 和机制族 bounded route 尚未完成。
+
+- fresh verification: `661 tests OK`、compileall、Ruff、mypy 9 frontier、coverage branch `77.7%`、`git diff --check` 均通过；测试未启动真实 Simulation。

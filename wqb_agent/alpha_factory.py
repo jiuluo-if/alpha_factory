@@ -13,7 +13,7 @@ import math
 import random
 from dataclasses import dataclass
 
-from .discovery import normalize_coverage
+from .discovery import frequency_evidence, normalize_coverage
 from .diversity import extract_fields
 from .expression import analyze_expression, canonical_expression
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
@@ -747,6 +747,127 @@ class AlphaFactory:
     def __init__(self, neutralization="SUBINDUSTRY", registry=None):
         self.neutralization = str(neutralization or "SUBINDUSTRY").lower()
         self.registry = registry or AlphaTemplateRegistry()
+        self.last_feasibility = None
+
+    def assess_feasibility(self, hypothesis, fields, operator_reference,
+                           *, excluded_expressions=(), probe_id=None,
+                           max_combinations=256):
+        """Run a bounded control-plane feasibility probe before assembly."""
+        profiles = [field for field in (fields or []) if (
+            isinstance(field, dict)
+            and field.get("id") is not None
+            and str(field.get("description") or "").strip()
+            and str(field.get("semantic_status", "UNKNOWN")).upper() != "UNKNOWN"
+        )]
+        frequency_counts = {
+            "explicit": 0, "inferred": 0, "unknown": 0,
+        }
+        for profile in profiles:
+            source = frequency_evidence(profile)["source"]
+            if source == "EXPLICIT_PLATFORM":
+                frequency_counts["explicit"] += 1
+            elif source == "DESCRIPTION_INFERRED":
+                frequency_counts["inferred"] += 1
+            else:
+                frequency_counts["unknown"] += 1
+        templates = list(self.registry.economic_templates())
+        excluded = {canonical_expression(value) for value in excluded_expressions
+                    if isinstance(value, str) and value.strip()}
+        candidate_expressions = set()
+        counts = {
+            "pair_examined": 0, "triple_examined": 0,
+            "relationship_allow": 0, "relationship_review": 0,
+            "relationship_unknown": 0, "relationship_incompatible": 0,
+            "frequency_incompatible": 0, "template_compatible_count": 0,
+            "historical_expression_exclusion_count": 0,
+            "candidates_before_dedupe": 0, "candidates_after_dedupe": 0,
+            "novel_cross_dataset_relationship_count": 0,
+            "proposal_contract_rejection_count": 0,
+        }
+        combinations_seen = 0
+        for template in templates:
+            slots = len(template.required_slots)
+            if slots < 2:
+                continue
+            iterator = itertools.combinations(profiles, slots)
+            for selected in iterator:
+                combinations_seen += 1
+                if combinations_seen > max(1, int(max_combinations)):
+                    break
+                if slots == 2:
+                    counts["pair_examined"] += 1
+                else:
+                    counts["triple_examined"] += 1
+                relation = self._relationship_gate(list(selected), template)
+                admission = relation["admission"]
+                if admission == "ALLOW":
+                    counts["relationship_allow"] += 1
+                elif admission == "REVIEW":
+                    counts["relationship_review"] += 1
+                else:
+                    counts["relationship_incompatible"] += 1
+                frequency_status = relation["frequency_compatibility"]["status"]
+                if frequency_status == "INCOMPATIBLE":
+                    counts["frequency_incompatible"] += 1
+                if admission != "ALLOW":
+                    if admission == "REVIEW":
+                        counts["relationship_unknown"] += 1
+                    continue
+                try:
+                    values = {
+                        slot: str(profile.get("id"))
+                        for slot, profile in zip(template.required_slots, selected)
+                    }
+                    values["g"] = self.neutralization
+                    expression = canonical_expression(template.expression.format(**values))
+                except (KeyError, ValueError):
+                    counts["proposal_contract_rejection_count"] += 1
+                    continue
+                counts["template_compatible_count"] += 1
+                counts["candidates_before_dedupe"] += 1
+                if expression in excluded:
+                    counts["historical_expression_exclusion_count"] += 1
+                    continue
+                if expression in candidate_expressions:
+                    continue
+                candidate_expressions.add(expression)
+                counts["candidates_after_dedupe"] += 1
+                datasets = {str(profile.get("dataset")) for profile in selected}
+                if len(datasets) > 1:
+                    counts["novel_cross_dataset_relationship_count"] += 1
+            if combinations_seen > max(1, int(max_combinations)):
+                break
+        taxonomy = "READY"
+        if not profiles:
+            taxonomy = "FIELD_SEMANTICS_INSUFFICIENT"
+        elif frequency_counts["explicit"] + frequency_counts["inferred"] == 0:
+            taxonomy = "FREQUENCY_EVIDENCE_INSUFFICIENT"
+        elif counts["frequency_incompatible"] and not counts["relationship_allow"]:
+            taxonomy = "FREQUENCY_INCOMPATIBLE"
+        elif counts["relationship_review"] and not counts["relationship_allow"]:
+            taxonomy = "RELATIONSHIP_REVIEW"
+        elif counts["candidates_before_dedupe"] and not counts["candidates_after_dedupe"]:
+            taxonomy = "HISTORICAL_EXPRESSIONS_EXHAUSTED"
+        elif not counts["template_compatible_count"]:
+            taxonomy = "TEMPLATE_INCOMPATIBLE"
+        elif not counts["novel_cross_dataset_relationship_count"]:
+            taxonomy = "CROSS_DATASET_FEASIBILITY_ZERO"
+        result = {
+            "probe_id": str(probe_id or (hypothesis or {}).get("id") or "probe"),
+            "field_total": len(fields or []), "semantic_known": len(profiles),
+            "explicit_frequency_count": frequency_counts["explicit"],
+            "inferred_frequency_count": frequency_counts["inferred"],
+            "unknown_frequency_count": frequency_counts["unknown"],
+            "dataset_count": len({str(p.get("dataset")) for p in profiles if p.get("dataset") is not None}),
+            "failure_taxonomy": taxonomy,
+            "batch_gate": {
+                "feasible": counts["novel_cross_dataset_relationship_count"] > 0,
+                "reason": taxonomy,
+            },
+            **counts,
+        }
+        self.last_feasibility = result
+        return result
 
     @staticmethod
     def requested(hypothesis):

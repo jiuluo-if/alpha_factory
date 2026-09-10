@@ -220,3 +220,7 @@
 补充实测：在当前 workspace 沿 canonical `python main.py run-proposals` 执行恢复，输出只包含 `Round 11 checkpoint resume`、保留 `SUBMIT_UNKNOWN` 不重发和 `RESULTS CACHE`；未产生 POST。随后 checkpoint/session 的状态与修改时间均未变化，证明现有恢复入口会安全停留在该边界，而不会误派发 32 个 PENDING。
 
 补充诊断：只读 `python main.py smoke` 成功返回 `datasets=14`、`fields=10`，排除当前凭据/网络整体不可用。随后单独启动的 `python main.py alpha sync-feed` 在 30 秒观察窗内无输出，PID `39672` 仍存活，`.alpha_feed_cache/weekly.json` 时间戳未更新；该进程仍需继续观察，当前不能据此判定失败或重复启动。它暴露了 Alpha Feed 分页等待期间缺少进度可见性的工程瓶颈，但与 round 11 未知提交没有直接因果关系。
+# 2026-09-10 当前重审与实现证据
+
+- 当前最新 suggestion bundle 为 100 fields / 6 datasets，频率分布 `UNKNOWN=81、daily=14、annual=2、intraday=2、quarterly=1`；原 profile 未保存证据来源。
+- 原 runner 在完整 assembly 后才判断 cross-dataset gate；本阶段新增 frequency evidence 与 bounded feasibility probe，失败可区分 taxonomy 并在 assembly 前阻断。

@@ -133,7 +133,7 @@ def validate_factory_batch(proposals, target=FACTORY_BATCH_SIZE,
     return not errors, errors
 
 
-def factory_batch_stats(proposals):
+def factory_batch_stats(proposals, feasibility=None):
     """Return auditable composition counts without retaining result payloads."""
     stats = {
         "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
@@ -146,6 +146,8 @@ def factory_batch_stats(proposals):
         "dual_or_multi_field_count": 0,
         "cross_dataset_pair_count": 0,
     }
+    if isinstance(feasibility, dict):
+        stats["feasibility_probe"] = dict(feasibility)
     for proposal in proposals or []:
         if not isinstance(proposal, dict):
             continue

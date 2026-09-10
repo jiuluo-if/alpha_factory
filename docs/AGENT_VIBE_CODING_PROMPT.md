@@ -79,3 +79,6 @@ python -m ruff check .
 ```
 
 最终输出必须包含：实际证据、根因、改动文件、测试结果、仍在运行或未验证的状态，以及下一位 Agent 可直接执行的最小动作。禁止把本地缓存命中、模拟提交成功或 Alpha 颜色推断写成平台事实。
+# Current factory control-plane rule (2026-09-10)
+
+Before assembling an atomic factory batch, run the bounded feasibility probe and preserve its failure taxonomy. Do not treat inferred frequency as platform fact, and do not retry a historical-deduped bundle merely by changing the seed.

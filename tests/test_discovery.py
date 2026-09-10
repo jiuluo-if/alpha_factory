@@ -15,7 +15,12 @@ from wqb_agent.agent import (
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
 from wqb_agent.candidate import CandidateBuilder
-from wqb_agent.discovery import FieldDiscovery, normalize_coverage, normalize_frequency
+from wqb_agent.discovery import (
+    FieldDiscovery,
+    frequency_evidence,
+    normalize_coverage,
+    normalize_frequency,
+)
 from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
@@ -747,6 +752,28 @@ class TestFieldDiscovery(TmpStateMixin, unittest.TestCase):
             "quarterly",
         )
         self.assertIsNone(normalize_frequency({"description": "model score"}))
+
+    def test_frequency_evidence_preserves_explicit_inferred_and_unknown_sources(self):
+        explicit = frequency_evidence({
+            "frequency": "daily", "description": "daily estimate",
+        })
+        inferred = frequency_evidence({"description": "quarterly earnings estimate"})
+        unknown = frequency_evidence({"description": "model score"})
+
+        self.assertEqual(explicit["source"], "EXPLICIT_PLATFORM")
+        self.assertEqual(explicit["frequency"], "daily")
+        self.assertEqual(inferred["source"], "DESCRIPTION_INFERRED")
+        self.assertEqual(inferred["frequency"], "quarterly")
+        self.assertEqual(unknown["source"], "UNKNOWN")
+        self.assertIsNone(unknown["frequency"])
+
+    def test_frequency_evidence_conflict_is_fail_closed(self):
+        field = {"frequency": "daily", "description": "quarterly earnings estimate"}
+        evidence = frequency_evidence(field)
+
+        self.assertEqual(evidence["status"], "CONFLICT")
+        self.assertIsNone(evidence["frequency"])
+        self.assertIsNone(normalize_frequency(field))
         profile = self.discovery._profile_from_field(
             "pv1", {"id": "close", "description": "daily close price"}, 1.0, "price"
         )

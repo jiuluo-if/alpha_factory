@@ -539,6 +539,31 @@ class AIFactoryRunner:
                     optimized = self.agent.generate_optimized_proposals(
                         signal_records, max_candidates=min(4, batch_size - 1)
                     )
+                feasibility = None
+                if hasattr(self.factory, "assess_feasibility"):
+                    feasibility = self.factory.assess_feasibility(
+                        hypothesis,
+                        bundle.get("fields") or [],
+                        bundle.get("operator_reference") or {},
+                        excluded_expressions=self._known_expressions(),
+                        probe_id=f"{hypothesis['id']}:round:{round_no}:probe:{probe_offset}",
+                    )
+                    if (
+                        getattr(self.agent, "min_cross_dataset_pairs", 0) > 0
+                        and not feasibility.get("batch_gate", {}).get("feasible", False)
+                    ):
+                        session["probe_offset"] = probe_offset + 1
+                        session["last_action"] = "WAIT_FACTORY_FEASIBILITY"
+                        session["last_result"] = {
+                            "round_no": round_no,
+                            "proposals": 0,
+                            "status": "FACTORY_FEASIBILITY_BLOCKED",
+                            "failure_taxonomy": feasibility.get("failure_taxonomy"),
+                            "feasibility_probe": feasibility,
+                        }
+                        self._save_session(session)
+                        self._bounded_sleep(self._retry_delay(idle, session), session["deadline"])
+                        continue
                 proposals = self.factory.generate_factory_batch(
                     hypothesis,
                     bundle.get("fields") or [],
@@ -595,7 +620,7 @@ class AIFactoryRunner:
                 },
                 "dataset_selection": bundle.get("dataset_selection") or {},
                 "catalog_provenance": bundle.get("catalog_provenance") or bundle.get("field_source"),
-                "factory_batch_stats": factory_batch_stats(proposals),
+                "factory_batch_stats": factory_batch_stats(proposals, feasibility),
             }
             # One canonical proposals inbox is overwritten only when its
             # logical content changes.  It is not a per-round artifact.

@@ -69,15 +69,61 @@ CATEGORY_KEYWORDS = {
 }
 
 
-def normalize_frequency(field):
-    """Return frequency only when the field metadata states it explicitly."""
+def frequency_evidence(field):
+    """Return auditable frequency evidence without hiding inference."""
     if not isinstance(field, dict):
-        return None
+        return {
+            "frequency": None, "source": "UNKNOWN", "status": "UNKNOWN",
+            "matched_evidence": [], "confidence": "NONE",
+        }
+    explicit = []
     for key in ("frequency", "dataFrequency", "updateFrequency"):
         value = field.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            explicit.append((key, value.strip()))
+    if explicit:
+        normalized = {_frequency_bucket(value) for _, value in explicit}
+        if len(normalized) != 1 or "unknown" in normalized:
+            return {
+                "frequency": None, "source": "EXPLICIT_PLATFORM",
+                "status": "CONFLICT", "matched_evidence": explicit,
+                "confidence": "NONE",
+            }
+        description = str(field.get("description") or "").lower()
+        inferred = _description_frequency_matches(description)
+        if inferred and set(inferred) != normalized:
+            return {
+                "frequency": None, "source": "CONFLICTING_PLATFORM_DESCRIPTION",
+                "status": "CONFLICT", "matched_evidence": explicit + inferred,
+                "confidence": "NONE",
+            }
+        return {
+            "frequency": next(iter(normalized)), "source": "EXPLICIT_PLATFORM",
+            "status": "KNOWN", "matched_evidence": explicit,
+            "confidence": "HIGH",
+        }
     description = str(field.get("description") or "").lower()
+    inferred = _description_frequency_matches(description)
+    if len(inferred) == 1:
+        return {
+            "frequency": inferred[0], "source": "DESCRIPTION_INFERRED",
+            "status": "INFERRED", "matched_evidence": inferred,
+            "confidence": "MEDIUM",
+        }
+    if len(inferred) > 1:
+        return {
+            "frequency": None, "source": "DESCRIPTION_INFERRED",
+            "status": "AMBIGUOUS", "matched_evidence": inferred,
+            "confidence": "NONE",
+        }
+    return {
+        "frequency": None, "source": "UNKNOWN", "status": "UNKNOWN",
+        "matched_evidence": [], "confidence": "NONE",
+    }
+
+
+def _frequency_bucket(value):
+    text = str(value or "").lower()
     markers = (
         ("intraday", "intraday"),
         ("minute", "intraday"),
@@ -95,9 +141,32 @@ def normalize_frequency(field):
         ("year", "annual"),
     )
     for marker, normalized in markers:
-        if re.search(rf"\b{re.escape(marker)}\b", description):
+        if re.search(rf"\b{re.escape(marker)}\b", text):
             return normalized
-    return None
+    return "unknown"
+
+
+def _description_frequency_matches(description):
+    matches = []
+    markers = (
+        ("intraday", "intraday"), ("minute", "intraday"),
+        ("hour", "intraday"), ("daily", "daily"), ("day", "daily"),
+        ("weekly", "weekly"), ("week", "weekly"),
+        ("monthly", "monthly"), ("month", "monthly"),
+        ("quarterly", "quarterly"), ("quarter", "quarterly"),
+        ("annual", "annual"), ("yearly", "annual"), ("year", "annual"),
+    )
+    for marker, normalized in markers:
+        if re.search(rf"\b{re.escape(marker)}\b", description):
+            if normalized not in matches:
+                matches.append(normalized)
+    return matches
+
+
+def normalize_frequency(field):
+    """Return a frequency only when evidence is known and non-conflicting."""
+    evidence = frequency_evidence(field)
+    return evidence["frequency"] if evidence["status"] in {"KNOWN", "INFERRED"} else None
 
 
 def normalize_coverage(field):
@@ -1158,6 +1227,7 @@ class FieldDiscovery:
             "coverage": normalize_coverage(field),
             "alpha_count": alpha_count,
             "frequency": normalize_frequency(field),
+            "frequency_evidence": frequency_evidence(field),
             "semantic_status": "KNOWN" if field.get("description") else "UNKNOWN",
             "category": category or "preferred",
             "dataset": str(dataset_id),

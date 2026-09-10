@@ -41,3 +41,6 @@
 - 需要归档的历史材料移至 `docs/archive/`，按对象类别分类；不要在 `.wqb_state` 内复制一份“整理版”状态。
 - 非 canonical 的状态备份可移入已有 `quarantine/<category>/` 子目录；保留原文件名和内容，并在本文件或审计记录中说明来源。
 - 轮次归档使用 `python scripts/archive_completed_rounds.py` 先 dry-run，再经确认加 `--apply`；默认保留最近 10 个摘要。
+# Feasibility probe scope (2026-09-10)
+
+Feasibility diagnostics are control-plane audit metadata only. They contain counts, evidence provenance, and failure taxonomy; they do not expand checkpoint, trajectory, ledger, Alpha Feed, or metrics state.

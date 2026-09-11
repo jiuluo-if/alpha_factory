@@ -158,6 +158,9 @@ class ResearchYieldFunnel:
     optimizer_rejected_parents: int | None = None
     optimizer_eligible_available: bool = False
     optimizer_rejection_reasons: tuple[tuple[str, int], ...] = ()
+    agent_reviewed_parents: int | None = None
+    agent_child_decisions: int | None = None
+    agent_review_stage_available: bool = False
     children_generated: int = 0
     children_done: int = 0
     incremental_pass: int = 0
@@ -168,7 +171,7 @@ class ResearchYieldFunnel:
     novelty_gain: bool = False
 
     def conversions(self):
-        """Five conversions; denominator rules are explicit, never 0.0."""
+        """Stage conversions; denominator rules are explicit, never 0.0."""
         eligible = self.optimizer_eligible_parents
         if not self.optimizer_eligible_available:
             done_to_parent = {"value": None, "reason": "DENOMINATOR_UNAVAILABLE"}
@@ -176,6 +179,17 @@ class ResearchYieldFunnel:
         else:
             done_to_parent = conversion(eligible, self.simulations_done)
             parent_to_child = conversion(self.children_generated, eligible)
+        if not self.agent_review_stage_available:
+            # ``DONE -> evidence parent`` and ``evidence parent -> Agent
+            # decision`` are separate stages; an unavailable Agent stage must
+            # never be read as a 0% conversion.
+            evidence_to_review = {"value": None, "reason": "DENOMINATOR_UNAVAILABLE"}
+            review_to_child = {"value": None, "reason": "DENOMINATOR_UNAVAILABLE"}
+        else:
+            evidence_to_review = conversion(self.agent_reviewed_parents, eligible)
+            review_to_child = conversion(
+                self.agent_child_decisions, self.agent_reviewed_parents
+            )
         if self.children_done <= 0:
             child_to_incremental = {"value": None, "reason": "NO_DENOMINATOR"}
         elif not self.incremental_available:
@@ -186,6 +200,8 @@ class ResearchYieldFunnel:
             "proposal_to_simulation": conversion(self.simulations_dispatched, self.assembled_proposals),
             "simulation_to_done": conversion(self.simulations_done, self.simulations_dispatched),
             "done_to_optimizer_parent": done_to_parent,
+            "evidence_parent_to_agent_review": evidence_to_review,
+            "agent_review_to_child_decision": review_to_child,
             "parent_to_child": parent_to_child,
             "child_to_incremental": child_to_incremental,
         }
@@ -210,6 +226,9 @@ class ResearchYieldFunnel:
             "optimizer_rejected_parents": self.optimizer_rejected_parents,
             "optimizer_eligible_available": self.optimizer_eligible_available,
             "optimizer_rejection_reasons": dict(self.optimizer_rejection_reasons),
+            "agent_reviewed_parents": self.agent_reviewed_parents,
+            "agent_child_decisions": self.agent_child_decisions,
+            "agent_review_stage_available": self.agent_review_stage_available,
             "children_generated": self.children_generated,
             "children_done": self.children_done,
             "incremental_pass": self.incremental_pass,
@@ -373,6 +392,8 @@ def _build_funnel(family, records, *, eligibility):
     eligible_count = None
     rejected_count = None
     rejection_reasons = Counter()
+    reviewed_count = child_decision_count = 0
+    review_available = False
     eligible_available = eligibility is not None
     if eligible_available:
         eligible_count = 0
@@ -439,6 +460,14 @@ def _build_funnel(family, records, *, eligibility):
                 if isinstance(decision, Mapping):
                     ok = bool(decision.get("eligible"))
                     reasons = decision.get("reasons") or ()
+                    if "reviewed" in decision or "decision" in decision:
+                        # Optional Agent-decision stage, kept separate from the
+                        # Python evidence-eligibility gate above.
+                        review_available = True
+                        if decision.get("reviewed"):
+                            reviewed_count += 1
+                        if _upper(decision.get("decision")) == "CHILD":
+                            child_decision_count += 1
                 else:
                     ok = bool(decision)
                     reasons = ()
@@ -467,6 +496,9 @@ def _build_funnel(family, records, *, eligibility):
         optimizer_rejected_parents=rejected_count,
         optimizer_eligible_available=eligible_available,
         optimizer_rejection_reasons=tuple(sorted(rejection_reasons.items())),
+        agent_reviewed_parents=reviewed_count if review_available else None,
+        agent_child_decisions=child_decision_count if review_available else None,
+        agent_review_stage_available=review_available,
         children_generated=children,
         children_done=children_done,
         incremental_pass=inc_pass,
@@ -692,6 +724,38 @@ def incremental_stop_reason(funnel):
     if funnel.incremental_pass > 0:
         return None
     return NO_INCREMENTAL_CHILD_EVIDENCE
+
+
+def child_generation_bound(funnel, *, max_generations=1):
+    """Bound multi-generation chaining without verified incremental value.
+
+    A legal parent + legal Agent CHILD + DONE child is one bounded generation.
+    ``incremental_stop_reason`` answers "is the settled evidence a stop
+    reason?"; this answers the different question "may another generation be
+    derived yet?".  Without a verified incremental PASS the answer is no: the
+    chain becomes ``BLOCKED`` (nothing settled) or ``INCONCLUSIVE`` (settled
+    without PASS) with ``NO_INCREMENTAL_CHILD_EVIDENCE`` instead of silently
+    deriving C2 -> C3 -> C4.
+    """
+    generations = int(funnel.children_done or 0)
+    bound = max(1, int(max_generations))
+    result = {
+        "generations": generations,
+        "max_generations": bound,
+        "state": None,
+        "stop_reason": None,
+        "allowed": True,
+    }
+    if generations < 1 or generations < bound:
+        return result
+    if funnel.incremental_pass > 0:
+        return result
+    result.update({
+        "allowed": False,
+        "state": BLOCKED if not funnel.incremental_available else INCONCLUSIVE,
+        "stop_reason": NO_INCREMENTAL_CHILD_EVIDENCE,
+    })
+    return result
 
 
 def session_control_metadata(

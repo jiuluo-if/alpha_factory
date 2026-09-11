@@ -413,5 +413,59 @@ class TestArchitectureBoundaries(unittest.TestCase):
         self.assertNotIn("owner_lock", source)
 
 
+class TestOptimizationSettlementBoundaries(unittest.TestCase):
+    """Phase III boundaries: settlement stays on the one Trajectory owner."""
+
+    def test_settlement_domain_does_not_import_transport(self):
+        imports = _direct_imports("state")
+        for forbidden in (
+            ".client", "wqb_agent.client", ".simulator", "wqb_agent.simulator",
+            "requests", ".agent", "wqb_agent.agent",
+        ):
+            self.assertNotIn(forbidden, imports)
+
+    def test_decision_contract_has_no_transport_or_state_dependency(self):
+        imports = _direct_imports("optimization_decision")
+        for forbidden in (
+            ".client", "wqb_agent.client", ".simulator", "wqb_agent.simulator",
+            ".state", "wqb_agent.state", ".agent", "wqb_agent.agent",
+            ".proposal_execution", "wqb_agent.proposal_execution",
+            ".alpha_feed_workflow", "wqb_agent.alpha_feed_workflow",
+            ".alpha_colors", "wqb_agent.alpha_colors", "requests", "subprocess",
+        ):
+            self.assertNotIn(forbidden, imports, forbidden)
+        source = Path(PACKAGE_ROOT, "optimization_decision.py").read_text(
+            encoding="utf-8"
+        )
+        for forbidden in (
+            "submit_simulation(", "patch_alpha(", "CheckpointStore",
+            "Trajectory(", "alpha_feed", "alpha_colors", "requests.",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_settlement_revision_adds_no_second_evidence_store(self):
+        state = Path(PACKAGE_ROOT, "state.py").read_text(encoding="utf-8")
+        for forbidden in (
+            "final_evidence.json", "settled_experiments.json",
+            "optimizer_history.json", "research_result_store.json",
+            "final_outcome_cache", "CheckpointStore", "submit_simulation(",
+            "requests.", "alpha_feed", "alpha_colors",
+        ):
+            self.assertNotIn(forbidden, state)
+        # The only new durable vocabulary is the append-only revision marker.
+        self.assertIn("RESEARCH_SETTLED", state)
+
+    def test_optimizer_workflow_creates_no_second_state_owner(self):
+        workflow = Path(PACKAGE_ROOT, "optimizer_workflow.py").read_text(
+            encoding="utf-8"
+        )
+        for forbidden in (
+            "Trajectory(", "CheckpointStore", "submit_simulation(",
+            "run_proposals(", "patch_alpha(", "alpha_feed_workflow.refresh(",
+            "alpha_colors", "requests.",
+        ):
+            self.assertNotIn(forbidden, workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

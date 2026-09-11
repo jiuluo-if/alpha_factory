@@ -27,6 +27,7 @@ from wqb_agent.research_yield import (
     PROMISING,
     PROVISIONAL_EVIDENCE,
     build_research_yield,
+    child_generation_bound,
     continuation_decision,
     conversion,
     evidence_quality,
@@ -488,6 +489,51 @@ class TestIncrementalStopReason(unittest.TestCase):
         self.assertEqual(
             incremental_stop_reason(funnel), NO_INCREMENTAL_CHILD_EVIDENCE
         )
+
+
+class TestChildGenerationBound(unittest.TestCase):
+    """One bounded generation when incremental value cannot be verified."""
+
+    def _funnel(self, rows):
+        return build_research_yield(rows)["m:a:b"]
+
+    def test_no_completed_child_does_not_bound_the_chain(self):
+        funnel = self._funnel([evidence("p", status="DONE")])
+        bound = child_generation_bound(funnel)
+        self.assertTrue(bound["allowed"])
+        self.assertIsNone(bound["stop_reason"])
+        self.assertEqual(bound["max_generations"], 1)
+
+    def test_verified_incremental_pass_keeps_the_chain_open(self):
+        child = evidence("c", child=True, incremental="PASS", lineage="L1", status="DONE")
+        funnel = self._funnel([evidence("p", status="DONE"), child])
+        bound = child_generation_bound(funnel)
+        self.assertTrue(bound["allowed"])
+        self.assertIsNone(bound["stop_reason"])
+
+    def test_unavailable_incremental_evidence_blocks_the_next_generation(self):
+        child = evidence("c", child=True, lineage="L1", status="DONE")
+        funnel = self._funnel([evidence("p", status="DONE"), child])
+        bound = child_generation_bound(funnel)
+        self.assertFalse(bound["allowed"])
+        self.assertEqual(bound["state"], BLOCKED)
+        self.assertEqual(bound["stop_reason"], NO_INCREMENTAL_CHILD_EVIDENCE)
+        self.assertEqual(bound["generations"], 1)
+
+    def test_settled_children_without_pass_close_the_chain(self):
+        child = evidence("c", child=True, incremental="FAIL", lineage="L1", status="DONE")
+        funnel = self._funnel([evidence("p", status="DONE"), child])
+        bound = child_generation_bound(funnel)
+        self.assertFalse(bound["allowed"])
+        self.assertEqual(bound["state"], INCONCLUSIVE)
+        self.assertEqual(bound["stop_reason"], NO_INCREMENTAL_CHILD_EVIDENCE)
+
+    def test_explicit_bound_keeps_the_first_generation_available(self):
+        child = evidence("c", child=True, lineage="L1", status="DONE")
+        funnel = self._funnel([evidence("p", status="DONE"), child])
+        bound = child_generation_bound(funnel, max_generations=2)
+        self.assertTrue(bound["allowed"])
+        self.assertEqual(bound["max_generations"], 2)
 
 
 class TestControlMetadata(unittest.TestCase):

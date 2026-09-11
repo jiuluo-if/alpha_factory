@@ -59,6 +59,27 @@ class TestIncrementalValue(unittest.TestCase):
         self.assertEqual(result["availability"], "AVAILABLE")
         self.assertEqual(result["source"], "LIVE_VERIFIED_PNL")
 
+    def test_incremental_capability_audit_client_has_no_behavior_series(self):
+        """Phase III incremental audit: only aggregate/correlation endpoints exist.
+
+        The client exposes ``GET /alphas/{id}``, ``/aggregates`` and
+        ``/correlations/{kind}``; it has no PnL / daily-return / behavior-series
+        reader, so incremental value stays explicitly UNAVAILABLE instead of
+        being faked from aggregate metrics or Sharpe deltas.
+        """
+        package_root = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "wqb_agent"
+        )
+        with open(os.path.join(package_root, "client.py"), encoding="utf-8") as handle:
+            source = handle.read()
+        for endpoint in ("/alphas/{alpha_id}", "/aggregates", "/correlations/"):
+            self.assertIn(endpoint, source)
+        for forbidden in (
+            "/pnl", "get_pnl", "daily_returns", "/records", "behavior_series",
+            "pnl_series",
+        ):
+            self.assertNotIn(forbidden, source)
+
     def test_pool_snapshot_as_of_excludes_unknown_and_future_members(self):
         snapshot = build_pool_snapshot([
             {"alpha_id": "known", "status": "DONE", "checks_passed": True,

@@ -30,6 +30,7 @@ from typing import Any
 from .artifacts import atomic_write_json_if_changed
 from .config import normalize_config
 from .expression import analyze_expression
+from .optimization_decision import OptimizationDecision
 from .proposal_contract import _operator_reference
 from .state import Trajectory
 
@@ -339,8 +340,37 @@ def reconcile(progress_url, *, client=None, timeout=60):
     return client.get_progress_snapshot(progress_url, timeout=timeout)
 
 
+def inspect_optimizer_parents(*, agent=None, client=None, config=None,
+                              state_dir=None, limit=8):
+    """Return a bounded, read-only summary of evidence-eligible parents.
+
+    Only the limited summary is exposed so an Agent prompt never receives the
+    whole trajectory or the full cloud feed.  Mechanism-state hints derived
+    elsewhere stay UNKNOWN until the Agent supplies them.
+    """
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    return runtime.inspect_optimizer_parents(limit=limit)
+
+
+def propose_optimization(decision, *, agent=None, client=None, config=None,
+                         state_dir=None, max_candidates=4):
+    """Validate one Agent-authored ``OptimizationDecision`` and emit proposals.
+
+    This facade never bypasses ``OptimizerWorkflow``: the workflow checks the
+    decision against canonical evidence and the deterministic gates, then
+    reuses the single CHILD generation path.  Only proposals are produced; no
+    Simulation, checkpoint write or remote call happens here.  A VALIDATE,
+    STOP or REROUTE decision returns no child proposal.
+    """
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    if isinstance(decision, Mapping):
+        decision = OptimizationDecision.from_mapping(decision)
+    return runtime.propose_optimization([decision], max_candidates=max_candidates)
+
+
 __all__ = [
     "ExperimentSpec", "inspect_state", "discover_fields",
     "get_operator_reference", "run_experiment", "get_experiment",
     "compare_experiments", "search_history", "reconcile",
+    "inspect_optimizer_parents", "propose_optimization",
 ]

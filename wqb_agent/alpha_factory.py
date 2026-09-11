@@ -167,23 +167,30 @@ ECONOMIC_TEMPLATES = (
     ),
     AlphaTemplate(
         "robust_cross_section", "robust_cross_section",
-        "normalize(winsorize(rank({p}), 4), true, 0.0)",
-        stage_path="L0:raw -> L1:rank -> L2:winsorize -> L3:normalize",
-        rationale="先降低极端值影响，再去除横截面整体水平，检验稳健相对信号。",
+        "rank(winsorize(ts_delta({p}, 5)))",
+        stage_path="L0:raw -> L1:change -> L2:winsorize -> L3:rank",
+        rationale="对 5 日变化先截尾抑制离群冲击，再检验稳健横截面相对变化信号。"
+                  "2026-09-11 平台实测：三参 normalize 与双参 winsorize(x, 4) 均被拒"
+                  "（exactly 1 input），winsorize 仅用单参形式。",
         economic=True,
     ),
     AlphaTemplate(
         "distributional_change", "distributional_change",
-        "quantile(rank(ts_delta({p}, 5)), gaussian, 1.0)",
-        stage_path="L0:raw -> L1:change -> L2:rank -> L3:quantile",
-        rationale="将变化信号映射到平滑分布，检验尾部排序之外的横截面信息。",
+        "rank(ts_zscore(ts_delta({p}, 5), 60))",
+        stage_path="L0:raw -> L1:change -> L2:own-history zscore -> L3:rank",
+        rationale="当日变化相对自身 60 日变化历史的异常程度（surprise 机制），"
+                  "检验持续性变化之外的横截面信息。2026-09-11 平台实测："
+                  "裸位置参数 gaussian 驱动被拒（unknown variable），改用"
+                  "已实证算子的等价 surprise 机制。",
         economic=True,
     ),
     AlphaTemplate(
         "turnover_controlled_change", "turnover_control",
-        "hump(rank(ts_delta({p}, 5)), 0.01)",
+        "hump(rank(ts_delta({p}, 5)))",
         stage_path="L0:raw -> L1:change -> L2:rank -> L3:hump",
-        rationale="对变化信号限制日间跳动，检验降低换手后的净经济价值。",
+        rationale="对变化信号限制日间跳动（默认 hump 宽度），检验降低换手后的净经济价值。"
+                  "2026-09-11 round_4 平台实测：双参 hump(x, 0.01) 被拒"
+                  "（exactly 1 input），hump 仅用单参形式。",
         economic=True,
     ),
     AlphaTemplate(
@@ -209,9 +216,14 @@ ECONOMIC_TEMPLATES = (
     ),
     AlphaTemplate(
         "group_filled_rank", "group_data_repair",
-        "group_rank(rank(group_backfill({p}, {g}, 20, 4)), {g})",
-        stage_path="L0:raw -> L1:group backfill -> L2:group rank",
-        rationale="用组内历史信息处理缺失，再检验组内相对位置，区分覆盖率与信号。",
+        "rank(subtract(ts_backfill({p}, 20), group_mean(ts_backfill({p}, 20), 1, {g})))",
+        stage_path="L0:raw -> L1:ts backfill -> L2:group mean -> L3:deviation rank",
+        rationale="受控窗口修复缺失后，检验个体相对组均值的偏差位置，区分覆盖率与信号。"
+                  "2026-09-11 平台实测：group_rank(group_backfill(...)) 参数个数被拒"
+                  "（exactly 2 inputs），改用已实证算子 ts_backfill+group_mean+subtract；"
+                  "同日 round_9 实测 2 参 group_mean 被拒（exactly 3 inputs），"
+                  "与 group_scaled_mean 的 3 参形式 group_mean(X, 1, G) 对齐"
+                  "（r1-r7 共 38 次 DONE，拒绝记录见 OPERATORS_CHEATSHEET）。",
         economic=True,
     ),
     AlphaTemplate(
@@ -332,9 +344,11 @@ ECONOMIC_TEMPLATES = (
     ),
     AlphaTemplate(
         "distribution_regime", "distribution_regime",
-        "rank(ts_quantile(ts_zscore({p}, 20), 60, gaussian))",
-        stage_path="L0:raw -> L1:ts zscore -> L2:ts quantile -> L3:rank",
-        rationale="将当前相对水平放回历史分布，识别状态切换而非绝对水平。",
+        "rank(ts_rank(ts_zscore({p}, 20), 60))",
+        stage_path="L0:raw -> L1:ts zscore -> L2:own-history ts rank -> L3:rank",
+        rationale="把 20 日平滑相对水平放回自身 60 日历史分位（状态分位数），"
+                  "识别状态切换而非绝对水平。2026-09-11 平台实测：裸位置参数 "
+                  "gaussian 驱动被拒（unknown variable），改用已实证的 ts_rank。",
         economic=True,
     ),
     AlphaTemplate(
@@ -346,9 +360,12 @@ ECONOMIC_TEMPLATES = (
     ),
     AlphaTemplate(
         "trend_residual", "trend_residual",
-        "rank(ts_regression(ts_delta({p}, 5), ts_step(1), 20, 0))",
+        "rank(ts_regression(ts_delta({p}, 5), ts_step(1), 20))",
         stage_path="L0:raw -> L1:delta -> L2:regression -> L3:rank",
-        rationale="剥离时间趋势后的变化残差，检验非趋势性信息冲击。",
+        rationale="剥离时间趋势后的变化残差，检验非趋势性信息冲击。"
+                  "2026-09-11 round_4 平台实测：lookback=0 被拒"
+                  "（invalid value \"0\" for attribute \"lookback\"），"
+                  "改用省略 lookback 的默认形式。",
         economic=True,
     ),
     AlphaTemplate(

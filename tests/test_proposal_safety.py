@@ -614,6 +614,60 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self._tmp, "stale_skip_log.jsonl")))
         self.assertEqual(client.sim_calls, [])
 
+    def test_skip_submit_unknown_rejects_known_url_unknown_and_pending(self):
+        """A URL-bearing UNKNOWN is read-only recoverable and a PENDING item was
+        never submitted; neither may be user-authorized skipped."""
+        agent, client = make_agent(self._tmp, rounds=1)
+        exp_url = Experiment(1799, "h-1799", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
+        exp_url.status = "UNKNOWN"
+        exp_url.progress_url = "https://api.worldquantbrain.com/simulations/remote-1799"
+        exp_url.proposal_id = "p-known-url-unknown"
+        exp_pending = Experiment(1799, "h-1799", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
+        exp_pending.id = "other"
+        exp_pending.status = "PENDING"
+        exp_pending.proposal_id = "p-pending"
+        agent._write_proposal_checkpoint(1799, {"id": "h-1799"}, [exp_url, exp_pending], complete=False)
+        with self.assertRaises(ValueError):
+            agent.skip_submit_unknown_authorized(1799, "p-known-url-unknown")
+        with self.assertRaises(ValueError):
+            agent.skip_submit_unknown_authorized(1799, "p-pending")
+        self.assertEqual(client.sim_calls, [])
+
+    def test_skip_submit_unknown_authorized_accepts_url_less_unknown(self):
+        """A progress-URL-less UNKNOWN (ambiguous POST, no remote identity) is the
+        same recovery-evidence gap as SUBMIT_UNKNOWN; user-authorized skip is the
+        only terminal disposition, with its own audit trail."""
+        agent, client = make_agent(self._tmp, rounds=1)
+        exp = Experiment(1800, "h-1800", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
+        exp.status = "UNKNOWN"
+        exp.progress_url = None
+        exp.proposal_id = "p-no-url-unknown"
+        agent._write_proposal_checkpoint(1800, {"id": "h-1800"}, [exp], complete=False)
+        skipped = agent.skip_submit_unknown_authorized(1800, "p-no-url-unknown")
+        self.assertEqual(skipped.status, "SKIPPED_UNKNOWN")
+        self.assertEqual(skipped.skip_record["reason"], "user_authorized_skip_unknown_no_progress_url")
+        self.assertEqual(skipped.error, "SKIPPED_AFTER_USER_AUTHORIZED_UNKNOWN_NO_URL")
+        with open(os.path.join(self._tmp, "round_1800.checkpoint.json"), encoding="utf-8") as f:
+            self.assertTrue(json.load(f)["complete"])
+        self.assertTrue(os.path.exists(os.path.join(self._tmp, "stale_skip_log.jsonl")))
+        self.assertEqual(client.sim_calls, [])
+
+    def test_skip_submit_unknown_authorized_still_accepts_submit_unknown(self):
+        """SUBMIT_UNKNOWN keeps its legacy audit semantics unchanged."""
+        agent, client = make_agent(self._tmp, rounds=1)
+        exp = Experiment(1801, "h-1801", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
+        exp.status = "SUBMIT_UNKNOWN"
+        exp.proposal_id = "p-submit-unknown"
+        agent._write_proposal_checkpoint(1801, {"id": "h-1801"}, [exp], complete=False)
+        skipped = agent.skip_submit_unknown_authorized(1801, "p-submit-unknown")
+        self.assertEqual(skipped.status, "SKIPPED_UNKNOWN")
+        self.assertEqual(
+            skipped.skip_record["reason"],
+            "user_authorized_skip_after_repeated_read_only_reconciliation",
+        )
+        self.assertEqual(skipped.error, "SKIPPED_AFTER_USER_AUTHORIZED_SUBMIT_UNKNOWN")
+        self.assertEqual(client.sim_calls, [])
+
     def test_reconcile_collect_includes_known_url_from_unfinished_checkpoint(self):
         exp = Experiment(1798, "h-1798", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
         exp.status = "UNKNOWN"

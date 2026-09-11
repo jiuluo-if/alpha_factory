@@ -1864,5 +1864,152 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
         agent.run_proposals.assert_not_called()
 
 
+class TestTemplateLiveOperatorEvidence(unittest.TestCase):
+    """2026-09-11 平台实测回归：模板不得使用 live 平台确定性拒绝的算子用法。
+
+    证据（USA/EQUITY/TOP3000/Delay1，rounds 1-4 真实 Simulation）：
+    - 三参 `normalize(x, true, 0.0)` → `Invalid number of inputs : 2,
+      should be exactly 1 input(s)`；
+    - 裸位置参数 `gaussian` 驱动（`quantile`/`ts_quantile`）→
+      `Attempted to use unknown variable "gaussian"`；
+    - `group_rank(rank(group_backfill(...)))` 嵌套 → `Invalid number of
+      inputs : 3, should be exactly 2 input(s)`；
+    - 双参 `winsorize(x, 4)` / `hump(x, 0.01)` → `Invalid number of inputs
+      : 2, should be exactly 1 input(s)`（round_4 实测：此 region 下
+      normalize/winsorize/hump 均仅 1 输入）；
+    - `ts_regression(..., 20, 0)` 的 lookback=0 → `Got invalid value "0"
+      for attribute "lookback"`（round_4 实测，改省略该参数）。
+    rounds 1-3 的 63 项 FAILED 与 round 4 的 15 项 FAILED 全部归因于
+    上述用法。修复后的 7 个模板必须只使用本平台已实证算子。
+    """
+
+    # 156 条 DONE 表达式 + 项目历史 trajectory 使用统计中已被平台接受的算子。
+    # winsorize/hump：2026-09-11 平台实测双参形式被拒（exactly 1 input），
+    # 单参 winsorize(x)/hump(x) 为平台明确要求的合法形式。
+    # ts_regression/ts_step：平台按名接受（round_4 的拒绝发生在属性值层：
+    # lookback=0 非法），省略 lookback 的 3 参形式为当前模板用法。
+    LIVE_ACCEPTED_OPERATORS = {
+        "rank", "winsorize", "hump", "ts_zscore", "ts_delta", "ts_rank",
+        "subtract", "ts_backfill", "group_mean", "ts_regression", "ts_step",
+    }
+    REJECTED_SNIPPETS = (
+        "gaussian", "group_rank(", "group_backfill(",
+        # 2026-09-11 round_4：ts_regression 的 lookback=0 被平台拒绝
+        "ts_step(1), 20, 0",
+        # 2026-09-11 round_9：2 参 group_mean(X, G) 被平台拒绝（exactly 3 inputs），
+        # 仅 3 参形式 group_mean(X, 1, G) 有 38 次 DONE 实证（r1-r7 group_scaled_mean）
+        "group_mean(ts_backfill({p}, 20), {g}))",
+    )
+    REPAIRED_TEMPLATE_IDS = (
+        "robust_cross_section",
+        "distributional_change",
+        "distribution_regime",
+        "group_filled_rank",
+        "turnover_controlled_change",
+        "trend_residual",
+    )
+
+    def _template_by_id(self, template_id):
+        from wqb_agent.alpha_factory import ECONOMIC_TEMPLATES
+        for template in ECONOMIC_TEMPLATES:
+            if template.template_id == template_id:
+                return template
+        self.fail(f"template {template_id!r} missing from ECONOMIC_TEMPLATES")
+
+    def _concrete(self, expression):
+        return (
+            expression
+            .replace("{p}", "cashflow_fin")
+            .replace("{s}", "cashflow_op")
+            .replace("{t}", "cashflow_invst")
+            .replace("{g}", "subindustry")
+        )
+
+    def test_repaired_templates_use_only_live_accepted_operators(self):
+        from wqb_agent.expression import analyze_expression
+
+        for template_id in self.REPAIRED_TEMPLATE_IDS:
+            expression = self._concrete(self._template_by_id(template_id).expression)
+            parsed = analyze_expression(expression)
+            operators = set(parsed.operators)
+            rejected = operators - self.LIVE_ACCEPTED_OPERATORS
+            self.assertEqual(
+                rejected, set(),
+                f"{template_id} uses platform-unproven operators "
+                f"{sorted(rejected)}: {expression}",
+            )
+
+    def test_repaired_templates_avoid_rejected_syntax(self):
+        for template_id in self.REPAIRED_TEMPLATE_IDS:
+            expression = self._template_by_id(template_id).expression
+            for snippet in self.REJECTED_SNIPPETS:
+                self.assertNotIn(
+                    snippet, expression,
+                    f"{template_id} still contains live-rejected usage "
+                    f"{snippet!r}: {expression}",
+                )
+            # 多参 normalize(x, ...) 从未在本平台实证，禁止任何参数形式。
+            self.assertNotIn(
+                "normalize(", expression,
+                f"{template_id} uses unverified normalize: {expression}",
+            )
+
+    def _top_level_arity(self, expression, call_name):
+        """各 call_name 调用的顶层实参数（深度感知，避免嵌套调用误报）。"""
+        arities = []
+        needle = f"{call_name}("
+        idx = 0
+        while True:
+            start = expression.find(needle, idx)
+            if start == -1:
+                break
+            depth = 0
+            args = 1
+            i = start + len(needle) - 1
+            while i < len(expression):
+                char = expression[i]
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif char == "," and depth == 1:
+                    args += 1
+                i += 1
+            arities.append(args)
+            idx = start + len(needle)
+        return arities
+
+    def test_registry_wide_guard_against_rejected_drivers(self):
+        from wqb_agent.alpha_factory import ECONOMIC_TEMPLATES
+
+        for template in ECONOMIC_TEMPLATES:
+            expression = template.expression
+            for snippet in self.REJECTED_SNIPPETS:
+                self.assertNotIn(
+                    snippet, expression,
+                    f"{template.template_id} reintroduced live-rejected "
+                    f"usage {snippet!r}",
+                )
+            # 2026-09-11 平台实测：此 region 下 normalize、winsorize、hump
+            # 均只接受恰好 1 个输入；多参形式一律拒绝（嵌套调用合法）。
+            for call in ("normalize", "winsorize", "hump"):
+                for arity in self._top_level_arity(expression, call):
+                    self.assertEqual(
+                        arity, 1,
+                        f"{template.template_id} uses multi-arg {call} "
+                        f"({arity} inputs): {expression}",
+                    )
+            # 2026-09-11 round_9 平台实测：此 region 下 group_mean 只接受恰好 3 个
+            # 顶层输入（group_mean(X, 1, G)）；2 参形式被拒绝，3 参形式 r1-r7 共 38 次 DONE。
+            for arity in self._top_level_arity(expression, "group_mean"):
+                self.assertEqual(
+                    arity, 3,
+                    f"{template.template_id} uses non-3-arg group_mean "
+                    f"({arity} inputs): {expression}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

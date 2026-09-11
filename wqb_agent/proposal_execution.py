@@ -851,19 +851,39 @@ class ProposalExecutionWorkflow:
         if len(matches) != 1:
             raise ValueError(f"expected one checkpoint experiment for {proposal_id}, found {len(matches)}")
         exp = matches[0]
-        if exp.status != "SUBMIT_UNKNOWN":
-            raise ValueError(f"proposal {proposal_id} is {exp.status}, not SUBMIT_UNKNOWN")
+        # A progress-URL-less UNKNOWN is the same recovery-evidence gap as
+        # SUBMIT_UNKNOWN: an ambiguous write result with no safe re-POST and no
+        # remote identity to poll.  A URL-bearing UNKNOWN is NOT skippable here
+        # — the known remote job is recoverable read-only and skipping would
+        # discard live evidence, so it must go through reconciliation first.
+        ambiguous_unknown = exp.status == "UNKNOWN" and not (exp.progress_url or "").strip()
+        if exp.status != "SUBMIT_UNKNOWN" and not ambiguous_unknown:
+            raise ValueError(
+                f"proposal {proposal_id} is {exp.status}; only SUBMIT_UNKNOWN or a "
+                "progress-URL-less UNKNOWN may be user-authorized skipped"
+            )
         exp.status = "SKIPPED_UNKNOWN"
         exp.skip_record = {
-            "reason": "user_authorized_skip_after_repeated_read_only_reconciliation",
+            "reason": (
+                "user_authorized_skip_unknown_no_progress_url"
+                if ambiguous_unknown
+                else "user_authorized_skip_after_repeated_read_only_reconciliation"
+            ),
             "proposal_id": proposal_id,
             "submission_fingerprint": exp.submission_fingerprint,
             "remote_id": None,
-            "read_only_reconciliation": "no_unique_remote_record",
+            "read_only_reconciliation": (
+                "no_progress_url_no_unique_remote_record"
+                if ambiguous_unknown else "no_unique_remote_record"
+            ),
             "skipped_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "research_decision": "N/A",
         }
-        exp.error = "SKIPPED_AFTER_USER_AUTHORIZED_SUBMIT_UNKNOWN"
+        exp.error = (
+            "SKIPPED_AFTER_USER_AUTHORIZED_UNKNOWN_NO_URL"
+            if ambiguous_unknown
+            else "SKIPPED_AFTER_USER_AUTHORIZED_SUBMIT_UNKNOWN"
+        )
         unresolved = [item for item in experiments if item.status in UNRESOLVED_STATUSES]
         self._write_proposal_checkpoint(
             int(round_no), checkpoint.get("hypothesis") or {}, experiments, complete=not unresolved

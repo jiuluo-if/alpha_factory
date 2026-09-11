@@ -179,7 +179,7 @@ def build_parser():
     skip_stale.add_argument("identifier", metavar="SIMULATION_ID")
     _set_command(skip_stale, "recovery", "skip-stale")
     skip_unknown = recovery_commands.add_parser(
-        "skip-submit-unknown", help="人工授权跳过 SUBMIT_UNKNOWN"
+        "skip-submit-unknown", help="人工授权跳过 SUBMIT_UNKNOWN 或无 progress URL 的 UNKNOWN"
     )
     skip_unknown.add_argument("round_value", metavar="ROUND")
     skip_unknown.add_argument("identifier", metavar="PROPOSAL_ID")

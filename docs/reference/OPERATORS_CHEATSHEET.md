@@ -101,6 +101,8 @@
 |---|---|---|
 | `ts_decay_linear(x,d,dense=false)` | 近期高权重、历史递减 | 993 |
 | `hump(x,hump=0.01)` | 限制每天信号变化幅度 | 1 |
+
+> **2026-09-11 平台实测（round_4）**：`hump(x, 0.01)` 双参形式被拒（`exactly 1 input`），与多参 `normalize`/`winsorize` 同类；此 region 下 `hump` 仅单参 `hump(x)` 合法。
 | `ts_step(1)` | 每天递增 1 的计数器 | 0 |
 
 `ts_decay_linear` = 加权平滑；`hump` = 直接限制变化/换手。
@@ -114,6 +116,8 @@
 | `normalize(x,useStd=false,limit=0)` | 去横截面均值，可选除标准差 | 去市场整体水平 | 1 |
 | `quantile(x,driver=gaussian,sigma=1)` | 排名后映射指定分布 | Gaussian/Cauchy/Uniform | 0 |
 | `winsorize(x,std=4)` | 截断极端值 | 降低异常值影响 | 1 |
+
+> **2026-09-11 平台实测（round_4）**：`winsorize(x, 4)` 双参形式被拒（`Invalid number of inputs : 2, should be exactly 1 input(s)`），与多参 `normalize` 同类；此 region 下 `winsorize` 仅单参形式 `winsorize(x)` 合法。上表参数列为文档态签名，live 以 1 参为准。
 | `scale(x,scale=1,longscale=1,shortscale=1)` | 调整整体持仓规模 | 控制 book size、多空规模 | 0 |
 
 易混淆点：
@@ -156,6 +160,30 @@
 | `group_mean(x,weight,group)` | 组内均值（harmonic） | 组内均值 | 0 |
 
 `group_neutralize` = 从 Alpha 减去所属组平均 Alpha，消除行业/板块/国家共同暴露。
+
+## 平台实测拒绝记录（2026-09-11，USA/EQUITY/TOP3000/Delay1）
+
+BRAIN live response 高于本表；以下用法在本项目 300 次真实 Simulation 中被平台确定性拒绝
+（rounds 1-2 FAILED 全部 42 项与 round 3 前 17 项均可归因于此 4 个算子用法）：
+
+| 被拒用法 | 平台错误 | 现状与替代 |
+|---|---|---|
+| `normalize(x, true, 0.0)`（三参 form） | `Invalid number of inputs : 2, should be exactly 1 input(s)` | live `normalize` 在此 region 仅接受 1 个输入；模板已改 `rank(winsorize({p}, 4))` |
+| `quantile(rank(X), gaussian, 1.0)`（裸位置参数 `gaussian`） | `Attempted to use unknown variable "gaussian"` | 裸 `gaussian` 被解析为变量；模板已改 `rank(ts_zscore(ts_delta({p}, 5), 60))`（surprise 机制等价） |
+| `ts_quantile(ts_zscore(X, 20), 60, gaussian)`（裸位置参数 `gaussian`） | `Attempted to use unknown variable "gaussian"` | 模板已改 `rank(ts_rank(ts_zscore({p}, 20), 60))`（历史分位等价） |
+| `group_rank(rank(group_backfill(X, g, 20, 4)), g)` | `Invalid number of inputs : 3, should be exactly 2 input(s)` | 嵌套 arity 与 live 不符；模板已改 3 参形式 `rank(subtract(ts_backfill({p}, 20), group_mean(ts_backfill({p}, 20), 1, {g})))` |
+| `winsorize(X, 4)`（双参形式，round_4 实测） | `Invalid number of inputs : 2, should be exactly 1 input(s)` | 与多参 `normalize` 同类；模板已改单参 `rank(winsorize(ts_delta({p}, 5)))` |
+| `hump(X, 0.01)`（双参形式，round_4 实测） | `Invalid number of inputs : 2, should be exactly 1 input(s)` | 模板已改单参 `hump(rank(ts_delta({p}, 5)))`（默认 hump 宽度） |
+| `ts_regression(ts_delta(X,5), ts_step(1), 20, 0)`（lookback=0，round_4 实测） | `Got invalid value "0" for attribute "lookback"` | 模板已改省略 lookback 的 3 参形式 `ts_regression(ts_delta({p}, 5), ts_step(1), 20)` |
+| `group_mean(X, G)`（2 参形式，round_9 实测） | `Invalid number of inputs : 2, should be exactly 3 input(s)` | live 形式为 3 参 `group_mean(X, 1, G)`（本表 L158：x,weight,group；r1-r7 group_scaled_mean 共 38 次 DONE）；group_filled_rank 模板已按 3 参对齐 |
+
+已实证可用（156 条 DONE 表达式统计）：`rank` / `ts_zscore` / `ts_delta` / `ts_rank` /
+`ts_std_dev` / `ts_sum` / `ts_scale` / `ts_product` / `ts_delay` / `ts_mean` / `group_mean`（仅 3 参 `group_mean(X, 1, G)`）/
+`group_scale` / `ts_corr` / `ts_covariance` / `subtract` / `divide` / `ts_arg_max` / `ts_arg_min` /
+`ts_decay_linear` / `trade_when` / `vec_sum` / `vec_avg` / `ts_backfill` / `reverse` / `add` /
+`winsorize`（单参）/ `hump`（单参）/ `ts_regression`（省略 lookback）。
+新模板默认只用已实证算子；`gaussian` 驱动、多参 `normalize` 与 `group_rank/group_backfill`
+嵌套在恢复前需要平台级再验证，不作为默认模板输入。
 
 ---
 

@@ -63,10 +63,14 @@ def build_runtime_components(client, config):
         max_used_hypotheses=runtime.memory["max_used_hypotheses"],
         persist=False,
     )
+    # Canonical completed Experiment evidence (metrics/checks/field evidence)
+    # must survive a restart so the next process can rehydrate a legal
+    # optimizer parent.  Trajectory stays the sole evidence owner; nothing is
+    # reconstructed from Alpha Feed metadata or checkpoints.
     trajectory = Trajectory(
         max_len=runtime.trajectory_window,
         path=os.path.join(state_dir, "trajectory.jsonl"),
-        persist=False,
+        persist=True,
     )
     trial_ledger = TrialLedger(
         os.path.join(state_dir, "trial_ledger.jsonl"), persist=False
@@ -120,9 +124,8 @@ def build_runtime_components(client, config):
         **{target: runtime.quality[key] for key, target in reflector_keys.items()
            if key in runtime.quality},
     )
-    # Simulation/Alpha result evidence is ephemeral.  A new process must not
-    # resurrect an old local result sidecar; unresolved remote work is resumed
-    # only from checkpoint state.
+    # Unresolved remote work is still resumed only from checkpoint state, and
+    # no derived result sidecar cache is resurrected on startup.
     reflector.evidence_cache = {}
     lock = threading.Lock()
     return RuntimeComponents(

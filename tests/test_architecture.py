@@ -130,6 +130,15 @@ class TestArchitectureBoundaries(unittest.TestCase):
         self.assertNotIn("run_proposals", content)
         self.assertNotIn("requests.", content)
 
+    def test_color_classification_cannot_drive_optimizer_or_research_yield(self):
+        # Color stays a derived, downstream-only classification: it must never
+        # become an input that decides optimizer parent eligibility or
+        # mechanism-family research yield.
+        for module_name in ("optimizer_workflow", "research_yield"):
+            imports = _direct_imports(module_name)
+            self.assertNotIn(".alpha_colors", imports, module_name)
+            self.assertNotIn("wqb_agent.alpha_colors", imports, module_name)
+
     def test_validation_does_not_create_a_second_simulation_path(self):
         imports = _direct_imports("validation")
         self.assertNotIn(

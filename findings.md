@@ -479,3 +479,83 @@
 - #14 量化：当前唯一 BLOCKED yield 来源 = UNKNOWN 桶 826 条 DONE + 200 条 PROVISIONAL 观测因跨进程 handoff 无法建立 optimizer eligibility。
 - 假设视图：若 #14 修复且 gate 全拒（明确假设），无 FINAL 证据仍使全部族 INCONCLUSIVE(FINAL_EVIDENCE_INSUFFICIENT)——#15 SELF_CORRELATION 未结算是独立于 #14 的第二重阻塞；LOW_INFORMATION/PROMISING 在真实数据上无触发前提，合成验证由 test_research_yield.py 覆盖。
 - 结论：下一轮如需修改冻结边界，应先结算 SELF_CORRELATION/yearly（#15）再做 optimizer handoff 修复（#14）的立项评估；本阶段保持 PAUSED/DISARMED。
+
+
+# 2026-09-11（第二阶段）跨进程 optimizer parent evidence handoff — 真实根因
+
+## 九问结论（基于 HEAD 7d419a8 与真实 `.wqb_state`，只读调查）
+
+1. **Experiment evidence 当前真正持久化在哪里？**
+   - `round_*.checkpoint.json` 只保存执行事实；实测 round 13 的 100 条 experiment union 字段为
+     `id / proposal_id / submission_fingerprint / submission_started_at / expression / settings /
+     fields_used / hypothesis_id / round / template_id / template_family / proposal_origin /
+     research_layer / status / progress_url / lineage_id / experiment_stage / research_role /
+     change_type / schema_version / created_by_version`，**100/100 无 metrics、无 checks、无
+     economic_mechanism、无 field_analysis**。
+   - `proposals.json`（仅 round 13）含 `field_analysis / economic_mechanism / semantic_admission / ...`，
+     但它是提案输入元数据，不含 Simulation 结果。
+   - `.wqb_state/trajectory.jsonl` 与 `.wqb_state/trial_ledger.jsonl` 均不存在。
+2. **checkpoint 保存了多少完整 Experiment 信息？** 只有执行与身份元数据，缺少 optimizer parent gate
+   需要的全部研究证据（metrics / checks / field_* evidence / economic_mechanism）。
+3. **trajectory 为什么在新 process 中为空？** `wqb_agent/runtime_components.py:66-70` 显式构造
+   `Trajectory(path=<state_dir>/trajectory.jsonl, persist=False)`；`state.py` 在 `persist=False` 时
+   `add/add_many` 不落盘，`contains_ids / find_completed_expressions / load` 直接返回空。因此文件
+   从未生成，新进程内存轨迹必然为空。
+4. **completed checkpoint 是否已有足够 evidence 重建合法 Experiment？** 否 → 结论
+   **CHECKPOINT_EVIDENCE_INSUFFICIENT**，不能从 checkpoint 猜 metrics/checks。
+5. **optimizer parent gate 具体要求哪些字段？** `OptimizerWorkflow._parent_rejections()`：
+   `status == DONE`；`metrics` 非空 dict；`metrics` 含 `checks`；`expression`；`fields_used /
+   datasets / field_understanding / field_analysis / field_source / field_hypothesis_basis`
+   全部非空；`hypothesis_id`；`economic_mechanism` 为非空字符串。
+6. **parent-relative incremental verdict 当前 owner 是谁？** `Agent._settle_incremental_evidence()`
+   （`agent.py:1333`）调用 `incremental_value.build_incremental_value()`（日期对齐 PnL 序列相关性）；
+   `incremental_policy.incremental_gate()` 决定 eligibility；reward 侧的 parent-relative 度量在
+   `search_outcome.parent_relative_delta()`。当前 client 无 LIVE_VERIFIED PnL capability → 普通候选
+   显式结算为 `UNAVAILABLE`（不伪造相关度）。
+7. **CHILD proposal 当前如何携带 parent identity？** `parent_expression`（canonical expression）+
+   `lineage_id`；变化语义由 `experiment_stage / research_role / change_type /
+   child_economic_hypothesis / changed_variable` 表达。
+8. **run-proposals 当前如何解析 parent_expression？** `proposal_execution.py:340` 用
+   `ctx.trajectory.find_completed_expressions([...])` 建批量索引，`:437` 调
+   `hooks.completed_parent(...)` → `Agent._completed_parent()`：先扫内存窗口，再查传入索引，最后
+   `trajectory.find_completed_expression()`。三条路径都依赖持久化 trajectory。
+9. **historical completed evidence 当前在哪一步丢失？** Simulation 完成时 `simulator.py:248`
+   （`experiment.metrics = _extract_metrics(payload)`）把结果写到内存 Experiment；随后
+   `trajectory.add*()` 因 `persist=False` 不落盘；进程退出即丢失。checkpoint 只记录恢复边界。
+
+## 归因与修复方向
+
+- 断点性质：**BLOCKED_BY_PERSISTENCE_DESIGN**（不是 gate 过严，也不是 Alpha Feed / checkpoint
+  能补的缺口）。
+- 实现与架构文档不一致：`docs/ARCHITECTURE_AGENT.md:24` 把 `trajectory.jsonl` 列为 immutable
+  evidence，`:198` 明确 “重启后仅由持久化 trajectory/checkpoint 的既有 owner 恢复”；代码
+  `persist=False` 与文档声明冲突。
+- 现有消费者已全部假设 `trajectory.jsonl` 存在：optimizer parent gate、run-proposals parent
+  lookup、exact-dedupe（`agent.py:798-808`）、`alpha_colors.load_color_candidates()`、
+  `agent.search_calibration_report()`。
+- 修复方向（目标 §28/§29）：**恢复已有 owner 的持久化**，即 `Trajectory(persist=True)`；保持
+  owner 不变（Trajectory remains sole owner），不新建 store、不从 Alpha Feed/checkpoint 猜
+  evidence、不降低 optimizer gate。
+- 已完成目标（ResearchYield）的 replay 结论不变：#14 在当前真实数据下造成 826 DONE + 200
+  PROVISIONAL 观测的 BLOCKED yield；本阶段修复该 handoff 断点，并量化 before/after。
+
+## 交付与验证（第二阶段）
+
+- 改动文件：`wqb_agent/runtime_components.py`；新增 `tests/test_historical_parent_handoff.py`；
+  按新契约更新 `tests/test_factory_boundaries.py`；新增 color 守卫 `tests/test_architecture.py`；
+  `scripts/replay_research_yield.py` 增加 handoff before/after；同步
+  `docs/ARCHITECTURE_AGENT.md`、`docs/RESEARCH_POLICY.md`、`docs/STATE_LAYOUT.md`。
+- 只读 replay before/after（`--compare-handoff`）：before 1 族 `BLOCKED(HANDOFF_EVIDENCE_BLOCKED)`
+  + 7 族 `INCONCLUSIVE`（eligibility 不可用、eligible 0、final 0）；after 8 族全部
+  `INCONCLUSIVE`（eligibility 可用、eligible parents 100、final 仍 0）。因此 #14 修复必要但不充分。
+- 质量门与 Git 证据：见下方“验证结果”。
+
+## 验证结果（第二阶段）
+
+- `python -m compileall -q wqb_agent scripts tests` → exit 0。
+- `python -m unittest discover -s tests` → `Ran 750 tests`、`OK`（含新增 `tests/test_historical_parent_handoff.py` 与按新契约更新的两条 runtime 断言）。
+- `python -m ruff check .` → `All checks passed!`。
+- `python -m mypy`（9 个 typed frontier 模块）→ `Success: no issues found in 9 source files`。
+- `coverage run --branch -m unittest discover -s tests` + `coverage report` → `TOTAL 78.9%`（`fail_under=76.0`）。
+- `python main.py --state-dir tests/fixtures state doctor` → exit 0；`... state audit` → exit 0（offline fixtures，未触发网络）。
+- 只读 replay：`python scripts/replay_research_yield.py --compare-handoff` → exit 0，未写入 `.wqb_state`。

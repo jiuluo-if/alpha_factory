@@ -195,7 +195,7 @@ WQBClient.set_alpha_color(..., verify=True)
 
 Runtime identity is tested: Agent, ProposalExecutionWorkflow and OptimizerWorkflow share the same trajectory; Agent and AlphaFeedWorkflow share the daily/weekly caches; RuntimeComponents creates one Simulator, CheckpointStore and TrialLedger instance.
 
-`OptimizerWorkflow` 的 evidence 生命周期是 local-trajectory-only：同一进程内消费传入的 `Trajectory`，重启后仅由持久化 trajectory/checkpoint 的既有 owner 恢复；`.alpha_feed_cache/weekly.json` 只提供远端 Alpha ID/status/time metadata 的优先级提示，不能单独生成 DONE parent，也不保存或重建完整 Simulation metrics。
+`OptimizerWorkflow` 的 evidence 生命周期是 local-trajectory-only：同一进程内消费传入的 `Trajectory`；重启后由同一个 `Trajectory` owner 从 append-only `trajectory.jsonl` 只读 rehydrate 合法 `DONE` parent（owner 不变，不从 checkpoint 或 Alpha metadata 重建 metrics/checks）。`.alpha_feed_cache/weekly.json` 只提供远端 Alpha ID/status/time metadata 的优先级提示，不能单独生成 DONE parent，也不保存或重建完整 Simulation metrics。
 
 审计 JSONL 使用 `append_jsonl_best_effort`；若唯一性是正确性不变量，owner 必须提供共享 lock（`TrialLedger` 已拥有 `_append_lock`）。未提供 lock 的普通审计追加不承诺并发或跨进程唯一。
 

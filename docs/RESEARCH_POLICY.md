@@ -81,7 +81,7 @@ Frequency is auditable evidence, not an unqualified field attribute. Platform me
 
 When feasibility fails, the factory compares admissible relationships, canonical expressions, mechanism family and dataset composition. Seed changes alone do not count as information gain. Route attempts are bounded; repeated no-gain or exhausted route attempts produce a recorded STOP. REVIEW/UNKNOWN remains fail-closed.
 
-Only local trajectory evidence from a real settled `DONE` experiment can become an optimizer parent. The parent must retain metrics, checks (including explicit UNKNOWN where applicable), expression, field audit metadata, hypothesis and economic mechanism. Alpha Feed metadata cannot restore evidence.
+Only local trajectory evidence from a real settled `DONE` experiment can become an optimizer parent. The parent must retain metrics, checks (including explicit UNKNOWN where applicable), expression, field audit metadata, hypothesis and economic mechanism. Alpha Feed metadata cannot restore evidence. The canonical completed Experiment evidence is appended to `trajectory.jsonl` by the sole `Trajectory` owner, so a later process rehydrates the same parent read-only after a restart; checkpoints still only carry recovery identity and never reconstruct metrics or checks.
 
 # Feed freshness and heartbeat policy (2026-09-10)
 

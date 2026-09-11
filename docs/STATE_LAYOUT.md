@@ -7,7 +7,7 @@
 | 类别 | 固定路径/模式 | 内容与权威性 | 处理规则 |
 |---|---|---|---|
 | 运行记忆 | `context.md`、`experience.json`、`garbage.json` | 可选的 Agent 进程内决策视图；默认运行不落盘 | 新进程不从本地结果恢复 |
-| 原始证据 | 进程内 trajectory/ledger | 当前进程的短期去重和生命周期视图 | 不落盘；远程未完成状态只由 checkpoint 恢复 |
+| 原始证据 | `trajectory.jsonl`（Trajectory owner 的 append-only canonical 证据）；`trial_ledger` 仍是进程内视图 | 已确认 Experiment 的研究证据：metrics、checks、field audit、hypothesis、economic mechanism | `trajectory.jsonl` 由既有 owner 追加并在新进程只读 rehydrate；ledger 不落盘；远程未完成状态只由 checkpoint 恢复 |
 | 执行恢复 | `round_*.checkpoint.json`、`run.lock`（POSIX 另有 OS guard） | 提交状态、progress URL、锁和崩溃恢复依据 | OS owner 存活或存在未完成 checkpoint 时禁止新轮和移动 |
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写 |
 | 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、最近动作、`stop_requested` 和本地配额控制元数据 | 固定单文件；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
@@ -29,7 +29,7 @@
 
 ## 冲突仲裁与整理边界
 
-- 未完成传输状态以 checkpoint 为准；已确认实验事实以 BRAIN live response 为准；研究结果仍只存在进程内视图，当周 Alpha 元数据仅按本表缓存规则落盘。
+- 未完成传输状态以 checkpoint 为准；已确认实验事实以 BRAIN live response 为准；canonical 完成证据由 `Trajectory` 追加到 `trajectory.jsonl` 并在新进程只读 rehydrate，派生的结果/提交/颜色侧车仍只存在进程内视图；当周 Alpha 元数据仅按本表缓存规则落盘。
 - `context.md` 与 `experience.json` 是压缩决策视图，不得反向覆盖原始证据。
 - Experiment 的 `yearly_evidence` 是由已知 Alpha 的 aggregates 派生的年度稳定性证据；缺失或 `UNKNOWN` 不得解释为稳定通过。
 - Experiment 的 `validation_plan`/`validation_report` 记录预注册 robustness 变量与聚合判定；只有 report `PASS` 的 parent 才能为 `STABLE`、进入 `current_best` 或提交池。

@@ -1,6 +1,6 @@
 # 任务计划：运行数据审查、清理与工厂/Agent 边界修复
 
-## 2026-09-11 当前阶段：ResearchYield 派生研究产出（PAUSED/DISARMED 只读）
+## 2026-09-11（completed）ResearchYield 派生研究产出（PAUSED/DISARMED 只读）
 
 - [x] 吸收 `docs/RESEARCH_ISSUES_2026-09-11.md` 与 findings/progress/task_plan，先写真实审查结论到 findings.md
 - [x] 实现 `wqb_agent/research_yield.py`：派生 control-plane 漏斗 + 5 态 family outcome + 明确 denominator 的 conversions + evidence-quality 分离 + STOP taxonomy
@@ -8,7 +8,17 @@
 - [x] 只读真实回放脚本 `scripts/replay_research_yield.py`（读 13 个 checkpoint + proposals.json + r11/r12 metrics 快照，不写 `.wqb_state`）
 - [x] 全量质量门：`732 tests OK`、compileall OK、Ruff All checks passed
 - [x] 更新 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）与 task_plan/progress/findings
-- [ ] 未授权不 commit/push；如需提交按 AGENTS 规则（邮箱 `2966684515@qq.com`、中文前缀信息）另行授权
+- [x] 已 push；提交遵循 AGENTS 规则（邮箱 `2966684515@qq.com`、中文前缀信息）
+
+## 2026-09-11 当前阶段：跨进程 optimizer parent evidence handoff（PAUSED/DISARMED，未运行真实 Simulation）
+
+- [x] 只读调查真实 `.wqb_state` 与源码，确认断点根因（`Trajectory(persist=False)` 使 canonical 完成证据不落盘，checkpoint 只有执行事实）并写入 `findings.md`
+- [x] 最小修复 `wqb_agent/runtime_components.py`：让既有 `Trajectory` owner 持久化到 `trajectory.jsonl`；不新增 store/owner，不从 checkpoint 或 Alpha Feed 重建 metrics
+- [x] 按新契约更新 `tests/test_factory_boundaries.py` 两条旧断言（canonical 证据落盘并由新进程只读 rehydrate；派生结果侧车仍只在内存）
+- [x] 新增 `tests/test_historical_parent_handoff.py`（restart/serialization/dedupe/corrupt/lineage 契约）与 `tests/test_architecture.py` color 不得驱动 optimizer/yield 守卫
+- [x] 只读 replay 增加 handoff before/after 视图（`scripts/replay_research_yield.py --compare-handoff`）
+- [x] 同步 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）：evidence owner 不变，仅新增跨进程只读 rehydrate 说明
+- [x] 质量门与推送：见 `findings.md` 第二阶段“交付与验证”
 
 ## 2026-09-10（historical）机制换路与 DONE→Optimizer
 

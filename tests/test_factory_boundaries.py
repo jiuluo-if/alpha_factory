@@ -1542,7 +1542,7 @@ class TestFactoryBatchContract(unittest.TestCase):
         self.assertEqual(proposal["template_slots"]["data_field"], "revision")
         self.assertEqual(proposal["template_slots"]["t"], "recommendation")
 
-    def test_agent_runtime_keeps_results_and_trajectory_out_of_disk(self):
+    def test_agent_runtime_persists_trajectory_evidence_but_not_result_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp:
             agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
             experiment = Experiment(1, "h", "rank(field)", {}, ["field"])
@@ -1552,10 +1552,14 @@ class TestFactoryBatchContract(unittest.TestCase):
             agent._record_trial_phase(experiment, "completed", outcome="DONE")
             agent._write_sims_results(1, [experiment])
             agent.memory.save()
-            self.assertEqual(os.listdir(tmp), [])
+            # Canonical completed evidence is persisted by its sole owner
+            # (Trajectory -> trajectory.jsonl) so a fresh process can rehydrate
+            # a legal optimizer parent; derived result/submission/color
+            # sidecars stay in the in-memory day view.
+            self.assertEqual(os.listdir(tmp), ["trajectory.jsonl"])
             self.assertEqual(len(agent.daily_cache.simulations()), 1)
 
-    def test_nonpersistent_runtime_does_not_resurrect_old_trajectory_results(self):
+    def test_runtime_rehydrates_trajectory_evidence_without_result_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp:
             trajectory_path = os.path.join(tmp, "trajectory.jsonl")
             old = Experiment(7, "old", "rank(old_field)", {}, ["old_field"])
@@ -1565,8 +1569,16 @@ class TestFactoryBatchContract(unittest.TestCase):
                 handle.write(json.dumps(old.to_dict()) + "\n")
             agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
             agent._ensure_loaded()
-            self.assertEqual(agent.trajectory.experiments, [])
-            self.assertEqual(agent._terminal_expressions(), set())
+            # Cross-process rehydration restores the canonical DONE evidence
+            # from the persisted Trajectory owner...
+            restored = agent.trajectory.experiments
+            self.assertEqual([exp.round for exp in restored], [7])
+            self.assertEqual(restored[0].metrics["sharpe"], 99.0)
+            terminal = agent._terminal_expressions()
+            self.assertEqual(len(terminal), 1)
+            self.assertIn("old_field", next(iter(terminal)))
+            # ...but never resurrects derived result sidecars.
+            self.assertEqual(agent.daily_cache.simulations(), [])
 
     def test_nested_platform_dataset_id_is_normalized_for_alpha_count_overlay(self):
         agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tempfile.mkdtemp()}})

@@ -406,3 +406,12 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 质量门：`732 tests OK`、`python -m compileall -q wqb_agent scripts tests` OK、`python -m ruff check .` All checks passed。
 - 约束确认：未运行真实 Simulation；checkpoint/quota/`SUBMIT_UNKNOWN` 未变化（只读回放，无任何 `.wqb_state` 写入）；未 commit/push（未获授权）。
 - 剩余风险：LOW_INFORMATION/PROMISING 的真实触发仍依赖 FINAL evidence 结算（SELF_CORRELATION/yearly）与跨进程 optimizer handoff（#14）；本阶段只归因，不修冻结边界。
+
+# 2026-09-11（第二阶段）跨进程 optimizer parent evidence handoff 修复
+
+- 断点根因：`runtime_components.py` 以 `Trajectory(persist=False)` 构造共享轨迹，`simulator.py` 的完成结果只写入内存 `experiment.metrics`，进程退出即丢失；`round_*.checkpoint.json` 只有执行事实（id/expression/settings/status/progress_url/lineage），没有 metrics/checks/economic_mechanism/field_analysis，因此不能重建合法 optimizer parent。
+- 修复方式：让既有 `Trajectory` owner 落盘 `trajectory.jsonl`（`persist=True`）。`Agent._load_state()` 启动时本就调用 `trajectory.load()`，所以新进程可以只读 rehydrate 最近的 canonical 完成证据。没有新增 store/owner，没有从 checkpoint 或 Alpha Feed 猜 metrics，optimizer gate 未放松。
+- 契约更新：`tests/test_factory_boundaries.py` 中“runtime 不落盘轨迹 / 不复活旧结果”两条旧断言改为“canonical 证据落盘并由新进程 rehydrate；结果/提交/颜色派生侧车仍只在内存”。
+- 新增 `tests/test_historical_parent_handoff.py`：serialization roundtrip、跨 restart parent lookup、重复 append 不重复落盘、corrupt row 跳过、checkpoint-only / cloud-only 不产生 parent、child incremental verdict 跨 restart、多代 lineage 身份保持。
+- 只读 replay before/after（`python scripts/replay_research_yield.py --compare-handoff`）：before 为 1 族 `BLOCKED(HANDOFF_EVIDENCE_BLOCKED)` + 7 族 `INCONCLUSIVE`，optimizer eligibility 不可用、eligible parents 0、final evidence 0；after（假设 canonical 证据已 rehydrate）为 8 族全部 `INCONCLUSIVE`，eligibility 可用、eligible parents 100、final evidence 仍 0。结论：修 #14 必要但不充分，#15（SELF_CORRELATION/yearly FINAL 证据未结算）仍独立阻塞 PROMISING。
+- 约束确认：未运行真实 Simulation；未写入 `.wqb_state`；checkpoint/quota/`SUBMIT_UNKNOWN` 未变化；Alpha submission 仍手工；未做远端 color 写入。

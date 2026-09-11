@@ -13,6 +13,13 @@
 - [x] Incremental Capability Audit（只读）：平台无 PnL/行为序列能力 → `UNAVAILABLE` + `child_generation_bound()` 有界多代
 - [x] 真实多代 restart 验收测试（P0 settled → 重启 → C1 proposal → C1 settled → 重启 → C2）
 - [x] 质量门：`794 tests OK`、compileall、Ruff、mypy 9 frontier、coverage branch-aware 79.3%（`fail_under=76.0`）、offline doctor/audit exit 0
+- [x] 完成度审计：真实 `AlphaFactory` 上复现并修复 CHILD 提案缺 `parent_id` / `economic_mechanism` /
+  `optimization_decision`，以及 `change_type` / `direction_transform` 与 proposal contract 的同义值断裂；
+  新增真实 factory 端到端测试（decision 路径 + legacy 路径，`validate_proposal` 零问题）
+- [x] 质量门（修复后 fresh）：`797 tests OK`、compileall exit 0、Ruff All checks passed、mypy 9 frontier
+  Success、coverage branch-aware 79.3%（`fail_under=76.0`）、offline `state doctor` / `state audit` exit 0
+- [x] Git：`88fa066` `fix：补齐 CHILD 提案的 parent 溯源与提案契约一致性`；remote SHA == LOCAL_HEAD
+  （`88fa066848c19bcd33c6e53ba035f2e050d6c683`）
 - [x] 更新 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）与 findings/progress/task_plan
 - [x] 经用户授权后 commit 并 push 三笔（`d24368f` / `d81f896` / `5c34cd7`），`git ls-remote` 核对远端 SHA 与本地 HEAD 一致
 

@@ -1,5 +1,21 @@
 # 任务计划：运行数据审查、清理与工厂/Agent 边界修复
 
+## 2026-09-12（当前阶段）Phase III Autonomous Optimization（PAUSED/DISARMED，未运行真实 Simulation）
+
+- [x] 只读复核 HEAD `43654c4` 的上一轮修复（Trajectory persist / checkpoint / Alpha Feed / optimizer gate）并写入 findings
+- [x] 先写真实顺序测试证明根因（early DONE append → late settlement → restart 丢 FINAL 字段）
+- [x] 实现 append-only `RESEARCH_SETTLED` revision（`Trajectory.settle/settle_many/find_row`，fail-closed、幂等、owner 合并读），`add()` 语义不变
+- [x] 生产接入 `Agent._settle_research_outcome()`，拒绝时 `SETTLEMENT_REVISION_REJECTED` 审计，不静默
+- [x] 建立正式 `OptimizationDecision` 契约（CHILD/VALIDATE/REROUTE/STOP + rejection taxonomy + opportunity hint + 有限 summary）
+- [x] 拆分 optimizer gate 两阶段并给出 Agent Optimization Yield funnel（分母 0 → `None`）
+- [x] 提供 Agent-facing `inspect_optimizer_parents()` / `propose_optimization()`，仍走唯一 `OptimizerWorkflow → AlphaFactory` 路径
+- [x] ResearchYield 同步新 funnel（`agent_reviewed_parents` / `agent_child_decisions` / 两个新 conversion）
+- [x] Incremental Capability Audit（只读）：平台无 PnL/行为序列能力 → `UNAVAILABLE` + `child_generation_bound()` 有界多代
+- [x] 真实多代 restart 验收测试（P0 settled → 重启 → C1 proposal → C1 settled → 重启 → C2）
+- [x] 质量门：`794 tests OK`、compileall、Ruff、mypy 9 frontier、coverage branch-aware 79.3%（`fail_under=76.0`）、offline doctor/audit exit 0
+- [x] 更新 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）与 findings/progress/task_plan
+- [ ] 经用户授权后 commit 并 push，核对 local/remote SHA（`git ls-remote`）
+
 ## 2026-09-11（completed）ResearchYield 派生研究产出（PAUSED/DISARMED 只读）
 
 - [x] 吸收 `docs/RESEARCH_ISSUES_2026-09-11.md` 与 findings/progress/task_plan，先写真实审查结论到 findings.md
@@ -27,8 +43,8 @@
 - [x] 先写红测试并确认缺口
 - [x] 实现有界 feasibility route decision 与机制族耗尽分类
 - [x] 收紧本地 DONE parent evidence gate，记录 handoff 计数/拒绝原因
-- [ ] 完成全量验证、fresh code review、提交并推送每个验证阶段
-- [ ] 交付 start/current/remote SHA、未启动真实 Simulation、checkpoint/SUBMIT_UNKNOWN 不变及 deferred 范围
+- [x] 完成全量验证、fresh code review、提交并推送每个验证阶段
+- [x] 交付 start/current/remote SHA、未启动真实 Simulation、checkpoint/SUBMIT_UNKNOWN 不变及 deferred 范围
 
 ## 阶段结果
 
@@ -43,7 +59,7 @@
 - [x] 先写 freshness、failure、Feed split heartbeat、fake-clock throttling 红测试
 - [x] 实现 Agent lifecycle refresh hook 与 typed interval
 - [x] 实现 transient heartbeat 及 Discovery/Feed/assembly/settlement 接入
-- [ ] 完成 full quality gates、architecture review、两阶段 commit/push 与 SHA 对账
+- [x] 完成 full quality gates、architecture review、两阶段 commit/push 与 SHA 对账
 
 ## 阶段结果
 
@@ -51,7 +67,7 @@
 - [x] Feed 只读、失败保留旧成功时间、单进程 lifecycle hook、CLI lock
 - [x] transient heartbeat 通过 fake clock 节流并覆盖主要等待阶段
 - [x] full tests/coverage/compileall/Ruff/mypy/architecture/diff check 已通过
-- [ ] 依次完成 Feed 与 heartbeat 两个 commit/push，并核对 local/remote SHA
+- [x] 依次完成 Feed 与 heartbeat 两个 commit/push，并核对 local/remote SHA
 
 ## 已完成目标
 

@@ -290,3 +290,54 @@ deterministic outcomes: INCONCLUSIVE / PROMISING / LOW_INFORMATION / EXHAUSTED
   aggregate counts) for an existing `factory_session.json` envelope or a
   heartbeat-style RESEARCH_OUTCOME view; raw metrics and checks bodies never
   enter them.
+
+# Settled evidence revision and Agent optimization decision (2026-09-12)
+
+`wqb_agent/state.py` keeps the single canonical completed-Experiment evidence
+owner (`trajectory.jsonl`, append-only). Phase III adds one legal *revision*
+semantic to that same owner instead of a second store:
+
+- `Trajectory.add()` / `add_many()` remain the first canonical append with
+  cross-restart exactly-once dedupe. `Trajectory.settle()` / `settle_many()`
+  append a `trajectory_revision="RESEARCH_SETTLED"` row for an Experiment that
+  was already appended. `revision != second execution`,
+  `revision != second store`.
+- Settlement revisions are fail-closed: a missing canonical row, or any change
+  to execution identity (id / round / hypothesis_id / expression / settings /
+  fields_used / datasets / candidate_id / proposal_id / submission_fingerprint /
+  submission_started_at / parent_expression / lineage_id / created_at) raises
+  instead of silently overwriting the executed fact. Re-appending an identical
+  revision is a no-op.
+- The owner merges reads (`load()` → `_merge_rows()`, `find_row()`,
+  `find_completed_expressions()`): latest valid revision wins, corrupt rows and
+  identity mismatches are skipped, so the last valid evidence survives.
+- `Agent._settle_research_outcome()` is the single production write point. It
+  appends the revision after the settled evidence exists and audits refusal as
+  `SETTLEMENT_REVISION_REJECTED`.
+- No new owner appears: the checkpoint stays an execution/recovery boundary, the
+  Alpha Feed stays a 7-day lightweight remote-metadata priority hint, and
+  `SUBMIT_UNKNOWN` / checkpoint exactly-once / manual Alpha submission are
+  untouched.
+
+## Agent optimization decision contract
+
+`wqb_agent/optimization_decision.py` is the formal agent-facing contract that
+replaces implicit `parent["child_economic_hypothesis"] = {...}` mutation as the
+primary interface. Python only verifies field completeness, parent identity,
+the one-change rule, parameter-only / direction-only / overfit rejection,
+operator legality and the existing `validate_self_correlation_impact`
+admission. It never authors a mechanism, picks operators, writes child
+expressions or scans parameters. Opportunity categories
+(CONCENTRATION_REPAIR / SUB_UNIVERSE_REPAIR / TURNOVER_REPAIR /
+SELF_CORRELATION_REPAIR / ROBUSTNESS_REPAIR / SEMANTIC_REROUTE /
+NO_CLEAR_OPPORTUNITY) are evidence-derived context hints, not automatic actions.
+
+`OptimizerWorkflow` separates the two stages that used to be one
+`ready_parent_count`: Python evidence eligibility (`_parent_rejections`) and
+Agent decision readiness (`_decision_for_parent`). `optimizer_conversions()`
+reports Agent Optimization Yield under the same denominator rule as
+ResearchYield (denominator 0 → `None`). `inspect_optimizer_parents()` returns a
+bounded, read-only summary ordered by optimization opportunity, and
+`generate_from_decisions()` reuses the single CHILD generation path.
+`research_api.py` and `Agent` expose only thin facades; nothing bypasses
+`OptimizerWorkflow → AlphaFactory → proposal contract`.

@@ -7,7 +7,7 @@
 | 类别 | 固定路径/模式 | 内容与权威性 | 处理规则 |
 |---|---|---|---|
 | 运行记忆 | `context.md`、`experience.json`、`garbage.json` | 可选的 Agent 进程内决策视图；默认运行不落盘 | 新进程不从本地结果恢复 |
-| 原始证据 | `trajectory.jsonl`（Trajectory owner 的 append-only canonical 证据）；`trial_ledger` 仍是进程内视图 | 已确认 Experiment 的研究证据：metrics、checks、field audit、hypothesis、economic mechanism | `trajectory.jsonl` 由既有 owner 追加并在新进程只读 rehydrate；ledger 不落盘；远程未完成状态只由 checkpoint 恢复 |
+| 原始证据 | `trajectory.jsonl`（Trajectory owner 的 append-only canonical 证据）；`trial_ledger` 仍是进程内视图 | 已确认 Experiment 的研究证据：metrics、checks、field audit、hypothesis、economic mechanism；同一 `id` 可有 canonical 首行 + `RESEARCH_SETTLED` 结算 revision | `trajectory.jsonl` 由既有 owner 追加 revision 并在新进程只读 rehydrate（latest valid revision wins）；ledger 不落盘；远程未完成状态只由 checkpoint 恢复 |
 | 执行恢复 | `round_*.checkpoint.json`、`run.lock`（POSIX 另有 OS guard） | 提交状态、progress URL、锁和崩溃恢复依据 | OS owner 存活或存在未完成 checkpoint 时禁止新轮和移动 |
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写 |
 | 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、最近动作、`stop_requested` 和本地配额控制元数据 | 固定单文件；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
@@ -65,3 +65,21 @@ SearchOutcome lists, metrics, checks bodies, Simulation payloads and reward
 history replicas are forbidden in any ResearchYield persistence. Lightweight
 cloud metadata (e.g. Alpha Feed rows without expression/template/fields) is
 filtered out at funnel construction and can never become yield evidence.
+
+# Settled evidence revisions (2026-09-12)
+
+`trajectory.jsonl` stays the only canonical completed-Experiment evidence owner.
+One Experiment may now occupy more than one append-only row: the first canonical
+append plus later `trajectory_revision="RESEARCH_SETTLED"` settlement revisions
+written by `Trajectory.settle()` / `settle_many()`. Reads merge them
+latest-valid-revision-wins; identity mismatches and corrupt rows are skipped.
+
+- `revision != second execution`, `revision != second store`. No
+  `final_evidence.json`, `settled_experiments.json`, `optimizer_history.json`,
+  `research_result_store.json` or `final_outcome_cache` is created, and the
+  checkpoint is still not a metrics store.
+- Execution identity (id / expression / settings / fields / proposal /
+  submission fingerprint / lineage) is immutable across revisions; refusal is
+  fail-closed and audited as `SETTLEMENT_REVISION_REJECTED`.
+- Settlement revisions never touch the Alpha Feed cache, color metadata, quotas
+  or remote state; they add no scheduler and no second research-state owner.

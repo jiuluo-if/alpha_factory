@@ -560,3 +560,105 @@
 - `python main.py --state-dir tests/fixtures state doctor` → exit 0；`... state audit` → exit 0（offline fixtures，未触发网络）。
 - 只读 replay：`python scripts/replay_research_yield.py --compare-handoff` → exit 0，未写入 `.wqb_state`。
 - Git：commit `06eb956`（`fix：恢复跨进程 optimizer parent 证据并补齐 handoff 契约`）；`git push origin main` → `7d419a8..06eb956`；`git ls-remote origin refs/heads/main` = `06eb95646f1215efa8918131b531dc03481b3b74` = local HEAD。
+
+
+# 2026-09-11（第三阶段 Phase III）settled evidence durability 真实调查
+
+## §1 上一轮修复复核（只读，HEAD `43654c4`）
+
+- `wqb_agent/runtime_components.py` 现在构造 `Trajectory(path=<state_dir>/trajectory.jsonl, persist=True)`；`state.py` 仍是唯一 Trajectory owner。
+- `round_*.checkpoint.json` 仍只保存执行事实与恢复身份，未变成 metrics store；Alpha Feed 仍只做 priority hint；optimizer gate（`OptimizerWorkflow._parent_rejections`）字段要求未放宽。
+- 结论：上一轮修复成立，但只覆盖“首次 DONE append”，不覆盖“后续 settlement”。
+
+## §2 真实生产顺序（根因）
+
+- `Agent._record_live_result()`（`agent.py:955`）在 Simulation 返回时构造 `SearchOutcome` + `provisional_outcome`/`search_outcome`，随后 `agent.py:981 self.trajectory.add(exp)` 落盘。这是 **early DONE snapshot**。
+- 之后才发生 settlement：`Agent._settle_research_outcome()`（`agent.py:1280`）设置 `validation_report`、`validation_status`、`incremental_evidence`、`final_outcome`、`research_classification`、`research_evidence_bundle`，并调用 `trial_ledger.record_outcome_settled(...)` 与 `search_policy.replace_reward(...)`；`proposal_execution.py:152/832/891` 也不会再次 `trajectory.add`。
+- 因为 trajectory 是 append-only 且 `persist=True`，这些后结算字段只存在于内存对象；进程退出即丢失。重启后 `Trajectory.load()` 只能看到 provisional snapshot。
+- 结论：**SETTLED_EVIDENCE_NOT_PERSISTED**（不是 gate 过严，也不是 checkpoint / Alpha Feed 能补的缺口）。
+
+## §3 目标契约（本阶段实现方向）
+
+- 复用既有 Trajectory owner：为该 owner 增加 append-only **settlement revision**（同 `id` 的第二行，标记 `RESEARCH_SETTLED`），不新建 store（无 `final_evidence.json` 等）。
+- `add()` 语义不变：仍是首次 canonical append 与 exactly-once 去重；revision 不是第二次 execution。
+- 读路径由 owner 统一合并：`latest valid revision wins`，identity mismatch 与 corrupt row 都 fail-closed（保留最后一条有效证据）。
+
+## §4 已实现（settled evidence durability）
+
+- `wqb_agent/state.py`：新增 `TRAJECTORY_REVISION_KEY` / `RESEARCH_SETTLED_REVISION` /
+  `IDENTITY_FIELDS` / `same_execution_identity()`，以及窄接口 `Trajectory.settle()` 与
+  `settle_many()`（只对已存在的 canonical row 追加一份 `RESEARCH_SETTLED` revision）和定点读
+  `Trajectory.find_row()`。`add()` / `add_many()` 的首次 append 与 exactly-once 去重语义完全未改。
+- fail-closed：无 canonical row → `ValueError`；identity（id / round / hypothesis_id / expression /
+  settings / fields_used / datasets / candidate_id / proposal_id / submission_fingerprint /
+  submission_started_at / parent_expression / lineage_id / created_at）不一致 → `ValueError`；
+  同一 revision 幂等跳过。`Agent._settle_research_outcome()` 在结算末尾调用 `settle()`，被拒时记录
+  `SETTLEMENT_REVISION_REJECTED` 并打印，绝不静默。
+- 读路径由 owner 合并：`load()` 用 `_tail_lines(max_len * 4)` + `_merge_rows()`（latest valid
+  revision wins；corrupt row、identity mismatch 跳过），`find_completed_expressions()` 同样按同一
+  `id` 的 revision 覆盖并校验 identity。
+- 没有第二套 store：`.wqb_state` 仍只有 `trajectory.jsonl` 这一份 canonical 证据；checkpoint 未变
+  metrics store；Alpha Feed 未变 evidence owner；optimizer gate 未放宽。
+- 回归测试 `tests/test_settled_evidence_durability.py`：Test A（late FINAL 跨重启存活）、
+  Test B（identity 不可改 / 必须已落盘）、Test C（corrupt latest revision 保留最后有效证据）、
+  Test D（duplicate add 仍 exactly-once）、Test E（无 execution side effect）。
+
+## §5 Agent Optimization Decision 契约与 optimizer funnel（本阶段交付）
+
+- 新增 `wqb_agent/optimization_decision.py`：`OptimizationDecision`（parent_id / decision /
+  observed_evidence / economic_mechanism / change_type / changed_variable / expression /
+  expected_effect / falsification / direction / direction_transform / self_correlation_impact /
+  why_not_parameter_tuning）、`decision_rejections()`（DECISION_INVALID / PARENT_INVALID /
+  PARENT_IDENTITY_MISMATCH / DECISION_FIELDS_MISSING / PARAMETER_ONLY_CHANGE /
+  DIRECTION_ONLY_CHANGE / DECLARED_CHANGE_MULTIPLE_FIELDS / DECLARED_CHANGE_FIELD_AND_PARAMETER /
+  OVERFIT_EXPRESSION / SELF_CORRELATION_IMPACT_INVALID / OPERATOR_ILLEGAL）、
+  `parent_opportunity()`（7 类 hint）、`summarize_parent()`（有限 summary：机制 / 字段 / 5 项 metric /
+  failed+pending checks / self-correlation / validation / incremental / classification /
+  mechanism_state / opportunity）。Python 只做确定性校验，不生成经济机制、不挑 operator、不写 child
+  expression、不扫描参数。
+- `optimizer_workflow.py`：gate 拆成 evidence eligibility 与 Agent decision readiness 两阶段；funnel
+  新增 `evidence_eligible/rejected_parent_count`、`agent_reviewed_parent_count`、
+  `agent_decision_{child,validate,reroute,stop}_count`、`child_generated/done_count`、
+  `incremental_{pass,fail,unknown}_count`；`optimizer_conversions()` 给出 Agent Optimization Yield
+  （分母 0 → `None`，绝不 0.0）；`inspect_optimizer_parents()` 有限只读并按 opportunity 排序；
+  `generate_from_decisions()` 校验 decision 后复用唯一 `generate()` 路径；`optimization_eligibility_map()`
+  把 per-parent eligibility + Agent stage 交给 ResearchYield。
+- `research_api.py` / `agent.py`：Agent-facing facade `inspect_optimizer_parents()` 与
+  `propose_optimization()`；仍走 `OptimizerWorkflow → AlphaFactory → proposal contract`，不触发
+  Simulation / checkpoint 写入。
+- `research_yield.py`：funnel 区分 `DONE → evidence parent`（Python gate）与
+  `evidence parent → Agent decision`（`agent_reviewed_parents` / `agent_child_decisions`，新增
+  `evidence_parent_to_agent_review` / `agent_review_to_child_decision` conversions）；新增
+  `child_generation_bound()`，落实“没有 verified incremental PASS 就不再派生下一代”。
+
+## §6 Incremental Capability Audit（只读，§22-25）
+
+- `client.py` 只有 `GET /alphas/{id}`、`GET /alphas/{id}/aggregates`、
+  `GET /alphas/{id}/correlations/{kind}`（外加 user alphas / datafields / datasets / simulation /
+  progress）。**没有** PnL、daily-return 或 behavior-series 读取端点。
+- `pnl.py` 明确不实现 transport、拒绝把未知端点当 live PnL；`behavior.extract_behavior_series()`
+  只接受 `LIVE_VERIFIED` 序列，否则 `UNAVAILABLE`；`Agent._settle_incremental_evidence()` 因此总是
+  结算 `availability=UNAVAILABLE`；`doctor` 报告 `pnl_capability/incremental_capability
+  = UNAVAILABLE`。
+- 结论：平台当前**没有**合法行为序列能力，禁止用 Sharpe / fitness / returns delta 冒充 incremental
+  correlation evidence；continuation 得到 `NO_INCREMENTAL_CHILD_EVIDENCE`，并由
+  `child_generation_bound()` 有界化（一代 child → `BLOCKED`，不再无限派生后代）。
+- 边界测试：`tests/test_incremental_value.py::test_incremental_capability_audit_client_has_no_behavior_series`。
+
+## §7 验证结果（第三阶段 Phase III）
+
+- `python -m unittest discover -s tests`：**Ran 794 tests / OK**（本阶段新增 36 个）。
+  新增 `tests/test_optimization_decision.py`（24）、`tests/test_multi_generation_optimization.py`（2）、
+  `tests/test_settled_evidence_durability.py`（8）、`tests/test_architecture.py` Phase III 边界（4）、
+  `tests/test_research_yield.py` child-generation bound（5）、`tests/test_incremental_value.py` 能力审计（1）。
+- `python -m compileall -q wqb_agent scripts tests`：exit 0。
+- `python -m ruff check .`：All checks passed。
+- `python -m mypy`（CI 的 9 个 typed frontier 模块）：Success: no issues found。
+- `coverage erase && coverage run --branch -m unittest discover -s tests && coverage report`：
+  TOTAL branch-aware **79.3%**（`fail_under=76.0`，exit 0；基线 76.74%）。
+- `python main.py --state-dir tests/fixtures state doctor` / `state audit`：exit 0。
+- 多代验收：`tests/test_multi_generation_optimization.py` 证明 P0 settled → 重启 → Decision C1 →
+  proposal → C1 settled（`RESEARCH_SETTLED` revision 落盘）→ 再重启 → C1 仍是 legal parent →
+  Decision C2。不是手工写三条 trajectory。
+- 安全确认：未运行真实 Simulation / factory run / run-proposals；未提交 Alpha；未做远端 color 写入；
+  本阶段未写入 `.wqb_state`；checkpoint、quota 与 `SUBMIT_UNKNOWN` 语义未变。

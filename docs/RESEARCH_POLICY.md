@@ -149,3 +149,33 @@ downstream) → INCONCLUSIVE fallback.
   REROUTE/STOP; BLOCKED → WAIT/STOP without consuming new quota.
   `NO_INCREMENTAL_CHILD_EVIDENCE` is valid only after a real child
   opportunity, completed children, and a settled incremental verdict.
+
+# Agent optimization decision policy (2026-09-12)
+
+- A parent may become a CHILD only through an explicit Agent
+  `OptimizationDecision` (or the legacy `child_economic_hypothesis` adapter)
+  that passes the deterministic gate: complete fields (economic_mechanism,
+  change_type, changed_variable, expression, expected_effect, falsification,
+  why_not_parameter_tuning), parent identity match, one-change rule, no
+  parameter-only / direction-only / overfit / illegal-operator change, and a
+  valid self-correlation admission (HIGHER/BLOCK → reject; SIMILAR/UNKNOWN →
+  REVIEW, never ALLOW).
+- VALIDATE / REROUTE / STOP never derive a child proposal. They are explicit
+  Agent decisions recorded in the funnel instead of being silently dropped.
+- Optimization ranking is opportunity-based, not Sharpe-based: a parent with a
+  concrete, evidence-derived blocker (self-correlation / concentration /
+  sub-universe / turnover / robustness / semantic reroute) outranks
+  `NO_CLEAR_OPPORTUNITY`. These remain context hints, never automatic actions.
+- `DONE → evidence parent` and `evidence parent → Agent decision` are separate
+  funnel stages (`done_to_optimizer_parent` vs `evidence_parent_to_agent_review`);
+  an unavailable Agent stage is `None`, never 0.0, so "nobody reviewed" and "the
+  gate rejected everything" stay distinguishable.
+- Incremental capability: the platform exposes no PnL / daily-return / behavior
+  series, so incremental value stays `UNAVAILABLE`; Sharpe/fitness/returns deltas
+  must never be presented as incremental correlation evidence. Without a
+  verified incremental PASS, `child_generation_bound()` bounds the chain to one
+  child generation (`BLOCKED` / `NO_INCREMENTAL_CHILD_EVIDENCE`) instead of
+  deriving C2 → C3 → C4.
+- Settled FINAL evidence is what a restart rehydrates: the canonical
+  `RESEARCH_SETTLED` revision is what makes a previously completed parent
+  legally reviewable in a later process.

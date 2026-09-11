@@ -662,3 +662,35 @@
   Decision C2。不是手工写三条 trajectory。
 - 安全确认：未运行真实 Simulation / factory run / run-proposals；未提交 Alpha；未做远端 color 写入；
   本阶段未写入 `.wqb_state`；checkpoint、quota 与 `SUBMIT_UNKNOWN` 语义未变。
+
+## §8 完成度审计发现与修复（2026-09-12，Phase III 补充）
+
+- 审计方法：不用测试里的 fake factory，而是在**真实** `AlphaFactory` 上走
+  `OptimizerWorkflow.generate_from_decisions()` → `optimize_signal_proposals()`，再用生产同参数
+  `validate_proposal(strict_experiment=True, require_economic_integrity=True)` 复核。
+- 缺口 A（§20 provenance）：CHILD proposal 缺 `parent_id`、`economic_mechanism` 与正式
+  `optimization_decision`；机制只存在于 `operator_mapping` 文本里。生产 `config.json` 的
+  `agent.research_integrity=true` 会让这类提案在 preflight 报
+  `economic_mechanism 必须明确说明字段与收益机制`。修复：组装处携带
+  `parent_id` / `economic_mechanism` / `optimization_decision`，且不复制 parent metrics/checks
+  （指标仍从 canonical evidence 读取）。
+- 缺口 B（同义值断裂）：Agent 决策可以写 `change_type="neutralization_change"`、
+  `direction_transform="same"`，而 proposal contract 只接受 `CHILD_CHANGE_TYPES`
+  （`neutralization` 等）与 `{applied, reason}` 对象 → 真实 preflight 会拒绝
+  `Child/ROBUSTNESS 必须声明单一 change_type` 与 `direction_transform 必须说明是否转换方向及原因`。
+  修复：`decision_rejections()` 新增 `CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT` /
+  `DIRECTION_TRANSFORM_INVALID`（fail-closed，在 gate 拒绝而非留给 preflight）；
+  `OptimizationDecision.direction_transform` 复用 proposal contract 形态；
+  `AlphaFactory` 对 legacy `child_economic_hypothesis` 同样拒绝非法词，并保留 Agent 声明的
+  `changed_variable`。
+- 缺口 C（测试盲区）：workflow 级测试全部使用 `RecordingFactory` fake，真实组装路径只有
+  “拒绝”断言（`test_factory_boundaries.py`），没有被接受的 CHILD 提案断言，所以 A/B 两条断链
+  在 794 个测试全绿的情况下仍然存在。修复：新增真实 factory 端到端测试（decision 路径 +
+  legacy 路径 + `validate_proposal` 零问题），并把 `test_research_loop.py` /
+  `test_multi_generation_optimization.py` 的 fixture 改用契约词。
+- 结论：第三阶段交付的 optimizer 漏斗此前在真实 `research_integrity` 配置下无法产出可执行
+  CHILD 提案；修复后“合法 decision → 可追踪 proposal → preflight 通过”闭环成立。
+- 质量门：`Ran 797 tests / OK`（+3），compileall exit 0，Ruff All checks passed，
+  mypy 9 typed frontier Success，coverage branch-aware 79.3%（`fail_under=76.0`，exit 0）。
+- 安全确认：本轮仍只跑 unit fixtures 与 offline 校验；未运行真实 Simulation / run-proposals /
+  factory run，未提交 Alpha，未做远端 color 写入，未写 `.wqb_state`。

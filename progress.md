@@ -452,3 +452,20 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   `tests/test_incremental_value.py` 能力审计。
 - 约束确认：未运行真实 Simulation / factory run / run-proposals；未提交 Alpha；未做远端 color
   写入；本阶段未写入 `.wqb_state`；checkpoint、quota 与 `SUBMIT_UNKNOWN` 未变；研究保持 PAUSED。
+
+## 2026-09-12 Phase III 完成度审计：CHILD 提案溯源与契约一致性修复
+
+- 在真实 `AlphaFactory`（非测试 fake）上复现两条断链：(a) CHILD proposal 缺 `parent_id` /
+  `economic_mechanism` / `optimization_decision`；(b) Agent decision 可写 `*_change` 同义词与
+  字符串 `direction_transform`，而 proposal contract 只认 `CHILD_CHANGE_TYPES` 与
+  `{applied, reason}`。两者叠加使生产 `research_integrity=true` 下的 CHILD 提案必然在 preflight 被拒。
+- 修复：`alpha_factory.optimize_signal_proposals()` 组装 provenance（含 Agent 声明的
+  `changed_variable`，不复制 parent metrics/checks）并对 change_type / direction_transform
+  fail-closed；`optimization_decision.py` 复用同一契约，新增
+  `CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT` 与 `DIRECTION_TRANSFORM_INVALID`。
+- 测试：新增真实 factory 端到端断言（decision → proposal → `validate_proposal` 零问题；legacy
+  路径同样保留 provenance），并把 research_loop / multi-generation fixture 的 change_type 改为
+  契约词。`Ran 797 tests / OK`；compileall exit 0；ruff All checks passed；mypy 9 frontier
+  Success；coverage branch-aware 79.3%（`fail_under=76.0`）。
+- 约束确认：未运行真实 Simulation / run-proposals / factory run；未提交 Alpha；未做远端 color
+  写入；未写 `.wqb_state`；研究保持 PAUSED。

@@ -160,6 +160,14 @@ downstream) → INCONCLUSIVE fallback.
   parameter-only / direction-only / overfit / illegal-operator change, and a
   valid self-correlation admission (HIGHER/BLOCK → reject; SIMILAR/UNKNOWN →
   REVIEW, never ALLOW).
+- A CHILD proposal keeps parent provenance (`parent_id`, `parent_expression`,
+  `lineage_id`, `economic_mechanism`, the formal `optimization_decision`) and
+  never copies parent metrics/checks, which stay in canonical evidence. The
+  decision reuses the existing proposal contract vocabulary: `change_type` must
+  be in `CHILD_CHANGE_TYPES` and `direction_transform` must be the
+  `{applied, reason}` object. A synonym or malformed transform is rejected in
+  the gate (`CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT` /
+  `DIRECTION_TRANSFORM_INVALID`) instead of being deferred to preflight.
 - VALIDATE / REROUTE / STOP never derive a child proposal. They are explicit
   Agent decisions recorded in the funnel instead of being silently dropped.
 - Optimization ranking is opportunity-based, not Sharpe-based: a parent with a

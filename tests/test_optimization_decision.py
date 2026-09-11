@@ -10,6 +10,7 @@ self-correlation admission contract.
 import unittest
 from pathlib import Path
 
+from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.optimization_decision import (
     CHILD_REQUIRED_TEXT_FIELDS,
     OPPORTUNITY_CATEGORIES,
@@ -25,6 +26,7 @@ from wqb_agent.optimizer_workflow import (
     optimization_eligibility_map,
     optimizer_conversions,
 )
+from wqb_agent.proposal_contract import validate_proposal
 from wqb_agent.research_yield import build_research_yield
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "wqb_agent"
@@ -75,13 +77,16 @@ def child_decision(parent_id, *, expression=CHILD_EXPRESSION, **overrides):
         "decision": "CHILD",
         "observed_evidence": "父代子域内表现弱于整体",
         "economic_mechanism": MECHANISM,
-        "change_type": "neutralization_change",
+        "change_type": "neutralization",
         "changed_variable": "neut",
         "expression": expression,
         "expected_effect": "lower sub-universe gap",
         "falsification": "若子域检查转差则机制不成立",
         "direction": "long",
-        "direction_transform": "same",
+        "direction_transform": {
+            "applied": False,
+            "reason": "沿用 parent 方向，不把方向翻转当作新机制",
+        },
         "self_correlation_impact": IMPACT,
         "why_not_parameter_tuning": "改变可比组而非窗口/权重",
     }
@@ -200,6 +205,19 @@ class TestOptimizationDecisionContract(unittest.TestCase):
         )
         reasons = decision_rejections(disguised, tuned_parent)
         self.assertIn("DECLARED_CHANGE_FIELD_AND_PARAMETER", reasons)
+
+    def test_change_type_and_direction_transform_must_match_the_proposal_contract(self):
+        """决策层必须复用既有 proposal contract，而不是自创同义取值。"""
+        wrong_vocabulary = child_decision("p1", change_type="neutralization_change")
+        self.assertEqual(
+            decision_rejections(wrong_vocabulary, self.parent),
+            ["CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT"],
+        )
+        bad_transform = child_decision("p1", direction_transform="same")
+        self.assertEqual(
+            decision_rejections(bad_transform, self.parent),
+            ["DIRECTION_TRANSFORM_INVALID"],
+        )
 
     def test_illegal_operator_and_invalid_self_correlation_are_rejected(self):
         decision = child_decision("p1")
@@ -423,6 +441,67 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         )
         self.assertEqual(reference, {"operators": ["rank", "group_neutralize"]})
         self.assertEqual(kwargs["max_candidates"], 2)
+
+    def test_real_factory_child_proposal_keeps_parent_provenance(self):
+        """真实 AlphaFactory 组装必须能追回 parent，且不复制 parent metrics。"""
+        field_profile = {
+            "id": "field_a",
+            "dataset": "fundamental6",
+            "type": "MATRIX",
+            "description": "已核验字段",
+            "semantic_status": "KNOWN",
+        }
+        parent = parent_record(
+            "p-parent",
+            field_analysis={"field_a": {
+                "semantic": "已核验字段", "coverage": None,
+                "frequency": None, "data_type": "MATRIX",
+            }},
+        )
+        flow = workflow(FakeTrajectory([parent]), factory=AlphaFactory())
+        result = flow.generate_from_decisions(
+            [child_decision("p-parent")], max_candidates=1
+        )
+
+        self.assertEqual(len(result["proposals"]), 1)
+        proposal = result["proposals"][0]
+        self.assertEqual(proposal["parent_id"], "p-parent")
+        self.assertEqual(proposal["parent_expression"], PARENT_EXPRESSION)
+        self.assertEqual(proposal["lineage_id"], "h-1")
+        self.assertEqual(proposal["economic_mechanism"], MECHANISM)
+        self.assertEqual(proposal["change_type"], "neutralization")
+        self.assertEqual(proposal["changed_variable"], "neut")
+        self.assertTrue(proposal["falsification"].strip())
+        self.assertEqual(proposal["optimization_decision"]["decision"], "CHILD")
+        self.assertEqual(proposal["optimization_decision"]["parent_id"], "p-parent")
+        for copied in ("metrics", "checks", "self_correlation", "status", "round"):
+            self.assertNotIn(copied, proposal)
+
+        ok, problems = validate_proposal(
+            proposal,
+            discovered_fields=[field_profile],
+            strict_experiment=True,
+            operator_reference={"operators": ["rank", "group_neutralize"]},
+            require_economic_integrity=True,
+        )
+        self.assertEqual(problems, [])
+        self.assertTrue(ok)
+
+    def test_legacy_child_hypothesis_still_carries_parent_identity(self):
+        """无正式 decision 时也必须保留 parent 身份与新机制。"""
+        parent = parent_record("p-legacy", child_economic_hypothesis={
+            "expression": CHILD_EXPRESSION,
+            "economic_mechanism": MECHANISM,
+            "change_type": "neutralization",
+        })
+        flow = workflow(FakeTrajectory([parent]), factory=AlphaFactory())
+        proposals = flow.generate([parent], max_candidates=1)
+
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["parent_id"], "p-legacy")
+        self.assertEqual(proposals[0]["economic_mechanism"], MECHANISM)
+        self.assertNotIn("optimization_decision", proposals[0])
+        self.assertNotIn("metrics", proposals[0])
 
     def test_valid_reroute_and_stop_decisions_generate_no_child(self):
         parent = parent_record("p1")

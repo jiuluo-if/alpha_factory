@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from .expression import analyze_expression, expression_field_identifiers
 from .metrics import check_pass
-from .proposal_contract import validate_self_correlation_impact
+from .proposal_contract import CHILD_CHANGE_TYPES, validate_self_correlation_impact
 from .research_guard import (
     is_direction_only_change,
     overfit_expression_reason,
@@ -60,6 +60,13 @@ def _text(value):
     return value.strip() if isinstance(value, str) else ""
 
 
+def _transform(value):
+    """direction_transform 复用 proposal contract 的 {applied, reason} 形态。"""
+    if isinstance(value, Mapping):
+        return dict(value)
+    return _text(value)
+
+
 @dataclass(frozen=True)
 class OptimizationDecision:
     """Agent 已审阅一个 evidence-eligible parent 之后的显式优化决策。"""
@@ -74,7 +81,7 @@ class OptimizationDecision:
     expected_effect: str = ""
     falsification: str = ""
     direction: str = ""
-    direction_transform: str = ""
+    direction_transform: Mapping = field(default_factory=dict)
     self_correlation_impact: Mapping = field(default_factory=dict)
     why_not_parameter_tuning: str = ""
 
@@ -114,7 +121,11 @@ class OptimizationDecision:
             "expected_effect": self.expected_effect,
             "falsification": self.falsification,
             "direction": self.direction,
-            "direction_transform": self.direction_transform,
+            "direction_transform": (
+                dict(self.direction_transform)
+                if isinstance(self.direction_transform, Mapping)
+                else self.direction_transform
+            ),
             "self_correlation_impact": dict(self.self_correlation_impact or {}),
             "why_not_parameter_tuning": self.why_not_parameter_tuning,
         }
@@ -134,7 +145,7 @@ class OptimizationDecision:
             expected_effect=_text(child.get("expected_effect")),
             falsification=_text(child.get("falsification")),
             direction=_text(child.get("direction")),
-            direction_transform=_text(child.get("direction_transform")),
+            direction_transform=_transform(child.get("direction_transform")),
             self_correlation_impact=dict(child.get("self_correlation_impact") or {}),
             why_not_parameter_tuning=_text(child.get("why_not_parameter_tuning")),
         )
@@ -154,7 +165,7 @@ class OptimizationDecision:
             expected_effect=_text(payload.get("expected_effect")),
             falsification=_text(payload.get("falsification")),
             direction=_text(payload.get("direction")),
-            direction_transform=_text(payload.get("direction_transform")),
+            direction_transform=_transform(payload.get("direction_transform")),
             self_correlation_impact=dict(payload.get("self_correlation_impact") or {}),
             why_not_parameter_tuning=_text(payload.get("why_not_parameter_tuning")),
         )
@@ -205,6 +216,14 @@ def decision_rejections(decision, parent, *, allowed_operators=None):
         return reasons
     if decision.missing_fields():
         reasons.append("DECISION_FIELDS_MISSING")
+    change_type = _text(decision.change_type)
+    if change_type and change_type not in CHILD_CHANGE_TYPES:
+        reasons.append("CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT")
+    transform = decision.direction_transform
+    if (not isinstance(transform, Mapping)
+            or not isinstance(transform.get("applied"), bool)
+            or not _text(transform.get("reason"))):
+        reasons.append("DIRECTION_TRANSFORM_INVALID")
     parent_expression = _text(record.get("expression"))
     child_expression = _text(decision.expression)
     if parent_expression and child_expression:

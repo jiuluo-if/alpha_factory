@@ -68,7 +68,7 @@ class TestResearchLoopIntegration(unittest.TestCase):
         parent.child_economic_hypothesis = {
             "expression": "rank(group_neutralize(close_a, SUBINDUSTRY))",
             "economic_mechanism": "group-relative price information",
-            "change_type": "group_neutralization",
+            "change_type": "neutralization",
             "experiment_question": question or "does group normalization preserve the effect?",
         }
         return parent

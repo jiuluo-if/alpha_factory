@@ -341,3 +341,14 @@ bounded, read-only summary ordered by optimization opportunity, and
 `generate_from_decisions()` reuses the single CHILD generation path.
 `research_api.py` and `Agent` expose only thin facades; nothing bypasses
 `OptimizerWorkflow → AlphaFactory → proposal contract`.
+
+A CHILD proposal keeps its parent provenance: `AlphaFactory` carries
+`parent_id`, `parent_expression`, `lineage_id`, the Agent-authored
+`economic_mechanism` and the formal `optimization_decision` into the proposal,
+while parent metrics/checks stay in canonical evidence and are never copied.
+The decision reuses the existing proposal contract instead of inventing
+synonyms: `change_type` must be one of `CHILD_CHANGE_TYPES` and
+`direction_transform` must be the `{applied, reason}` object, so an illegal
+decision is rejected inside the gate (`CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT`,
+`DIRECTION_TRANSFORM_INVALID`) instead of producing a proposal that the
+production preflight (`research_integrity`) would refuse.

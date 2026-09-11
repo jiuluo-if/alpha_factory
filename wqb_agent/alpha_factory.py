@@ -20,7 +20,7 @@ from .diversity import (
     semantic_mechanism_key_from_traits,
 )
 from .expression import analyze_expression, canonical_expression
-from .proposal_contract import FACTORY_BATCH_SIZE
+from .proposal_contract import CHILD_CHANGE_TYPES, FACTORY_BATCH_SIZE
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 
 
@@ -1775,6 +1775,16 @@ class AlphaFactory:
                 continue
             if overfit_expression_reason(child_expression):
                 continue
+            # 提案契约只接受既有 change_type 词表与 {applied, reason} 方向结构：
+            # 非法声明在组装处 fail-closed，不产出必然被 preflight 拒绝的 child。
+            if child_change not in CHILD_CHANGE_TYPES:
+                continue
+            child_transform = child.get("direction_transform")
+            if child_transform is not None and not isinstance(child_transform, dict):
+                continue
+            child_changed_variable = child.get("changed_variable")
+            if not isinstance(child_changed_variable, str) or not child_changed_variable.strip():
+                child_changed_variable = child_change
             variants = ((child_change, child_expression, child_mechanism),)
             for change_type, expression, rationale in variants:
                 if len(out) >= limit:
@@ -1789,6 +1799,7 @@ class AlphaFactory:
                 proposal.update({
                     "expression": expression,
                     "operator_mapping": rationale,
+                    "economic_mechanism": child_mechanism,
                     "operator_evidence": {
                         "sha256": operator_reference.get("sha256"),
                         "operators": actual_ops,
@@ -1806,7 +1817,8 @@ class AlphaFactory:
                     "experiment_stage": "CHILD",
                     "change_type": change_type,
                     "parent_expression": base,
-                    "changed_variable": change_type,
+                    "parent_id": parent.get("id") or parent.get("proposal_id"),
+                    "changed_variable": child_changed_variable,
                     "research_role": "EXPLOIT",
                     "lineage_id": parent.get("lineage_id") or parent.get("hypothesis_id"),
                     "template_id": f"auto_opt_{change_type}",
@@ -1822,13 +1834,10 @@ class AlphaFactory:
                         "falsification",
                         "若独立样本、健康检查或自相关证据恶化，则关闭该优化分支。",
                     ),
-                    "direction_transform": child.get(
-                        "direction_transform",
-                        {
-                            "applied": False,
-                            "reason": "沿用 parent 的方向，不把方向翻转当作新机制。",
-                        },
-                    ),
+                    "direction_transform": child_transform or {
+                        "applied": False,
+                        "reason": "沿用 parent 的方向，不把方向翻转当作新机制。",
+                    },
                     "self_correlation_impact": child.get(
                         "self_correlation_impact",
                         {
@@ -1839,6 +1848,9 @@ class AlphaFactory:
                         },
                     ),
                 })
+                decision_payload = parent.get("optimization_decision")
+                if isinstance(decision_payload, dict) and decision_payload:
+                    proposal["optimization_decision"] = dict(decision_payload)
                 proposal["proposal_origin"] = "agent_optimizer"
                 proposal["research_layer"] = "optimization"
                 proposal["optimization_source"] = parent.get(

@@ -113,13 +113,16 @@ class TestMultiGenerationOptimization(unittest.TestCase):
             decision="CHILD",
             observed_evidence="父代子域内表现弱于整体",
             economic_mechanism=MECHANISM,
-            change_type="neutralization_change",
+            change_type="neutralization",
             changed_variable="neut",
             expression=expression,
             expected_effect="lower sub-universe gap",
             falsification="若子域检查转差则机制不成立",
             direction="long",
-            direction_transform="same",
+            direction_transform={
+                "applied": False,
+                "reason": "沿用 parent 方向，不把方向翻转当作新机制",
+            },
             self_correlation_impact=IMPACT,
             why_not_parameter_tuning="改变可比组而非窗口/权重",
         )
@@ -161,7 +164,7 @@ class TestMultiGenerationOptimization(unittest.TestCase):
         c1 = self.experiment(
             "e1", decision_c1.expression,
             parent_expression=p0.expression, lineage_id="lin-1",
-            change_type="neutralization_change",
+            change_type="neutralization",
             child_economic_hypothesis=decision_c1.to_child_hypothesis(),
         )
         agent1.trajectory.add(c1)

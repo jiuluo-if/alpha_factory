@@ -317,6 +317,16 @@ class Agent:
         """兼容 facade：返回不含证据细节的优化 gate 计数。"""
         return self.optimizer_workflow.gate_report(parents)
 
+    def inspect_optimizer_parents(self, limit=8):
+        """Agent-facing：有限、只读的 evidence-eligible parent summaries。"""
+        return self.optimizer_workflow.inspect_optimizer_parents(limit=limit)
+
+    def propose_optimization(self, decisions, *, max_candidates=4):
+        """Agent-facing：校验 OptimizationDecision 后走唯一 CHILD 生成路径。"""
+        return self.optimizer_workflow.generate_from_decisions(
+            decisions, max_candidates=max_candidates
+        )
+
     def refresh_remote_alpha_feed(self, *, limit=100):
         """兼容 facade：执行 Alpha Feed 的只读同步。"""
         return self.alpha_feed_workflow.refresh(limit=limit)
@@ -1328,6 +1338,18 @@ class Agent:
             self.search_policy.replace_reward(experiment, final.get("reward"))
         except (TypeError, ValueError):
             pass
+        # Persist the settled research evidence as a legal trajectory revision
+        # so a later process rehydrates FINAL evidence instead of the early DONE
+        # snapshot.  Refusal is fail-closed and audited, never silent.
+        try:
+            self.trajectory.settle(experiment)
+        except ValueError as exc:
+            self._record_trial_phase(
+                experiment, "settlement_revision_rejected",
+                outcome="REJECTED", reason=str(exc),
+                reason_code="SETTLEMENT_REVISION_REJECTED",
+            )
+            print(f"[SETTLEMENT] revision rejected id={experiment.id}: {exc}")
         return final
 
     def _settle_incremental_evidence(self, experiment):

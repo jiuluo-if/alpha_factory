@@ -23,6 +23,32 @@ UNRESOLVED_STATUSES = ACTIVE_EXECUTION_STATUSES | UNKNOWN_STATUSES
 RECOVERABLE_STATUSES = ACTIVE_EXECUTION_STATUSES | frozenset({"UNKNOWN"})
 TERMINAL_STATUSES = frozenset({"DONE", "FAILED", "SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"})
 
+# Append-only trajectory revision marker.  The canonical first append keeps
+# execution identity; a later ``RESEARCH_SETTLED`` row re-persists the settled
+# research evidence for the same Experiment.  It is not a second execution.
+TRAJECTORY_REVISION_KEY = "trajectory_revision"
+RESEARCH_SETTLED_REVISION = "RESEARCH_SETTLED"
+
+# Execution identity is immutable: a settlement revision may change the later
+# research evidence but never what was actually executed.
+IDENTITY_FIELDS = (
+    "id", "round", "hypothesis_id", "expression", "settings", "fields_used",
+    "datasets", "candidate_id", "proposal_id", "submission_fingerprint",
+    "submission_started_at", "parent_expression", "lineage_id", "created_at",
+)
+
+# One Experiment occupies a bounded number of rows in the append-only file
+# (canonical first append plus settlement revisions), so a restart only needs
+# to read enough tail lines to reconstruct the recent in-memory window.
+_LOAD_LINES_PER_EXPERIMENT = 4
+
+
+def same_execution_identity(left, right):
+    """True when two trajectory rows describe the same executed Experiment."""
+    return {key: left.get(key) for key in IDENTITY_FIELDS} == {
+        key: right.get(key) for key in IDENTITY_FIELDS
+    }
+
 def dataset_ref(value):
     """数据集条目归一化为字符串 id。
 
@@ -228,16 +254,75 @@ class Trajectory:
         self._append_batch_scope = None
         self._append_batch_known = None
 
+    def settle(self, experiment):
+        """Append one legal settlement revision for an appended Experiment.
+
+        Returns ``False`` when the identical revision is already persisted.
+        """
+        return bool(self.settle_many([experiment]))
+
+    def settle_many(self, experiments):
+        """Persist later-settled research evidence as reviewable revisions.
+
+        The canonical first append keeps execution identity; this only
+        re-persists later-aggregated evidence (validation report, incremental
+        evidence, final outcome, research classification) under the same
+        ``id``.  It never creates a second Simulation, a second store or a new
+        execution identity.  A missing canonical row or an attempted identity
+        change is refused (fail-closed) instead of silently overwriting
+        already-executed facts.
+        """
+        if not self.path or not self.persist:
+            return []
+        pending = [
+            item for item in (experiments or ()) if getattr(item, "id", None)
+        ]
+        if not pending:
+            return []
+        candidate_ids = {item.id for item in pending}
+        references = {}
+        latest = {}
+        for row in self.iter_rows() or ():
+            row_id = row.get("id")
+            if row_id not in candidate_ids:
+                continue
+            if row_id not in references:
+                references[row_id] = row
+            latest[row_id] = row
+        settled = []
+        for experiment in pending:
+            reference = references.get(experiment.id)
+            if reference is None:
+                raise ValueError(
+                    "settlement revision requires a persisted Experiment: "
+                    f"{experiment.id}"
+                )
+            row = experiment.to_dict()
+            if not same_execution_identity(reference, row):
+                raise ValueError(
+                    "settlement revision cannot change execution identity: "
+                    f"{experiment.id}"
+                )
+            row[TRAJECTORY_REVISION_KEY] = RESEARCH_SETTLED_REVISION
+            if latest.get(experiment.id) == row:
+                continue
+            settled.append(experiment)
+        self._append_jsonl_many(settled, revision=RESEARCH_SETTLED_REVISION)
+        return settled
+
     def _append_jsonl(self, experiment):
         self._append_jsonl_many([experiment])
 
-    def _append_jsonl_many(self, experiments):
+    def _append_jsonl_many(self, experiments, revision=None):
         """Append a batch with one flush/fsync while preserving JSONL order."""
         if not experiments:
             return
         with open(self.path, "a", encoding="utf-8") as f:
             for experiment in experiments:
-                f.write(json.dumps(experiment.to_dict(), ensure_ascii=False) + "\n")
+                row = experiment.to_dict()
+                if revision:
+                    row[TRAJECTORY_REVISION_KEY] = revision
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
 
@@ -316,6 +401,28 @@ class Trajectory:
         target = canonical_expression(expression)
         return self.find_completed_expressions([target]).get(target)
 
+    def find_row(self, experiment_id):
+        """Return the latest valid canonical row for one experiment identity.
+
+        Bounded streaming pass that keeps only the most recent legal revision
+        for the requested ``id``/``proposal_id``; used by agent-facing reads so
+        they never surface an early DONE snapshot over later settled evidence.
+        """
+        if not self.persist or not self.path or not os.path.exists(self.path):
+            return None
+        target = str(experiment_id)
+        reference = None
+        latest = None
+        for row in self.iter_rows() or ():
+            if target not in (str(row.get("id")), str(row.get("proposal_id"))):
+                continue
+            if reference is not None and not same_execution_identity(reference, row):
+                continue
+            if reference is None:
+                reference = row
+            latest = row
+        return latest
+
     def find_completed_expressions(self, expressions):
         """Resolve several old parents with one streaming history pass.
 
@@ -335,6 +442,7 @@ class Trajectory:
             return {}
         pending = targets - self._completed_expression_cache.keys()
         found = {}
+        identities = {}
         if pending:
             try:
                 with open(self.path, encoding="utf-8") as handle:
@@ -348,6 +456,13 @@ class Trajectory:
                                 continue
                             if row.get("status") != "DONE" or not row.get("metrics"):
                                 continue
+                            row_id = row.get("id")
+                            reference = identities.get(row_id)
+                            if reference is not None and not same_execution_identity(
+                                reference, row
+                            ):
+                                continue
+                            identities[row_id] = row
                             found[target] = Experiment.from_dict(row)
                         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
                             continue
@@ -369,23 +484,52 @@ class Trajectory:
         }
 
     def load(self):
-        """Load the optional durable trajectory when persistence is enabled."""
+        """Load the durable trajectory and merge its append-only revisions.
+
+        One Experiment can occupy several rows: the canonical first append plus
+        later settlement revisions (``RESEARCH_SETTLED``).  The owner merges
+        them into the canonical current view so ``experiments`` /
+        ``find_completed_expression`` never surface an early DONE snapshot over
+        later settled evidence.  Only valid rows count, and a revision whose
+        execution identity contradicts the first append is ignored, so the last
+        valid evidence survives a corrupt tail.
+        """
         if not self.persist:
             return self
         if self.path and os.path.exists(self.path):
-            loaded = []
-            for line in self._tail_lines(self.max_len):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    loaded.append(Experiment.from_dict(json.loads(line)))
-                except (ValueError, KeyError, TypeError):
-                    continue
-            self.experiments = loaded[-self.max_len:]
+            merged = self._merge_rows(self._tail_lines(
+                self.max_len * _LOAD_LINES_PER_EXPERIMENT
+            ))
+            self.experiments = merged[-self.max_len:]
             self._recent_ids = {e.id for e in self.experiments}
             self._completed_expression_cache.clear()
         return self
+
+    def _merge_rows(self, lines):
+        """Merge append-only rows into the canonical current Experiment view."""
+        merged = {}
+        for line in lines or ():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            try:
+                experiment = Experiment.from_dict(row)
+            except (ValueError, KeyError, TypeError):
+                continue
+            previous = merged.get(experiment.id)
+            if previous is not None and not same_execution_identity(
+                previous.to_dict(), experiment.to_dict()
+            ):
+                continue
+            merged.pop(experiment.id, None)
+            merged[experiment.id] = experiment
+        return list(merged.values())
 
     def _tail_lines(self, n):
         """Read the last up-to-``n`` lines under a hard byte ceiling.

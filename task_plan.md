@@ -14,7 +14,7 @@
 - [x] 真实多代 restart 验收测试（P0 settled → 重启 → C1 proposal → C1 settled → 重启 → C2）
 - [x] 质量门：`794 tests OK`、compileall、Ruff、mypy 9 frontier、coverage branch-aware 79.3%（`fail_under=76.0`）、offline doctor/audit exit 0
 - [x] 更新 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）与 findings/progress/task_plan
-- [ ] 经用户授权后 commit 并 push，核对 local/remote SHA（`git ls-remote`）
+- [x] 经用户授权后 commit 并 push 三笔（`d24368f` / `d81f896` / `5c34cd7`），`git ls-remote` 核对远端 SHA 与本地 HEAD 一致
 
 ## 2026-09-11（completed）ResearchYield 派生研究产出（PAUSED/DISARMED 只读）
 

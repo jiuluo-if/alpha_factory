@@ -51,3 +51,17 @@ Feasibility diagnostics are control-plane audit metadata only. They contain coun
 # Feed freshness and heartbeat (2026-09-10)
 
 The existing `.alpha_feed_cache/weekly.json` remains the only Feed cache. Its `updated_at`/`expires_at` support a read-only freshness view; refresh attempts and failures are transient runtime metadata and do not replace the last successful timestamp. Heartbeat events are process-local and transient: no `heartbeat.jsonl`, metrics sidecar, checkpoint field, trajectory row, quota record, or separate scheduler is created.
+
+
+# ResearchYield projection (2026-09-11)
+
+ResearchYield adds no new file and no new state owner. It is a derived
+in-memory / report projection over existing evidence (checkpoint experiments,
+SearchOutcome, optimizer handoff diagnostics, incremental verdicts). If route
+policy ever needs cross-restart control metadata, only a minimal per-family
+row may be stored in the existing `factory_session.json` envelope:
+`mechanism_family`, `evaluated_count`, `outcome_state`, `stop_reason`.
+SearchOutcome lists, metrics, checks bodies, Simulation payloads and reward
+history replicas are forbidden in any ResearchYield persistence. Lightweight
+cloud metadata (e.g. Alpha Feed rows without expression/template/fields) is
+filtered out at funnel construction and can never become yield evidence.

@@ -106,6 +106,7 @@ class TestArchitectureBoundaries(unittest.TestCase):
         for module_name in (
             "alpha_factory", "expression", "metrics", "mutations",
             "proposal_contract", "research_guard", "factory_runner",
+            "research_yield",
         ):
             imports = _direct_imports(module_name)
             overlap = sorted(imports & banned)
@@ -113,6 +114,21 @@ class TestArchitectureBoundaries(unittest.TestCase):
                 overlap, [],
                 f"{module_name}.py 不应直接依赖网络/持久化模块: {overlap}",
             )
+
+    def test_research_yield_has_no_simulation_or_feed_path(self):
+        imports = _direct_imports("research_yield")
+        banned = {
+            ".client", "wqb_agent.client", ".state", "wqb_agent.state",
+            ".simulator", "wqb_agent.simulator", ".agent", "wqb_agent.agent",
+            ".alpha_feed_workflow", "wqb_agent.alpha_feed_workflow",
+            ".proposal_execution", "wqb_agent.proposal_execution",
+        }
+        self.assertEqual(sorted(imports & banned), [])
+        source = Path(PACKAGE_ROOT) / "research_yield.py"
+        content = source.read_text(encoding="utf-8")
+        self.assertNotIn("submit_simulation(", content)
+        self.assertNotIn("run_proposals", content)
+        self.assertNotIn("requests.", content)
 
     def test_validation_does_not_create_a_second_simulation_path(self):
         imports = _direct_imports("validation")

@@ -116,3 +116,36 @@ duplicates, or parameter variants.
 - 预算优先级只在 hard-gated 候选中派生，顺序固定为 HIGH → NORMAL → LOW；饱和计数来自当前候选池，属于本轮审计，不是新的研究状态。
 - route 负责判断是否换路线，budget 负责选择槽位。若 selected batch 因真实候选不足无法满足 exact-100，runner 使用实际 selected batch 的 expression/semantic/dataset fingerprints 进入既有 bounded route/no-gain 控制；重复无信息时停止，不以等待代替换路，也不降低语义门槛。
 - shortage 分支不调用 `run_proposals()`、不预留 quota、不创建 checkpoint；只有完整 hard-gated exact batch 才进入既有生产执行链。
+
+
+# ResearchYield family outcome policy (2026-09-11)
+
+`research_yield.family_state()` is the deterministic decision table for one
+mechanism family. Order of evaluation: EXHAUSTED (explicit route/semantic
+closure evidence) → BLOCKED (infra dominated) → INCONCLUSIVE (unresolved
+share) → INCONCLUSIVE (below minimum sample) → BLOCKED (handoff/evidence gap:
+DONE ≥ min but optimizer gate unavailable, or evidence-gap rejections
+dominate) → INCONCLUSIVE (LEGACY-only) → INCONCLUSIVE (FINAL insufficient) →
+PROMISING (downstream progress) → LOW_INFORMATION (ample evidence, zero
+downstream) → INCONCLUSIVE fallback.
+
+- Evidence quality reuses SearchOutcome semantics: FINAL may drive an outcome
+  decision; PROVISIONAL observes trends but cannot hard-STOP; LEGACY is
+  historical visibility only and caps a family at INCONCLUSIVE.
+- Infrastructure failure (AUTH, rate limit, timeout, transport, platform
+  unavailable, UNKNOWN, SUBMIT_UNKNOWN, unresolved progress URL, incomplete
+  checkpoint) is counted separately from research failure and never implies
+  the mechanism carries no information.
+- Conversions use explicit denominators: denominator 0 → `None`
+  (`NO_DENOMINATOR`); evidence unavailable → `None`
+  (`DENOMINATOR_UNAVAILABLE`); only an occurred-but-zero stage is `0.0`.
+- Minimum sample guard: only two typed knobs are added,
+  `research_yield_min_evaluated` (default 40) and `research_yield_window`
+  (default 200); LOW_INFORMATION / PROMISING / outcome STOP all require the
+  sample guard.
+- Continuation is a pure derived mapping for the existing route policy:
+  PROMISING → CONTINUE; INCONCLUSIVE → OBSERVE; LOW_INFORMATION → bounded
+  REROUTE, then STOP `LOW_RESEARCH_YIELD`; EXHAUSTED → existing exhaustion
+  REROUTE/STOP; BLOCKED → WAIT/STOP without consuming new quota.
+  `NO_INCREMENTAL_CHILD_EVIDENCE` is valid only after a real child
+  opportunity, completed children, and a settled incremental verdict.

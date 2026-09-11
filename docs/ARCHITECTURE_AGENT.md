@@ -211,6 +211,7 @@ Runtime identity is tested: Agent, ProposalExecutionWorkflow and OptimizerWorkfl
 ### Frozen safety invariants
 
 - `SUBMIT_UNKNOWN` never triggers an automatic resend; a known progress URL may only be polled read-only.
+- The user-authorized skip path (`recovery skip-submit-unknown`) accepts `SUBMIT_UNKNOWN` and progress-URL-less `UNKNOWN` (the same ambiguous-POST evidence gap); a progress-URL-bearing `UNKNOWN` stays read-only reconcilable and is never skippable, and `PENDING`/terminal states are rejected. Owner: `ProposalExecutionWorkflow.skip_submit_unknown_authorized`; audit row in `stale_skip_log.jsonl` with a distinct per-class `reason`.
 - Every Simulation POST checks the shared rate-limit gate before acquiring the spacing slot, again after slot contention/spacing, and once more immediately before transport (including after authentication).
 - The same complete checkpoint is never redispatched; checkpoint persistence has one owner, `CheckpointStore`.
 - `SuggestionWorkflow` and `OptimizerWorkflow` cannot submit Simulation; Optimizer cannot invent `child_economic_hypothesis`, scan parameters, refresh Alpha Feed or write trajectory.
@@ -263,3 +264,29 @@ batch.
 - `select_budget_candidates()` 只对 hard-gated candidate pool 做确定性排序：优先级顺序为 HIGH、NORMAL、LOW；optimization 按 lineage 交错，exploration 按 semantic mechanism 交错，并在既有 `factory_batch_stats` 中记录 derived audit。
 - 候选池饱和是本轮派生审计，不建立第二套 budget state；explicit UNKNOWN 仍不能填充 exact batch。Factory 早退会清空 transient `last_budget_audit`，避免跨轮读取旧审计。
 - 当实际 selected batch 少于 exact-100 且存在 budget shortage audit 时，runner 将 selected-batch fingerprints 送入既有 bounded route/no-gain 控制面；重复无信息最终 `STOP_BUDGET_SHORTAGE`，不预留 quota、不调用 `run_proposals`。checkpoint、quota、Simulation POST owner 不变。
+
+
+# ResearchYield derived control-plane evidence (2026-09-11)
+
+`wqb_agent/research_yield.py` is a derived control-plane projection, not a new
+state owner. It aggregates existing Experiment / SearchOutcome / optimizer
+handoff / incremental evidence per stable `semantic_mechanism_key` family into
+a lightweight funnel (counts only) and maps each family onto one of five
+deterministic outcomes: INCONCLUSIVE / PROMISING / LOW_INFORMATION / EXHAUSTED
+/ BLOCKED.
+
+- One-way dependency: `research_yield` imports only `diversity` (mechanism
+  key). It never imports `client` / `state` / `simulator` / `agent` /
+  `alpha_feed_workflow` / `proposal_execution`, never calls
+  `submit_simulation`, `run_proposals` or `settle_search_outcome`, and owns no
+  file, checkpoint, trajectory, ledger, metrics, retry, reroute, scheduler or
+  quota behavior.
+- It is not platform truth, a metrics store, a trajectory/checkpoint
+  replacement, an optimizer evidence owner, or a Simulation owner. Optimizer
+  eligibility stays unavailable when the caller omits the gate result; DONE
+  alone never fabricates parent eligibility (frozen #14 handoff rule).
+- `session_control_metadata()` / `research_outcome_summary()` produce minimal
+  control metadata (family, evaluated count, outcome state, stop reason,
+  aggregate counts) for an existing `factory_session.json` envelope or a
+  heartbeat-style RESEARCH_OUTCOME view; raw metrics and checks bodies never
+  enter them.

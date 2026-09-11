@@ -1,6 +1,16 @@
 # 任务计划：运行数据审查、清理与工厂/Agent 边界修复
 
-## 2026-09-10 当前阶段：机制换路与 DONE→Optimizer
+## 2026-09-11 当前阶段：ResearchYield 派生研究产出（PAUSED/DISARMED 只读）
+
+- [x] 吸收 `docs/RESEARCH_ISSUES_2026-09-11.md` 与 findings/progress/task_plan，先写真实审查结论到 findings.md
+- [x] 实现 `wqb_agent/research_yield.py`：派生 control-plane 漏斗 + 5 态 family outcome + 明确 denominator 的 conversions + evidence-quality 分离 + STOP taxonomy
+- [x] 新增 `tests/test_research_yield.py`（30 契约测试）与 `tests/test_architecture.py` research_yield 守卫（33 架构测试）
+- [x] 只读真实回放脚本 `scripts/replay_research_yield.py`（读 13 个 checkpoint + proposals.json + r11/r12 metrics 快照，不写 `.wqb_state`）
+- [x] 全量质量门：`732 tests OK`、compileall OK、Ruff All checks passed
+- [x] 更新 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）与 task_plan/progress/findings
+- [ ] 未授权不 commit/push；如需提交按 AGENTS 规则（邮箱 `2966684515@qq.com`、中文前缀信息）另行授权
+
+## 2026-09-10（historical）机制换路与 DONE→Optimizer
 
 - [x] 读取 pasted task、重审远端/本地状态与既有 P0 实现
 - [x] 先写红测试并确认缺口

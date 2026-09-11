@@ -6,6 +6,139 @@
 - 默认生产入口是 `python main.py --suggest` → 审阅 proposals → `python main.py --run-proposals`。
 - `SUBMIT_UNKNOWN` 不重发，known progress URL 只读对账，缺失证据保持 `UNKNOWN`/`UNAVAILABLE`。
 
+## 2026-09-11 round_12 结算（factory session 5d895622 第 2 轮）
+
+- 批次 100/100 DONE、0 平台拒绝；判定 RECONCILE×100（自相关 PENDING）。
+- 只读恢复：success=0 / promising=0（连续第 9 个零全过 100 批）。头部：
+  - `volume` 对数水平形式 `rank(ts_zscore(ts_product(add(volume, 1), 10), 60))` **fit 1.5**/sh 0.89（LOW_SHARPE+集中度+子域三失败）——量级信号族新头部；
+  - `vwap` 反转 fit 0.62/sh 1.23（risk_adjusted_reversal 族又一成员，Sharpe 带，不追测）；
+  - 分析师估计族（anl4 fs_detail corr/delta 形式 fit 0.39-0.55）与分红族（fnd6 dv fit 0.26-0.32）维持观察带。
+- 跨 9 批元模式不变：Sharpe 带信号分散（volume/vwap/IV/forward price/parkinson/分析师/分红多族），但 **CONCENTRATED_WEIGHT + LOW_SUB_UNIVERSE_SHARPE + SELF_CORRELATION PENDING 三重系统性阻塞**使 0 候选过质量门；非模板问题（模板已 0 失败 4 批）。
+- 研究推论：当前横截面 rank 构造在 TOP3000 下的集中度/子域失败是构造-universe 层面的系统属性；下一机制方向应优先**组级/中性化输出构造**（降低 per-ticker 集中度）而非更多字段族探索——但 revere 族的 r8/r10 已证明组级构造对"集中度为字段族属性"的字段无效，需选择**非结构类字段**（volume/vwap 等交易类）做组级构造试验。
+
+## 2026-09-11 round_11 结算（factory session 5d895622 第 1 轮）：零失败验证 + 信号带读数
+
+- 批次 100/100 DONE、**0 平台拒绝**（连续第 4 个零失败批次；3 参 group_mean arity 修复经 factory 批量实证）；判定全部 RECONCILE（自相关 PENDING）。
+- 只读恢复 100 条指标：**success=0 / promising=0**（与 r5/r6 同——质量门 0 全过候选，第 8 个 100 批）。头部信号带：
+  - `split` churn 形式（fit 0.76/sh 0.90、ts_scale fit 0.66）——新头部字段，但 LOW_SHARPE+集中度双失败；
+  - `forward_price_120/30` 反转（sh 1.36/1.29，fit 0.63/0.58，集中度失败）——risk_adjusted_reversal 族在 30/120 期限仍有 Sharpe 带（该族 churn 判据仅证 close/forward_price_270；不做 hump 追测，观察项）；
+  - `implied_volatility_put_10` 分位（sh 1.34/1.33，fit 0.33-0.42）——IV 族 Sharpe 带复现（r5/r6/r10 一致：IV 信号高 Sharpe、低 fitness、高换手）；
+  - `parkinson_volatility_90` 4 题案入 top-12（fit 0.27-0.38）——本批新字段族（波动率水平类）。
+- 系统性阻塞不变：CONCENTRATED_WEIGHT + LOW_SUB_UNIVERSE_SHARPE + SELF_CORRELATION PENDING（横截面 rank 构造共性）。
+- 谱系账本不变（revere 结构族 r10 已关；本批未含 revere 题案）。
+
+## 2026-09-11 round_10 Agent 优化批次：revere 谱系按预注册关闭 + IV 差分结构未达准入
+
+- **N1 revere 组级构造 3 参重投**（`group_mean(rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60)), 1, subindustry)`）：DONE，Sharpe 1.16 / Fitness 0.88 / to 0.274 / sub-universe 0.37 FAIL；**CONCENTRATED_WEIGHT 仍 0.5**。预注册判据（"集中度仍 >=0.5 或 LOW_SUB_UNIVERSE_SHARPE FAIL → 关闭整条 revere 谱系"）触发：**revere 结构字段族（term/index/key_sector）的集中度+子域失败是字段族属性而非构造属性**——行业中性化（r8）、组均值（r10）两种去集中构造均无法移除 CONCENTRATED_WEIGHT=0.5。谱系关闭，不再投入该族的构造变体。
+- **N2 IV 水平差分结构**（`rank(ts_zscore(ts_delta(implied_volatility_mean_270, 5), 60))`）：DONE，Sharpe 1.23（距 1.25 门槛 0.02）/ Fitness 0.36 / to 0.589；LOW_SUB_UNIVERSE_SHARPE 未 FAIL。预注册准入（fit>=0.5 且换手 <0.5）未达，且 0.36 不落入注册关闭分支（fit<0.3）——**判定：未达准入；按纪律不做 hump 救回（与 churn 谱系同型风险），IV 差分结构关闭；IV 状态分位族保持 r5 观察项，待 SELF_CORRELATION 回填证据**。
+- 批次小结：2/2 DONE、0 平台拒绝（3 参 group_mean arity 修复生效）、2 RECONCILE（自相关 PENDING）。
+- 谱系账本更新：关闭 revere 结构族（构造不敏感）、close/forward_price_270 churn 族、IV 斜率、IV 差分；存活观察项：revere_key_sector_total 的 r7 高分异类（fit 13.68/sharpe 4.9，同族集中度阻塞）与 IV 状态分位族。
+- 下一轮策略：① 恢复 3h factory 周期（preflight READY）让探索层继续产信号；② 如需 Agent 批次，优先把 r7 的 `rank(ts_rank(ts_zscore(pv13_revere_key_sector_total, 20), 60))`（fit 13.68）作为优化层父证据做构造检验（同一判据：集中度不降则同样关闭，避免谱系内反复微调）；③ 陈旧 session a4a3f3ac 控制面无需手工处理（factory 启动自动 mint）。
+
+## 2026-09-11 round_9 Agent 优化批次：churn 谱系关闭 + group_mean arity 平台实测
+
+- **E1 forward_price_270 hump churn 检验**（`hump(rank(divide(reverse(ts_delta(forward_price_270, 5)), add(ts_std_dev(forward_price_270, 20), 0.001))))`）：DONE，Sharpe 0.16 / Fitness 0.03 / turnover 0.0926 / returns 0.0042。预注册判据（turnover<0.2 且 fitness≥0.4 保留；fitness<0.2 → churn）：**fitness 0.03 < 0.2 → churn 证伪，关闭 forward_price_270 谱系**。与 round_8 P3（close 同法）一致——"波动率缩放 5 日反转（risk_adjusted_reversal）"族（close、forward_price_270 已证）的 P&L 由换仓行为承载，hump 限幅后净价值≈0；族内唯一未测成员 pv13_custretsig_retsig 暂不追测（避免谱系内反复微调）。
+- **E2 revere 组级构造**（`group_mean(rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60)), subindustry)`）：**平台拒绝**——`Invalid number of inputs : 2, should be exactly 3 input(s)`。平台实测：`group_mean` 在此 region 只接受 **3 参 `group_mean(X, N, G)`**（r1-r7 `group_scaled_mean` 共 38 次 DONE 均为 3 参）；经济假设（组均值去集中度）未被检验，仅表达式 arity 错误。
+- **发现并修复 round_4 的 `group_filled_rank` 潜在 bug**：当时写成 2 参 `group_mean(ts_backfill({p}, 20), {g})`（本 region 会被拒）。已修正为 3 参 `group_mean(ts_backfill({p}, 20), 1, {g})` 并与 group_scaled_mean 对齐；cheatsheet 拒绝记录 + 已实证可用算子表已更新；`test_factory_boundaries` 新增 3 参 group_mean arity 全注册表守卫与 2 参 REJECTED_SNIPPET；全量质量门（unittest/compileall/ruff/mypy-9）通过。
+- 下一批可执行（证据驱动，新表达式非已证伪机制微调）：① revere 组级构造 3 参重投 `group_mean(rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60)), 1, subindustry)`；② IV 水平族（implied_volatility_mean_270 差分结构）低相关观察项。
+- round_7 末 4 PENDING 结算只读恢复：3 LOW（option_breakeven_360 fit 0.03、mean_earnings_evaluation_sentiment fit -0.04、IV mean_skew_720 fit -0.02，均 HIGH_TURNOVER）+ **1 promising**（`reverse(rank(ts_std_dev(ts_delta(pv13_revere_key_sector_total, 5), 20)))` fit 1.36/sharpe 0.78/to 0.062，fails=CONCENTRATED_WEIGHT+LOW_SUB_UNIVERSE_SHARPE）。
+- 另注（r7 既有 DONE 中的强信号，供优化层手托）：`rank(ts_rank(ts_zscore(pv13_revere_key_sector_total, 20), 60))` **sharpe 4.9/fit 13.68**（to 0.667，fails 仅 CONCENTRATED_WEIGHT+LOW_SUB_UNIVERSE_SHARPE）与 `rank(ts_zscore(ts_sum(ts_delta(pv13_revere_key_sector_total, 5)...` fit 1.04/sharpe 0.75——revere_key_sector_total 族（与 r2/r3/r4 term/index 族同字段系）为当前最强信号簇，系统性阻塞项仍是集中度+子域 Sharpe+SELF_CORRELATION PENDING。
+
+## 2026-09-11 round_7 残留处置（授权跳过 + 恢复完成）与无 URL UNKNOWN 授权跳过路径扩展
+
+- 代码扩展（证据驱动局部维护）：`ProposalExecutionWorkflow.skip_submit_unknown_authorized` 现接受 `SUBMIT_UNKNOWN` **与无 progress_url 的 UNKNOWN**（同一 ambiguous-POST 证据缺口：不能安全重 POST、无远端身份可只读对账）；**有 URL 的 UNKNOWN 明确不可 skip**（远端作业可只读恢复，跳过会丢弃活证据），PENDING/终态拒绝；skip 审计按类分 reason（`user_authorized_skip_unknown_no_progress_url`）。3 条回归测试（拒绝有 URL UNKNOWN、拒绝 PENDING、接受无 URL UNKNOWN、SUBMIT_UNKNOWN 旧语义不变）+ unittest/compileall/ruff/mypy-9 全绿；CLI help 与 docs/ARCHITECTURE_AGENT.md 冻结边界章节已同步。
+- 处置：`recovery skip-submit-unknown 7 p-3d87af4949987b88`（pcr_vol_all downside_risk，无 URL）→ SKIPPED_UNKNOWN（审计入 stale_skip_log.jsonl）；随后以 round_7 恢复 stub inbox 经 canonical `run-proposals` 派发 4 PENDING → **round_7 `complete=true`（DONE=99、SKIPPED=1，0 FAILED、0 新 UNKNOWN）**，preflight 恢复 `READY`。
+- round_7 末 4 题案全部 LOW（sharpe -0.37/-0.23/0.78、HIGH_TURNOVER 0.79、revere_key_sector 双失败延续 r4 模式）——探索层无新信号，不影响谱系结论。
+
+## 2026-09-11 round_8 Agent 优化批次（用户指令：自编候选 + 单变量预注册）
+
+- 执行路径：round_7 残留（无 URL UNKNOWN `0db18e84c686` + 4 PENDING）无法经既有 CLI 跳过（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）；按用户明确指令经 `run-proposals --force-new-round`（内置授权逃生门："按用户明确授权开启新轮"）保留 round_7 原 checkpoint 并开启 round 8；round_7 残留保持为待人工决策项。
+- 4 个 Agent 自编候选（全部单变量、预注册反证、对 700 条历史表达式 0 重叠、本地 strict+经济完整性预验证 3 PASS / P4 仅本地缺 live 平台 dedupe 证据而 live 通过）：
+  1. **P1 H-revere-neutralize** `group_neutralize(rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60)), industry)` → Sharpe 1.34 / Fitness 1.93 / to 0.109 / dd 0.090；`LOW_SUB_UNIVERSE_SHARPE` 不再 FAIL（父 r4 双失败之一被行业组中性化移除），但 `CONCENTRATED_WEIGHT` 仍 0.5 且 health 小账簿（long 9/short 8）。**判定：混合——集中度未降，按预注册判据（"集中度不降"分支）关闭该构造方向**；revere 谱系转向新构造（组级 group-mean 信号而非 per-ticker 横截面 rank），不做中性化水平继续微调。
+  2. **P2 H-revere-return 端点对照** `rank(ts_zscore(ts_delta(pv13_revere_index_value, 20), 60))` → Sharpe -0.03 / Fitness -0.00。**判定：证伪**——端点 20 日变化无信号，r2 累计形式（ts_sum(ts_delta(5),20)）的结构本身承载信号；端点假设关闭。
+  3. **P3 hump 换手控制** `hump(rank(divide(reverse(ts_delta(close, 5)), add(ts_std_dev(close, 20), 0.001))))` → turnover 0.42→0.0088（hump 生效）但 Sharpe 0.27 / Fitness 0.07（父 1.33/0.69），且 LOW_TURNOVER FAIL（低于 0.01 下限）。**判定：证伪——r6 close 反转信号确为换仓 churn（限幅后 P&L 崩塌至 ~0）**；close 谱系关闭。forward_price 族（r5 头部同构）的 hump 单变量验证列为下一批次。
+  4. **P4 IV 期限结构斜率** `rank(subtract(implied_volatility_call_20, implied_volatility_call_150))` → Sharpe 0.01 / Fitness 0.00。**判定：证伪——20d-150d ATM call IV 水平差无信号**；IV 期限结构斜率假设关闭；IV 水平族（r5 证据）保持观察项待 SELF_CORRELATION 回填数据。
+- 4/4 `DONE`，判定 RECONCILE×4（全部 SELF_CORRELATION PENDING，无"除自相关外全过"候选 → refresh 回填无对象，保持 UNKNOWN/PENDING）。总耗时 3.2 分钟（3 并发）。
+- 本批负结果纪律：4 条谱系全部按预注册判据裁决（1 混合关闭、3 证伪关闭），无事后拟合、无参数扫描、无方向翻转重投。
+- 下一周期题案排序：① `forward_price_270`（r5/r6 头部）+ 单参 hump 单变量（churn 检验）；② revere 谱系组级构造（`group_mean(rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60)), subindustry)` 等组均值信号，单一结构变量）；③ IV 水平族 SELF_CORRELATION 回填可用后做相关性证据；④ round_7 无 URL UNKNOWN 的人工处置（授权跳过路径扩展或平台身份反查）。
+
+## 2026-09-11 自主循环接管：交叉 dataset 门禁与关系契约失配
+
+- 接管 preflight 为 `READY`：round_1/round_2 checkpoint 均 `complete=true`（各 78 DONE），无 `SUBMIT_UNKNOWN`、无未完成 checkpoint；旧 session `6df26582cf244dc8` 为干净 `STOPPED` 终态。
+- 按 3 小时约束先执行 `alpha sync-feed`（3013 条周元数据，`updated_at=2026-09-10T18:05:47Z`，`network_write=false`），随后只读 preflight 再次 `READY`。
+- 启动 `factory run --hours 3`（新 session `dca94762e1a04b31`）：3 条 bounded route（current_bundle / same_dataset_relationship / same_dataset_new_mechanism）均在同一 6-dataset 池上失败，`pair_examined=256`、`relationship_allow=0`（86 REVIEW、86 UNKNOWN、170 INCOMPATIBLE）、`template_compatible_count=0`，最终 `STOP_MECHANISM_ROUTE / NO_INFORMATION_GAIN`，0 次 Simulation 消耗。
+- 根因：2026-09-10 收紧后的多字段关系契约（option 仅 put/call IV、ratio 仅 earnings→fundamental 方向、频率 UNKNOWN 一律 REVIEW）在当前池（pv1/pv13/option8/option9/fundamental6/news18）中基本不存在可准入的跨 dataset pair；bundle 中 82/100 字段无显式频率证据。rounds 1-2 能过门是旧宽松契约下的结果，契约收紧造成“门禁需求”与“契约供给”结构性失配，不是字段数量或历史去重问题（本次 `historical_expression_exclusion_count=0`）。
+- 研究控制决策（可逆、不改代码）：本周期将 `config.agent.field_selection.min_cross_dataset_pairs` 由 `1` 调为 `0`，保留 `min_datasets=3` 的批次广度约束；单字段经济模板探索批次（9-11 审计已证明同 bundle 可生成 100 候选）先恢复信号探索吞吐。跨 dataset 关系探索列为下一周期方向：扩展 dataset_pool 引入含显式 daily 频率且机制互补的数据集，或待平台频率证据完善后恢复门禁。
+- 决策依据与证据：`factory-run-3.stdout.log` 的 3 条 FEASIBILITY 心跳、session `dca94762e1a04b31` 的 `route_decision`/`feasibility_probe`、9-11 审计 REPORT（pair 30 抽样 0 ALLOW、15 REVIEW、15 REJECT）。
+- 放宽门禁后新 session `89c78860` 通过首条 bounded route：round_3 批次 100 题案（全部 `exploration/EXPLORE`、12 个模板族、0 多字段、100 唯一表达式、与 rounds 1/2 的 156 条历史 DONE 表达式 0 重叠），`simulations_reserved=100`，进入 `RUN_PROPOSALS`。
+
+## 2026-09-11 round_6 结算与跨轮模板×字段类元模式
+
+- session `a4a3f3ac` round_6：`complete=true`，**DONE=100/100、FAILED=0**（连续第三轮零平台失败，7 模板修复稳定）。批次含 12 模板族、7 数据集（analyst4 首次入 bundle）、16 条多字段题案。
+- 100 条 round_6 指标只读恢复：0 success、2 promising；失败分布 `LOW_FITNESS=100、LOW_SHARPE=97、LOW_SUB_UNIVERSE_SHARPE=62、CONCENTRATED_WEIGHT=34、HIGH_TURNOVER=15、LOW_TURNOVER=9`。
+- 头部：`risk_adjusted_reversal`（波动率缩放的 5 日反转）跨轮复现——r5 `forward_price_60/150/720` fit 0.59-0.64/sharpe 1.34-1.38；r6 `close` fit 0.69/sharpe 1.33、`pv13_custretsig_retsig` fit 0.71/sharpe 1.82、`forward_price_270` 0.56/1.28。共性弱点：turnover 0.42-0.84（HIGH_TURNOVER）→ 该族的单一后续变量为单参 `hump` 换手控制（已修复验证的算子）。
+- 跨 5 轮 500 条 DONE 的元模式：头部信号集中于 4 个模板×字段类组合（distribution_regime×revere、risk_adjusted_reversal×价格/IV、robust_cross_section×IV、persistent_level×IV 均值）；无全 check 通过的 success 候选（探索阶段正常）；`LOW_SUB_UNIVERSE_SHARPE` 与 `CONCENTRATED_WEIGHT` 是板块/结构字段簇的系统性瓶颈，`HIGH_TURNOVER` 是日频反转族的系统性瓶颈。
+- 下一周期 Agent 题案排序更新：① H-revere-neutralize（INDUSTRY 单变量）；② `risk_adjusted_reversal` 头部表达式 + 单参 hump 的单变量换手控制（`close` 与 `forward_price_270` 各 1 条）；③ H-revere-return 端点对照。IV 期限结构簇（r5 发现）保留为观察项，待 self-correlation 回填后可用后再做相关性证据。
+- 证据文件：`_metrics_recover_r6.json`（scratch，结论记录后删除）。
+
+## 2026-09-11 round_5 全修复模板验证与新信号簇（option IV / forward price）
+
+- 新 session `a4a3f3ac218e4b3c`（无人工 stop）round_5：`complete=true`，**DONE=100/100、FAILED=0**——7 模板修复经 live 完整验证（对比 r1-r4 的 22/20/27/15 项失败归零）；runner 判定 RECONCILE=100（自相关 PENDING），best=null。
+- 100 条 DONE 指标只读恢复：0 success、4 promising（sharpe≥0.9 且 fit≥0.6）；失败检查分布 `LOW_FITNESS=100、LOW_SHARPE=92、LOW_SUB_UNIVERSE_SHARPE=49、CONCENTRATED_WEIGHT=48、HIGH_TURNOVER=15、LOW_TURNOVER=7`。
+- **新信号簇（修复模板首次可测）：option IV / forward price 期限结构**：
+  - `implied_volatility_call_150` 三模板同向：`robust_cross_section`(单参 winsorize) fit 0.65/sharpe 1.78、`distribution_regime` 0.50/1.47、`distributional_change` 0.42/1.39；
+  - `forward_price_60/150/720` 三个期限同构 `risk_adjusted_reversal` 信号 fit 0.59-0.64 / sharpe 1.34-1.38（期限一致性 → 机制在 IV 水平/相对位置而非单一期限）；
+  - `implied_volatility_mean_150/270`：fit 0.70/0.53；共性问题：turnover 0.47-0.65（HIGH_TURNOVER 风险）+ 轻度 CONCENTRATED_WEIGHT（v 0.11-0.19）。
+  - 机制读法（可证伪）：期权隐含波动率水平与 forward price 隐含成本携带，是前向风险/融资预期；横截面相对位置预测收益。反证：若同字段在 IV 期限间无一致性（cross-maturity rank corr 低）或中性化后消失 → 期限特异性伪信号。
+- revere 簇未进 round_5 top（该轮 bundle 未含 revere 字段，属采样轮替）；其三轮证据（r2/r3/r4）保持有效。
+- 次级：`news_impact_projection_score`（vector_persistence）fit 0.43/sharpe 1.08。
+- 下一周期 Agent 题案排序（单变量、非扫描）：① H-revere-neutralize（INDUSTRY 中性化复测 r4 头部表达式）；② IV 簇 turnover 控制单变量（同表达式 + 平台默认 truncation 不变、仅 `hump` 单参包裹一次）；③ H-revere-return 端点形式对照。
+- 证据文件：`_metrics_recover_r5.json`（scratch，结论记录后删除）。
+
+## 2026-09-11 round_4 结算与新模板缺陷（round_4 平台实测）
+
+- 用户授权处置后：`skip-submit-unknown`（`864ff495f2b7`→SKIPPED_UNKNOWN）+ 3 次只读 STALE 对账后 `skip-stale`（`2P0mkygQn4W2bdq14rKNHQil`→SKIPPED_STALE），round_3 checkpoint 完整收尾（DONE=66/FAILED=32/SKIPPED×2），preflight 恢复 `READY`；`alpha sync-feed`（3060 条）后启动新 session `3a803043`（stop 控制由新 session 干净清除）。
+- 期间又出现一次人工 stop（round_4 派发中）；已遵守：round_4 完整结算后 session 干净 `STOPPED`，未启动 round_5。
+- round_4：`complete=true`，DONE=85/FAILED=15（85 条 RECONCILE 判定 = 自相关 PENDING，无 best）。15 项 FAILED 分类：13× `robust_cross_section`（双参 winsorize 被拒：`exactly 1 input`）、1× `turnover_control`（双参 hump 同签名）、1× `trend_residual`（**新类**：`ts_regression(..., 0)` 的 lookback=0 被拒：`invalid value "0" for attribute "lookback"`）——6 个模板缺陷全部修复于工作树（winsorize/hump 改单参、trend_residual 省略 lookback），全量质量门通过（unittest exit=0、ruff、mypy 9 frontier），干跑验证（`postfix_validation_2`）100/100 批次 0 拒绝片段。
+- 85 条 DONE 指标恢复（只读）：0 success、1 promising；失败检查分布 `LOW_SHARPE=84、LOW_FITNESS=84、LOW_SUB_UNIVERSE_SHARPE=48、CONCENTRATED_WEIGHT=37、HIGH_TURNOVER=23、LOW_TURNOVER=6`。
+- **revere 簇第三次跨轮复现且构造升级**：修复后的 `distribution_regime` 模板（`rank(ts_rank(ts_zscore(X,20),60))`，ts_rank 历史分位形式）在 round_4 产出本轮唯一超阈值候选：
+  - `rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60))`：Sharpe 1.39 / Fitness 2.05 / turnover 0.115，仅 `CONCENTRATED_WEIGHT(0.5)` FAIL（`LOW_SUB_UNIVERSE_SHARPE` 本轮未失败），health 提示 `longCount=9、shortCount=8 < 50`（小账簿）。
+  - r2/r3/r4 三轮独立复现（fit 2.98→0.84→2.05），`revere_index_value` 与 `revere_term_sector_total` 两字段均产出头部信号。
+- 次级观察：`implied_volatility_*`（option8/9 均值/put IV）簇经修复模板出现 4 条 fit 0.23-0.54 / sharpe 0.75-1.24 的中段信号（`distribution_regime`/`distributional_change`/`persistent_level`），为下周期候选机制族。
+- 假设卡更新（H-revere-neutralize 优先）：对 round_4 头部表达式做 `neutralization` 单变量变体（INDUSTRY，较 SUBINDUSTRY 粗一级）；反证判据不变（集中度不降且子域 Sharpe 恶化 → 板块暴露；集中度下降且子域转正 → 机制稳健进入自相关回填）。`longCount/shortCount<50` 的健康标志提示 truncation 0.08 下账簿过窄，作为第二单变量候选（不与第一个同时改）。
+- 可执行题案规格（下一 factory 周期结束后经 suggest→proposals→run-proposals 路径执行，单变量、各 1-2 条，非参数扫描）：
+  1. H-revere-neutralize：表达式 `rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60))`，settings 仅 `neutralization` 由 SUBINDUSTRY 改为 INDUSTRY（其余 simulation 默认一致）。判据：CONCENTRATED_WEIGHT 下降且 LOW_SUB_UNIVERSE_SHARPE 不再 FAIL → 板块暴露机制稳健；若仍 FAIL 或 Sharpe 大幅衰减 → 该簇为少数板块驱动，停止该谱系换机制。
+  2. H-revere-return：r2 头部 `rank(ts_zscore(ts_sum(ts_delta(pv13_revere_index_value, 5), 20), 60))` 的端点形式单变量对照 `rank(ts_zscore(ts_delta(pv13_revere_index_value, 20), 60))`（累计漂移 vs 端点变化，同一经济量）。判据：端点形式 fit/sharpe ≥ 累计形式且集中度更低 → 水平累计项是主要噪声源；反之保留累计结构。
+- 证据文件：`_metrics_recover_r4.json`（scratch，结论记录后删除）。
+
+## 2026-09-11 rounds 1-2 DONE 指标只读恢复（156/156）
+
+- 恢复路径：checkpoint `progress_url` → 既有 `get_progress_snapshot` + `get_alpha` 只读 GET + `metrics.extract_metrics/check_health`；scratch 脚本用后即删，未写 `.wqb_state`、未 POST。
+- 156 个 DONE 全部取得指标；0 个“success”（Sharpe≥1.25 且 Fitness≥1.0 且无 FAIL check）；4 个“promising”（Sharpe≥0.9 且 Fitness≥0.6，含 FAIL）。
+- check 失败分布（156 项）：`LOW_FITNESS=152、LOW_SHARPE=149、LOW_SUB_UNIVERSE_SHARPE=68、CONCENTRATED_WEIGHT=59、HIGH_TURNOVER=17、LOW_TURNOVER=13`；`SELF_CORRELATION` 平台 payload 缺失（全部 None），按规则保持 UNKNOWN，不用 refresh 冒充通过（refresh 仅适用于“除自相关外全过”候选，本次无此类候选）。
+- 唯一超阈值信号簇：`pv13_revere_*`（pv13 = Relationship Data for Equity；`revere_index_value` 字段描述为“Value of specified index for the date”，MATRIX，coverage 0.86，alphaCount 649；`revere_index_cap` = “Company market capitalization”）：
+  - `rank(ts_zscore(ts_sum(ts_delta(pv13_revere_index_value, 5), 20), 60))`：Sharpe 1.81 / Fitness 2.98 / turnover 0.1385 / drawdown 0.1136，但 `CONCENTRATED_WEIGHT=FAIL`、`LOW_SUB_UNIVERSE_SHARPE=FAIL`；
+  - `reverse(rank(ts_std_dev(ts_delta(pv13_revere_index_value, 5), 20)))`：Sharpe 1.18 / Fitness 1.60；`revere_index_cap` 同构信号 Fitness 1.55 / Sharpe 1.15；
+  - `rank(ts_zscore(ts_sum(ts_delta(pv13_revere_city, 5), 20), 60))`：Fitness 1.04 / Sharpe 0.77。
+- 机制解释（可证伪假设，非平台事实）：affiliated-index momentum——个股所属指数/板块的近期水平变化预测成分股收益；`CONCENTRATED_WEIGHT` + `LOW_SUB_UNIVERSE_SHARPE` 双失败与“信号由少数大指数/板块驱动”一致。反证判据：若同一表达式在 MARKET 中性化或加强 truncation 下集中度消失且 Sharpe 保持，则机制稳健；若 SUBINDUSTRY 中性化下完全消失，则属少数板块暴露而非系统性机制。
+- 下一步（下一 factory 周期）：以该簇为 optimizer 父证据方向，只允许单一变量 ROBUSTNESS 变体（中性化/truncation 各一次，不扫窗口/权重）与“指数收益代替指数水平”的结构变体；探索层继续维持 breadth。
+- 证据文件：`_metrics_recover.json`（scratch，完成结论记录后删除）。
+
+## 2026-09-11 round_3 收尾、模板缺陷修复与 revere 簇跨轮确认
+
+- 人工 stop 控制（02:40）后 session `89c78860` 在安全边界收尾：`status=STOPPED、stop_requested=true、finished_at` 已写；round_3 checkpoint 未完成：`DONE=48、FAILED=27、UNKNOWN=1、SUBMIT_UNKNOWN=1、PENDING=23`。
+- 只读对账：UNKNOWN `55892f20bf2a`（`compounding_pressure/cashflow_op`）保有 progress URL，平台快照仍未结算（status=None），保持 UNKNOWN 不升 PASS；SUBMIT_UNKNOWN `864ff495f2b7`（`accumulated_change/cashflow_op`）无 URL，提交发生在进程退出前 39 秒内，属 exactly-once 边界，**需人工经 `main.py recovery` 授权处置**；23 个 PENDING 按 fail-closed 批次规则在 SUBMIT_UNKNOWN 处置前不得 POST。未做任何写操作。
+- 模板算子缺陷（本轮修复，工作树待提交）：rounds 1-3 共 63 项 FAILED 全部归因 4 个模板的 live 拒绝用法：三参 `normalize`（r1×8/r2×7/r3×9）、裸位置参数 `gaussian` 驱动（r1×13/r2×13/r3×8，分布于 `distributional_change` 与 `distribution_regime`）、`group_rank(group_backfill(...))` arity（r1×1）。替换表达式只使用 156 条 DONE 实证算子；`TestTemplateLiveOperatorEvidence` 3 项回归 + 全量质量门通过（unittest exit=0、compileall=0、ruff、mypy 9 frontier）。
+- round_3 的 48 条 DONE 指标恢复：0 success、0 promising；头部为 `pv13_revere_term_sector_total` 簇：
+  - `rank(divide(reverse(ts_delta(pv13_revere_term_sector_total, 5)), add(ts_std_dev(pv13_revere_term_sector_total, 20), 0.001)))`：Sharpe 1.25 / Fitness 0.84 / turnover 0.118 / dd 0.053；FAIL `LOW_FITNESS(0.84)`、`CONCENTRATED_WEIGHT(v=0.5)`、`LOW_SUB_UNIVERSE_SHARPE(0.39)`；SELF_CORRELATION PENDING。
+  - `reverse(rank(ts_std_dev(ts_delta(pv13_revere_term_sector_total, 5), 20)))`：Sharpe 0.98 / Fitness 0.82；FAIL `LOW_SHARPE`、`LOW_FITNESS`、`CONCENTRATED_WEIGHT(v=0.5)`。
+- **跨轮确认（204 条 DONE，3 个独立轮次）**：`pv13_revere_*`（pv13 = Relationship Data for Equity 的板块/结构矩阵）是唯一在 r2 与 r3 独立复现头部信号的字段簇（r2 `revere_index_value` fit 2.98/sharpe 1.81；r3 `revere_term_sector_total` fit 0.84/0.82），且两轮 `CONCENTRATED_WEIGHT` 值同为 0.5 —— 系统性结构属性而非随机。机制读法：板块/结构类字段把同板块个股绑定到同一组内值，横截面排名后 P&L 集中于少数板块 → 集中度与子域 Sharpe 双失败。
+- 下一周期假设卡（单一变量、可证伪、非参数扫描）：
+  1. H-revere-neutralize：revere 簇头部表达式在 `neutralization=INDUSTRY`（较 SUBINDUSTRY 更粗一级）下复测。反证判据：集中度（CONCENTRATED_WEIGHT）不降且 LOW_SUB_UNIVERSE_SHARPE 仍 FAIL → 板块暴露假说成立，该簇作为“板块轮动”机制需换构造方式；集中度下降且子域 Sharpe 转正 → 机制稳健，进入 SELF_CORRELATION 回填与后续。
+  2. H-revere-return：`revere_index_value` 用“相对收益代替水平差”的结构变体（`ts_delta` 水平差 → 指数收益近似，如 `divide(ts_delta(X,20), ts_delay(X,20))` 型），检验绝对水平项是否为主要噪声源。
+  3. 探索层继续 breadth；跨 dataset 门禁维持 0，待 dataset_pool 扩展引入显式 daily 频率且机制互补的数据集后，先用只读 feasibility 探测验证 ≥1 ALLOW pair 再恢复 `min_cross_dataset_pairs=1`。
+
+
 ## 2026-09-09 Factory-Discovery semantic calibration 初始审计
 
 - 当前 HEAD 为 `608c4b2`，工作树在本阶段开始时干净；上一阶段已在 `alpha_factory.py` 增加 traits 的 `frequency`/`sign_semantics` 与模板兼容评分。
@@ -297,3 +430,52 @@
 - 已验证真实链路：Factory proposal 保留 `field_analysis.semantic_traits`，`Experiment.to_dict()` → optimizer child 保留 `lineage_id`，Reflection → Memory → context → real optimizer child → budget selector 能使匹配 discriminating question 的候选获得 HIGH。
 - 已发现 P1：真实单字段 scarcity 只生成 10/100 个候选时，runner 原先重复 `WAIT_FACTORY_BATCH` 直到 deadline；已加入回归测试，要求实际 selected batch 进入现有 bounded route/no-gain 状态并最终 `STOP_BUDGET_SHORTAGE`，不调用 `run_proposals`。
 - 已先写红测试并完成最小修复：priority bucket 改为 `HIGH → NORMAL → LOW`；selector 传入候选池派生 saturation；Factory 早退时清空 stale `last_budget_audit`；runner 使用 selected-batch probe 处理 budget shortage。
+
+## 2026-09-11 ResearchYield 阶段（PAUSED/DISARMED 只读派生）— 真实审查结论
+
+范围：研究保持 PAUSED；本阶段只读核对 rounds 1-13 的真实 evidence（13 个 checkpoint、`proposals.json`（round 13）、`_round11_metrics.json`/`_round_12_metrics.json`、`reconcile_history.jsonl`/`stale_skip_log.jsonl`、`docs/RESEARCH_ISSUES_2026-09-11.md`），在既有 SearchOutcome/reward/identity/reroute 之上派生 mechanism-family Research Yield。不写代码前的结论先行记录；实现与回放结果见本文件后续追加。
+
+### 核对确认的事实（真实 campaign 暴露）
+
+1. **execution 已稳定**：rounds 5/6/11/12/13 连续 5 批 100/100 DONE、0 平台拒绝；rounds 1-4 共 89 FAILED 全部归因 7 个算子 arity 用法（#1-#7），修复后不再出现。13 个 checkpoint 全部 complete，preflight READY。
+2. **DONE ≠ 可优化 parent**：checkpoint experiments 只含执行事实（status/progress_url/lineage_id/template_family/expression/fields_used），无 metrics、无 checks、无 economic_mechanism、无 field_analysis → 即使同进程，`OptimizerWorkflow._parent_rejections` 也会以 `PARENT_METRICS_MISSING`/`PARENT_CHECKS_INCOMPLETE`/`PARENT_FIELD_EVIDENCE_MISSING`/`PARENT_HYPOTHESIS_MISSING` 拒绝全部；跨进程 trajectory 为空（不落盘）→ 历史 parent 无法重建。
+3. **DONE child ≠ incremental value**：campaign 未生成 optimizer CHILD；r8/r9/r10 Agent 批次是按预注册判据的一次性构造检验，无 parent-relative incremental verdict，不能计入 incremental_pass。
+4. **质量证据长期缺 FINAL**：r11/r12 全部 200 条 metrics 快照 `pending_checks` 含 SELF_CORRELATION（21 条另有 UNITS），`self_correlation=None` → 全部 RECONCILE；判定 success=0/promising=0（连续 9 个零全过 100 批）。yearly 在 simulation payload `is` 块 UNAVAILABLE。
+5. **消耗大量 Simulation 但无 downstream 的机制族**：横截面 rank 构造三重阻塞（CONCENTRATED_WEIGHT + LOW_SUB_UNIVERSE_SHARPE + SELF_CORRELATION PENDING）；revere 结构族整族关闭（r10，构造不敏感）；churn 族双证关闭（close/forward_price_270）。
+6. **#14 跨进程 handoff 缺口是冻结边界**：生产配置 trajectory 非持久 → optimizer eligibility 无法建立；`proposals.json` 仅保留 round 13（100/100 可按 lineage_id 与 round_13 checkpoint 对账）；r1-r12 的 proposal 元数据已不存在 → 历史 family 归因只对 round 13 可行。
+
+### Issue → funnel stage → 分类映射（RESEARCH_ISSUES_2026-09-11.md）
+
+| issue | funnel stage | research / infra | evidence quality | effect on family outcome |
+|---|---|---|---|---|
+| #1-#7 平台 arity 拒绝 | proposal→simulation（FAILED） | research（候选设计） | 无（terminal FAILED） | 早期 research_failure_count；样本不足 → INCONCLUSIVE |
+| #8 路由门禁失配 | feasible_candidates / assembled | research（route policy） | 无 | 修复前 INCONCLUSIVE（sample）；修复后恢复出批 |
+| #9/#12 进程死亡/stale | simulations_unresolved | infra | 无 | unresolved 占比高 → INCONCLUSIVE；已恢复 |
+| #10/#11 SUBMIT_UNKNOWN / 无 URL UNKNOWN | infrastructure_failure_count | infra（exactly-once 边界） | 无 | 不升 PASS；占比高时 → BLOCKED；SUBMIT_UNKNOWN 语义不变 |
+| #14 optimizer handoff 缺口 | done→optimizer_parent（unavailable） | infra/evidence（进程边界） | n/a | **BLOCKED（HANDOFF_EVIDENCE_BLOCKED）**，不是 parent conversion=0%，更不是 LOW_INFORMATION |
+| #15 SELF_CORRELATION PENDING | quality_evaluated（unresolved） | evidence unavailable（平台结算） | 只有 PROVISIONAL 观测 | 无 FINAL → 不 PROMISING/不 LOW_INFORMATION → INCONCLUSIVE |
+| #16 yearly UNAVAILABLE | quality 细节（unavailable） | evidence unavailable | n/a | 稳定性证据缺口，贡献 INCONCLUSIVE，不单独判定 |
+| #17 cheatsheet vs live arity | feasible / proposal→simulation | research（operator evidence） | 无 | 早期 research_failure_count（同 #1-#7） |
+| §5 rank 族三重阻塞 | simulations_done 高 + quality_evaluated（checks FAIL） | research outcome + evidence unavailable 混合 | checks FAIL 是平台事实；SELF_CORRELATION 缺失是未结算 | 证据可用时 → LOW_INFORMATION 候选；证据不可用 → INCONCLUSIVE/BLOCKED |
+| §5 已关闭 revere/churn 族 | 无 state 内 closure ledger | research（预注册判据，findings 谱系账本） | n/a | 只有显式 closure 证据才判 EXHAUSTED；当前 state 无该记录 → 真实回放归入 UNKNOWN family，exhaustion 作为手工证据输入 |
+
+### ResearchYield 设计结论（本阶段实现边界）
+
+- ResearchYield = **derived control-plane research evidence**：derived in-memory / report projection，不落新文件、不做平台事实、不存 metrics、不是 trajectory/checkpoint/optimizer/Simulation owner，不复制 reward engine、不新建 scheduler、不新增研究状态 owner。
+- 聚合键直接复用 `semantic_mechanism_key`；lineage 用现有 `lineage_id`；evidence quality 直接复用 SearchOutcome 的 FINAL/PROVISIONAL/LEGACY 语义；conversion 对 denominator==0 返回 `None`（`NO_DENOMINATOR`），对证据不可用返回 `DENOMINATOR_UNAVAILABLE`，绝不伪装 0.0。
+- 明确区分 completion（simulations_done）与 research progress（quality/optimizer eligibility/incremental）；`simulation_to_done=100%` 不得解释为 mechanism successful。
+- family outcome 只允许 5 态：INCONCLUSIVE / PROMISING / LOW_INFORMATION / EXHAUSTED / BLOCKED，附 STOP taxonomy（新增 LOW_RESEARCH_YIELD / NO_INCREMENTAL_CHILD_EVIDENCE；复用 ROUTE_ATTEMPTS_EXHAUSTED / NO_INFORMATION_GAIN / MECHANISM_FAMILY_EXHAUSTED / INFRASTRUCTURE_BLOCKED）。
+- minimum sample guard：仅新增 `research_yield_min_evaluated`（默认 40）与 `research_yield_window`（默认 200）两个 typed/bounded 参数，其余复用现有 route/budget/SearchPolicy 阈值。
+- continuation：不新建 workflow；提供 pure 映射（PROMISING→CONTINUE、INCONCLUSIVE→OBSERVE、LOW_INFORMATION→REROUTE、repeated LOW_INFORMATION→STOP LOW_RESEARCH_YIELD、EXHAUSTED→按现有 exhaustion 策略、BLOCKED→WAIT 不消耗新 quota），作为现有 route policy 的 derived input 就绪项。
+- 本阶段不修 #14（冻结边界）；只归因：真实回放必须把 1300+ DONE 且 eligibility 无法建立的 family 显示为 handoff/evidence BLOCKED，并量化其占多少 BLOCKED yield。
+- Heartbeat：只提供 `research_outcome_summary` 聚合函数（mechanism_family/evaluated/parents/children/incremental_pass/outcome_state，禁止 raw metrics），不接入 HeartbeatSink（deferred）。
+
+
+### 真实回放结果（2026-09-11，只读，未写 `.wqb_state`）
+
+- 输入对账：checkpoint experiments=1008（DONE 913 / FAILED 90 / SKIPPED 5），round 13 proposals=100，r11/r12 metrics=200；r13 proposal↔checkpoint 按 lineage_id 25/25、按 expression 100/100 匹配。
+- 归因：r13 八族（earnings:level:slow_moving 14 / market_price:change:signed 14 / market_price:level:signed 14 / market_price:ratio:signed 14 / sentiment:level:event_driven 14 / volatility:dispersion:signed 14 / UNKNOWN 13 / volatility:ratio:signed 3）；r1-r12 无 proposal 元数据 → UNKNOWN 桶（assembled 921 / done 826 / provisional 200）。
+- 真实 family outcome：7 个具名族 INCONCLUSIVE(SAMPLE_INSUFFICIENT)（done 3-14，无 FINAL）；UNKNOWN 桶 BLOCKED(HANDOFF_EVIDENCE_BLOCKED)（#14：done≥40 且 eligibility 不可用）。
+- #14 量化：当前唯一 BLOCKED yield 来源 = UNKNOWN 桶 826 条 DONE + 200 条 PROVISIONAL 观测因跨进程 handoff 无法建立 optimizer eligibility。
+- 假设视图：若 #14 修复且 gate 全拒（明确假设），无 FINAL 证据仍使全部族 INCONCLUSIVE(FINAL_EVIDENCE_INSUFFICIENT)——#15 SELF_CORRELATION 未结算是独立于 #14 的第二重阻塞；LOW_INFORMATION/PROMISING 在真实数据上无触发前提，合成验证由 test_research_yield.py 覆盖。
+- 结论：下一轮如需修改冻结边界，应先结算 SELF_CORRELATION/yearly（#15）再做 optimizer handoff 修复（#14）的立项评估；本阶段保持 PAUSED/DISARMED。

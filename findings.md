@@ -559,3 +559,4 @@
 - `coverage run --branch -m unittest discover -s tests` + `coverage report` → `TOTAL 78.9%`（`fail_under=76.0`）。
 - `python main.py --state-dir tests/fixtures state doctor` → exit 0；`... state audit` → exit 0（offline fixtures，未触发网络）。
 - 只读 replay：`python scripts/replay_research_yield.py --compare-handoff` → exit 0，未写入 `.wqb_state`。
+- Git：commit `06eb956`（`fix：恢复跨进程 optimizer parent 证据并补齐 handoff 契约`）；`git push origin main` → `7d419a8..06eb956`；`git ls-remote origin refs/heads/main` = `06eb95646f1215efa8918131b531dc03481b3b74` = local HEAD。

@@ -18,7 +18,8 @@
 - [x] 新增 `tests/test_historical_parent_handoff.py`（restart/serialization/dedupe/corrupt/lineage 契约）与 `tests/test_architecture.py` color 不得驱动 optimizer/yield 守卫
 - [x] 只读 replay 增加 handoff before/after 视图（`scripts/replay_research_yield.py --compare-handoff`）
 - [x] 同步 docs（ARCHITECTURE_AGENT / RESEARCH_POLICY / STATE_LAYOUT）：evidence owner 不变，仅新增跨进程只读 rehydrate 说明
-- [x] 质量门与推送：见 `findings.md` 第二阶段“交付与验证”
+- [x] 质量门：`750 tests OK`、compileall、Ruff、mypy 9 frontier、coverage 78.9%、offline doctor/audit 全通过
+- [x] 经用户授权后 commit（`fix：恢复跨进程 optimizer parent 证据并补齐 handoff 契约`）并 push，远端 SHA 与本地 HEAD 一致（详见 `findings.md`“验证结果（第二阶段）”）
 
 ## 2026-09-10（historical）机制换路与 DONE→Optimizer
 

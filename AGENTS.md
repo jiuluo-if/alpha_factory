@@ -148,6 +148,10 @@ python main.py run-proposals
 
 ### Alpha Probe Factory V1 constraints
 
+#### Mandatory template-change reading
+
+任何 Agent 在更新或拓展 Alpha 模板、模板 schema、catalog、operator coverage、horizon 或 settings 规则前，必须先阅读并确认 [`docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md)、[`wqb_agent/AGENTS.md`](wqb_agent/AGENTS.md) 和 [`wqb_agent/alpha_templates/AGENTS.md`](wqb_agent/alpha_templates/AGENTS.md)。未完成阅读不得修改模板相关文件；无法阅读时必须报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。变更记录必须写明已完成预读及对应验证证据。
+
 - The tracked repository is a public engineering surface: real research templates, private field IDs/pairings, expressions, priors, ExperienceMemory, trajectory, and research evidence are local-only and must never be committed, documented, or printed in reports.
 - `wqb_agent.alpha_templates` is the only template owner. Public package data is synthetic only. Production/private loading is explicit-path → `WQB_ALPHA_TEMPLATE_CATALOG` → user-home private catalog and fails closed with `PRIVATE_TEMPLATE_CATALOG_MISSING`; it never searches cwd/parents or falls back to public templates.
 - Probe templates require explicit mechanism, field relationship, direction reason, falsification, expected horizon, self-correlation impact, novelty, 4–6 operator occurrences, and 2–4 economic fields. Controls may use 1–3 operators and one field. Operator coverage should be broad only where each operator has a justified economic effect and verified arity; coverage alone never justifies complexity.

@@ -1,5 +1,9 @@
 # `wqb_agent/` 局部规则
 
+## Alpha template change gate
+
+任何 Agent 在更新或拓展 `alpha_templates` 及其调用方前，必须先阅读根目录 `AGENTS.md`、[`docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](../docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md) 和 [`alpha_templates/AGENTS.md`](alpha_templates/AGENTS.md)，并在变更记录中确认。未完成阅读不得进行模板变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
+
 先读根 `AGENTS.md`、`docs/ARCHITECTURE_AGENT.md` 和 `research_api.py`。其他模块是 facade 所组合的现有运行时能力。
 
 ## Architecture Freeze（2026-09-09）

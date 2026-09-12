@@ -1,5 +1,9 @@
 # Alpha template generation constraints
 
+## Mandatory pre-read
+
+这是模板目录的最近约束。任何 Agent 在本目录新增、修改、迁移、审查或扩展模板及其 schema/catalog/operator/horizon/settings 规则前，必须先阅读根目录 `AGENTS.md`、[`wqb_agent/AGENTS.md`](../AGENTS.md) 和 [`docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](../../docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md)，并在工作记录中确认。未阅读不得变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
+
 This directory owns the template schema, fail-closed loaders, registry, and numeric/operator audits. The tracked catalog is public synthetic material only; it must never contain production expressions, private field IDs, fixed private pairings, research evidence, or learned priors.
 
 Private templates are loaded only from an explicit absolute constructor path, `WQB_ALPHA_TEMPLATE_CATALOG`, or `~/.wqb_alpha_factory/private/alpha_templates.toml`. Missing private input is `PRIVATE_TEMPLATE_CATALOG_MISSING`; never search cwd/parents or fall back to the public package catalog.

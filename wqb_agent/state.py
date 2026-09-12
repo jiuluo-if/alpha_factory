@@ -7,6 +7,7 @@ DO NOT USE FOR: treating derived memory as immutable platform truth.
 
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -63,6 +64,31 @@ def json_literal_prefilter(value):
     if any(ch in '"\\' or ord(ch) < 0x20 or ord(ch) > 0x7E for ch in value):
         return None
     return value
+
+
+def literal_line_matcher(literals):
+    """Return a raw-line matcher for already safe literal tokens.
+
+    One token stays a plain ``str`` (``in`` is already the fastest check),
+    while a batch becomes a single compiled alternation so a 32-expression
+    read costs one C-level scan per line instead of 32 Python substring
+    tests.  Callers must only pass tokens produced by
+    :func:`json_literal_prefilter`.
+    """
+    if isinstance(literals, str):
+        return literals
+    tokens = tuple(sorted(set(literals or ())))
+    if not tokens:
+        return None
+    if len(tokens) == 1:
+        return tokens[0]
+    return re.compile("|".join(re.escape(token) for token in tokens))
+
+
+def _line_matches(matcher, line):
+    if isinstance(matcher, str):
+        return matcher in line
+    return matcher.search(line) is not None
 
 
 def merge_canonical_candidate(references, latest, key, row):
@@ -364,20 +390,19 @@ class Trajectory:
         targets = {value for value in (experiment_ids or set()) if value}
         if not targets or not self.path or not os.path.exists(self.path):
             return set()
+        literals = {target: json_literal_prefilter(str(target)) for target in targets}
+        prefilter = (
+            tuple(sorted(set(literals.values())))
+            if all(literal is not None for literal in literals.values())
+            else None
+        )
         found = set()
-        try:
-            with open(self.path, encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        row = json.loads(line)
-                    except (ValueError, TypeError, json.JSONDecodeError):
-                        continue
-                    if isinstance(row, dict) and row.get("id") in targets:
-                        found.add(row["id"])
-                        if found == targets:
-                            break
-        except OSError:
-            return set()
+        for row in self.iter_rows(prefilter=prefilter) or ():
+            row_id = row.get("id")
+            if row_id in targets:
+                found.add(row_id)
+                if found == targets:
+                    break
         return found
 
     def iter_ids(self):
@@ -396,19 +421,19 @@ class Trajectory:
 
         ``prefilter`` is an optional literal (or tuple of literals) that every
         requested row must contain; it only skips JSON decoding of lines that
-        cannot match and never changes which rows are yielded.
+        cannot match and never changes which rows are yielded.  A line that
+        carries a JSON escape is always decoded, because a decoded value can
+        differ from its raw text.
         """
         if not self.persist:
             return
         if not self.path or not os.path.exists(self.path):
             return
+        matcher = literal_line_matcher(prefilter)
         try:
             with open(self.path, encoding="utf-8") as handle:
                 for line in handle:
-                    if isinstance(prefilter, str):
-                        if prefilter not in line:
-                            continue
-                    elif prefilter and not any(token in line for token in prefilter):
+                    if matcher and "\\" not in line and not _line_matches(matcher, line):
                         continue
                     try:
                         row = json.loads(line)

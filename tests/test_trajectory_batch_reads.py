@@ -14,7 +14,13 @@ import unittest
 from unittest import mock
 
 from wqb_agent.research_api import compare_experiments, get_experiment
-from wqb_agent.state import RESEARCH_SETTLED_REVISION, Experiment, Trajectory
+from wqb_agent.state import (
+    RESEARCH_SETTLED_REVISION,
+    Experiment,
+    Trajectory,
+    json_literal_prefilter,
+    literal_line_matcher,
+)
 
 
 def _experiment(identity, *, expression="rank(field_a)", status="DONE"):
@@ -116,6 +122,74 @@ class TestFindRowsBatch(unittest.TestCase):
             },
             {"e0", "e1"},
         )
+
+    def test_iter_rows_decodes_escaped_lines_instead_of_skipping(self):
+        row = _experiment("e0").to_dict()
+        row["proposal_id"] = None
+        line = json.dumps(row, ensure_ascii=False)
+        # ``\u0030`` decodes to ``0``: the raw text no longer holds the id, so
+        # only the escape guard can keep the row reachable.
+        escaped = line.replace('"e0"', '"e\\u0030"')
+        self.assertNotEqual(escaped, line)
+        self.assertNotIn("e0", escaped)
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(escaped + "\n")
+        trajectory = self._trajectory()
+        self.assertEqual(
+            [row["id"] for row in trajectory.iter_rows(prefilter="e0")], ["e0"]
+        )
+        self.assertEqual(trajectory.contains_ids(["e0"]), {"e0"})
+
+    def test_contains_ids_matches_batch_read_semantics(self):
+        complex_id = 'e"0\\中'
+        control_id = "e\u0001z"
+        _write(
+            self.path,
+            [
+                _experiment("e0"),
+                _experiment(complex_id),
+                _experiment(control_id),
+                _experiment("e2"),
+            ],
+        )
+        found = self._trajectory().contains_ids(
+            ["e0", complex_id, control_id, "e2", "missing", 7]
+        )
+        self.assertEqual(found, {"e0", complex_id, control_id, "e2"})
+
+    def test_contains_ids_fails_closed_for_escapable_identities(self):
+        complex_id = '\u4e2d"0\\'
+        _write(self.path, [_experiment(complex_id)])
+        # No raw prefilter is legal for this identity, so the read must fall
+        # back to decoding every line instead of silently reporting absence.
+        self.assertIsNone(json_literal_prefilter(complex_id))
+        self.assertEqual(self._trajectory().contains_ids([complex_id]), {complex_id})
+
+    def test_contains_ids_decodes_only_candidate_lines(self):
+        _write(self.path, [_experiment(f"e{index}") for index in range(50)])
+        trajectory = self._trajectory()
+        decoded = []
+        real_loads = json.loads
+
+        def counting_loads(line):
+            decoded.append(line)
+            return real_loads(line)
+
+        with mock.patch.object(json, "loads", counting_loads):
+            found = trajectory.contains_ids(["e7", "e42"])
+        self.assertEqual(found, {"e7", "e42"})
+        self.assertEqual(len(decoded), 2)
+
+    def test_literal_line_matcher_escapes_and_compiles_batches(self):
+        self.assertEqual(literal_line_matcher("e0"), "e0")
+        self.assertIsNone(literal_line_matcher(None))
+        self.assertIsNone(literal_line_matcher(()))
+        batch = literal_line_matcher(("e0", "e1"))
+        self.assertIsNotNone(batch.search('{"id": "e1"}'))
+        self.assertIsNone(batch.search('{"id": "e9"}'))
+        escaped = literal_line_matcher(("a.b", "zzz"))
+        self.assertIsNone(escaped.search("axb"))
+        self.assertIsNotNone(escaped.search("a.b"))
 
 
 class TestCompareExperimentsBatch(unittest.TestCase):

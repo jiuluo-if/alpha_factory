@@ -215,6 +215,16 @@ def workload_trajectory_find_row_batch(rows, root, codec):
     return run
 
 
+def workload_trajectory_contains_ids(rows, root, codec):
+    path = _trajectory_path(root, rows)
+    targets = _sample_ids(rows, FIND_ROW_BATCH)
+
+    def run():
+        Trajectory(path=path, persist=True).contains_ids(targets)
+
+    return run
+
+
 def workload_trajectory_find_completed_expressions(rows, root, codec):
     path = _trajectory_path(root, rows)
     expressions = [
@@ -333,6 +343,7 @@ WORKLOADS = {
     "trajectory_iter_canonical": workload_trajectory_iter_canonical,
     "trajectory_iter_rows": workload_trajectory_iter_rows,
     "trajectory_find_row_batch": workload_trajectory_find_row_batch,
+    "trajectory_contains_ids": workload_trajectory_contains_ids,
     "trajectory_find_completed_expressions": workload_trajectory_find_completed_expressions,
     "research_api_get_experiment": workload_research_api_get_experiment,
     "research_api_compare": workload_research_api_compare,

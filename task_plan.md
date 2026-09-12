@@ -1,6 +1,24 @@
 # 任务计划：运行数据审查、清理与工厂/Agent 边界修复
 
-## 2026-09-12（当前阶段）Phase III Autonomous Optimization（PAUSED/DISARMED，未运行真实 Simulation）
+## 2026-09-12（当前阶段）Phase V Metric-Aware Bounded Optimization（PAUSED/DISARMED，未运行真实 Simulation）
+
+- [x] 只读复核 HEAD `97645b0`，把 8 个真实缺口与设计决定写入 `findings.md`
+- [x] 新增唯一 pre-correlation 准入门槛 `wqb_agent/pre_correlation.py`（delay-aware、结构化报告）
+- [x] Agent 自动路径与 `scripts/refresh_self_correlation.py` 共用同一 selector（一致性测试）
+- [x] `_alpha_rating()` 变 delay-aware；未知 delay 不晋级
+- [x] `AlphaTemplate` 显式 numeric slot + 单变量 variant（无笛卡尔积、safety constant 不轮换）
+- [x] `OptimizationDecision` VALIDATE 单变量 contract + Python 有界候选池
+- [x] `AlphaFactory.validation_proposals()` 只产出 ROBUSTNESS proposal
+- [x] `OptimizerWorkflow.optimizer_context()` + `metric_optimization_context` 接入 suggestion bundle
+- [x] 测试：`tests/test_pre_correlation.py` 与 optimizer context / bundle 契约测试
+- [x] 全量质量门：`833 tests OK`、compileall exit 0、Ruff（排除 7 个未跟踪用户分析脚本）All checks passed、
+  mypy 9 frontier Success、coverage branch-aware 79.8%（`fail_under=76.0`）、
+  offline `state doctor` / `state audit` / `context --compact` exit 0
+- [x] 文档同步（findings / progress / task_plan / RESEARCH_POLICY / ARCHITECTURE_AGENT / prompts）
+- [ ] 提交并推送，核对 `REMOTE_SHA == LOCAL_HEAD`
+- [x] 记录 `TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT`（不绕过 100 契约）
+
+## 2026-09-12（前序）Phase III Autonomous Optimization（PAUSED/DISARMED，未运行真实 Simulation）
 
 - [x] 只读复核 HEAD `43654c4` 的上一轮修复（Trajectory persist / checkpoint / Alpha Feed / optimizer gate）并写入 findings
 - [x] 先写真实顺序测试证明根因（early DONE append → late settlement → restart 丢 FINAL 字段）

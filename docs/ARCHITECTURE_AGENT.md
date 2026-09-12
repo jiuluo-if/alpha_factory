@@ -352,3 +352,31 @@ synonyms: `change_type` must be one of `CHILD_CHANGE_TYPES` and
 decision is rejected inside the gate (`CHANGE_TYPE_NOT_IN_PROPOSAL_CONTRACT`,
 `DIRECTION_TRANSFORM_INVALID`) instead of producing a proposal that the
 production preflight (`research_integrity`) would refuse.
+
+# Pre-correlation policy and metric-aware optimizer context (2026-09-12)
+
+- `wqb_agent/pre_correlation.py` owns the single pre-correlation admission
+  policy plus its derived readiness/opportunity bands. It is pure: no state
+  read, no request, no write.
+- `Agent._pre_correlation_candidates()` builds the correlation-refresh
+  candidate set (settled experiments + trajectory window + validation
+  candidates, deduped by alpha id) and filters it with that one policy;
+  `Agent._alpha_rating()` is delay-aware and refuses to promote a GOOD rating
+  when the configured delay is unknown.
+- `scripts/refresh_self_correlation.py` reads the same merged trajectory view
+  (`Trajectory.load()`), applies the same delay/quality policy and delegates to
+  `pre_correlation_selection()`; `select_alpha_ids()` stays the CLI identity so
+  Agent and script select the same alpha ids (covered by a shared-fixture test).
+- `OptimizerWorkflow.optimizer_context()` is the bounded Agent-facing view: at
+  most 8 parents ranked by readiness band → structural blockers → repairable
+  blockers → metric distance (never `ORDER BY sharpe DESC`), the derived
+  `metric_optimization_context` per parent, failure/blocker counts, declared
+  numeric slots with bounded settings pools, pre-correlation eligibility,
+  self-correlation status counts, the reused `child_generation_bound()` and the
+  OptimizationDecision contract vocabulary. It only reads trajectory evidence:
+  no new owner, no POST, no proposal write.
+- `SuggestionWorkflow` prefers that hook for `bundle["optimizer_context"]` and
+  falls back to the plain `gate_report` counts when the hook is absent.
+- `AlphaFactory.validation_proposals()` is the single ROBUSTNESS generation
+  path for VALIDATE decisions: Python resolves the bounded candidate value from
+  the declared pool, the Agent only chooses which variable to validate.

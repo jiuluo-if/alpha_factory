@@ -469,3 +469,20 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   Success；coverage branch-aware 79.3%（`fail_under=76.0`）。
 - 约束确认：未运行真实 Simulation / run-proposals / factory run；未提交 Alpha；未做远端 color
   写入；未写 `.wqb_state`；研究保持 PAUSED。
+
+# 2026-09-12（第四阶段 Phase V）metric-aware bounded optimization（PAUSED/DISARMED，未运行真实 Simulation）
+
+- 新增 `wqb_agent/pre_correlation.py`：唯一 SELF_CORRELATION 查询准入（delay-aware 阈值、`Returns > 0`、
+  Turnover/Drawdown 上限、`health.ok`、非相关性 checks 全 PASS；缺失 = `UNKNOWN`）。Agent 自动路径与
+  `scripts/refresh_self_correlation.py` 改为共用同一 selector，`_alpha_rating()` 变 delay-aware。
+- `AlphaTemplate` 增加显式 `numeric_slots`（单变量 variant、无笛卡尔积、safety constant 不轮换）；
+  `OptimizationDecision` 增加 VALIDATE 单变量 contract 与 Python 有界候选池；
+  `AlphaFactory.validation_proposals()` 只产出 ROBUSTNESS；`summarize_parent()` 携带 metric context。
+- `OptimizerWorkflow.optimizer_context()` 提供 bounded、按 readiness 排序的 Agent 视图，
+  `SuggestionWorkflow.bundle["optimizer_context"]` 优先使用它（缺 hook 时回落 gate 计数）。
+- 约束确认：未运行真实 Simulation / run-proposals / factory run；未提交 Alpha；未做远端 color 写入；
+  未写 `.wqb_state`；研究保持 PAUSED。已知 blocker：定向 4–8 优化批次被 factory 100 契约阻塞
+  （`TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT`，记录于 `findings.md`）。
+- 全量质量门：`833 tests OK`、compileall exit 0、Ruff（排除 7 个未跟踪用户分析脚本）All checks passed、
+  mypy 9 frontier Success、coverage branch-aware 79.8%（`fail_under=76.0`）、
+  offline `state doctor` / `state audit` / `context --compact` exit 0。

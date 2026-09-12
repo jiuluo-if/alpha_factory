@@ -187,3 +187,48 @@ downstream) → INCONCLUSIVE fallback.
 - Settled FINAL evidence is what a restart rehydrates: the canonical
   `RESEARCH_SETTLED` revision is what makes a previously completed parent
   legally reviewable in a later process.
+
+# Pre-correlation admission and metric-aware optimization (2026-09-12)
+
+- `wqb_agent/pre_correlation.py` is the single SELF_CORRELATION admission
+  policy. `Agent._refresh_self_correlation_evidence()`,
+  `scripts/refresh_self_correlation.py` and the optimizer context all reuse
+  `pre_self_correlation_eligibility()`; there is no second threshold set.
+- Admission order: every non-`SELF_CORRELATION` check resolved PASS →
+  `health.ok` → delay-aware Sharpe/Fitness strictly above threshold →
+  `Returns > 0` → `0.01 <= Turnover <= max_turnover` →
+  `Drawdown <= max_drawdown`. Missing values stay `UNKNOWN`, never PASS.
+- Delay thresholds are strict (`>`): delay 1 → Sharpe > 1.25 / Fitness > 1.0;
+  delay 0 → Sharpe > 2.0 / Fitness > 1.5. An unknown delay is fail-closed
+  (`DELAY_UNKNOWN`) and can never be promoted.
+- `Turnover` 0.125 is only the Fitness denominator floor
+  (`Fitness = Sharpe × sqrt(abs(Returns) / max(Turnover, 0.125))`); it is not a
+  target turnover. The derived context exposes `turnover_penalty_active` and
+  suppresses any "keep lowering turnover" hint at or below the floor. It never
+  recomputes or replaces platform metrics.
+- Readiness bands are Agent context only (no new research state):
+  PRE_CORRELATION_READY / ONE_REPAIR_AWAY / STRUCTURAL_REPAIR_REQUIRED /
+  NUMERIC_VALIDATION_CANDIDATE / LOW_INFORMATION / STOP.
+- Numeric rotation is research-parameter only: `AlphaTemplate.numeric_slots`
+  declares which literal is a research number, one slot per variant,
+  `numeric_variants(max_variants=3)` never forms a Cartesian product, and
+  undeclared literals (divide epsilon, operator arity constants) never rotate.
+  `template_variant_id` is audit/dedupe identity, never mechanism identity;
+  `semantic_mechanism_key` must not include window/decay/threshold.
+- Settings variants reuse the existing `SETTING_OVERRIDES` whitelist and the
+  bounded neighbours from `validation_candidate_values()`: decay is `base ± 1`
+  clamped to 0..10, truncation uses the adjacent allowed values and never
+  changes together with decay, and universe is only offered when the parent
+  shows a real `LOW_SUB_UNIVERSE_SHARPE` blocker with an Agent reason (no
+  round-robin; fail-closed when no universe pool is configured).
+- Every numeric/settings change is `experiment_stage="ROBUSTNESS"` and carries
+  `numeric_variant` / `settings_variant` provenance plus the formal
+  `optimization_decision`; it never enters CHILD discovery.
+- Known blocker: the factory batch contract requires exactly
+  `FACTORY_BATCH_SIZE = 100` proposals and `FactoryRunner` overwrites the single
+  canonical `proposals.json` inbox each round, so a 4–8 targeted optimization
+  batch cannot be materialized through the factory loop today. Recorded in
+  `findings.md` as
+  `TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT`; relaxing it
+  touches the frozen batch contract and needs its own behaviour/regression
+  tests plus explicit approval.

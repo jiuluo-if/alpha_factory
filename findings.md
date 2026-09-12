@@ -694,3 +694,96 @@
   mypy 9 typed frontier Success，coverage branch-aware 79.3%（`fail_under=76.0`，exit 0）。
 - 安全确认：本轮仍只跑 unit fixtures 与 offline 校验；未运行真实 Simulation / run-proposals /
   factory run，未提交 Alpha，未做远端 color 写入，未写 `.wqb_state`。
+
+## 2026-09-12 Phase V 调查：Metric-Aware Bounded Autonomous Optimization
+
+### 起点核对
+
+- HEAD `97645b0` 与提示词编写时的远端 main 一致；工作树只有 7 个上一阶段遗留的未跟踪分析脚本
+  （`analyze_cross_round.py`、`analyze_round14_evidence.py`、`analyze_rounds_16_18.py`、
+  `generate_round20_optimization.py`、`inspect_round15.py`、`inspect_round16.py`、
+  `resume_round14_execution.py`）。本阶段不修改、不提交、不删除这些脚本。
+- 研究保持 PAUSED / DISARMED；本阶段只做 offline 代码、测试与文档。
+
+### 真实研究反馈（Round 14–20）
+
+- 700 次 Simulation、0 个 submit-ready Alpha；主要 blocker 为 `CONCENTRATED_WEIGHT`、
+  `LOW_SUB_UNIVERSE_SHARPE`、`HIGH_TURNOVER`、`SELF_CORRELATION PENDING`。
+- 因此 optimizer 的目标必须是"提高最终通过概率"，而不是"只提高 Sharpe"。
+
+### 现状缺口（只读证据）
+
+1. SELF_CORRELATION 查询前置门槛有两套互不相同的实现：
+   - `Agent._refresh_self_correlation_evidence()`（`wqb_agent/agent.py:1057`）用
+     `_alpha_rating() in {EXCELLENT, SPECTACULAR}` + `checks_ready_for_self_correlation_refresh()` +
+     `health.ok` + turnover 区间；
+   - `scripts/refresh_self_correlation.py::select_alpha_ids()`（该文件 49 行）只用
+     `checks_ready_for_self_correlation_refresh()`。
+   同一 Experiment 集会被选出不同 alpha 集合，正是 §18/§46 要求消除的分裂。
+2. `_alpha_rating()`（`wqb_agent/agent.py:1426`）的 GOOD 分支把 `sharpe > 1.25` /
+   `fitness > 1.0` 写死，只适用于 delay 1；delay 0 需要 Sharpe > 2.0 / Fitness > 1.5。
+3. correlation 前置 gate 目前不含 `Returns > 0`、Drawdown 上限与 delay-aware 阈值；
+   Turnover 只有区间判断，没有结构化报告。
+4. 模板数字全部是字面量（如 `ts_zscore({p}, 20)`、`add(ts_std_dev({p}, 20), 0.001)`），
+   没有"哪些数字是研究参数"的显式声明；regex 轮换会把 divide epsilon `0.001`、
+   operator 必需常量 `1` 也当作参数。
+5. `OptimizationDecision` 的 VALIDATE 决策当前不产生任何 proposal
+   （`OptimizerWorkflow.generate_from_decisions()` 只把它记为 rejected），numeric / settings
+   validation 没有受控生成路径。
+6. Agent 看到的 parent summary（`optimization_decision.summarize_parent()`）没有 metric gap、
+   turnover penalty、pre-correlation eligibility 或 readiness band。
+7. `SuggestionWorkflow` 的 `optimizer_context` 只有 `gate_report` 计数，没有 eligible parent 的
+   metric context、numeric variants 与 self-correlation 状态。
+8. `FactoryRunner` 每轮用 `atomic_write_json_if_changed(self.proposals_path, payload)`
+   覆盖唯一 proposals inbox（`wqb_agent/factory_runner.py:838`），上一阶段实测会覆盖手写的
+   定向 optimization proposals。
+
+### 设计决定
+
+- 新增唯一纯策略 `wqb_agent/pre_correlation.py::pre_self_correlation_eligibility()`：
+  delay-aware、结构化报告，由 Agent、脚本与 optimizer context 共用；
+  `metrics.checks_ready_for_self_correlation_refresh()` 保留为其中"非 SELF_CORRELATION checks
+  全 PASS"的组成部分，不出现第二套门槛。
+- `AlphaTemplate` 增加显式 `numeric_slots`（`TemplateNumericSlot`：
+  name / kind / default / allowed_values / economic_role / token / occurrence）。
+  只有显式声明的 slot 允许轮换，单变量、每 parent 上限 3，且不构成笛卡尔积。
+- settings variant 只走既有 `SETTING_OVERRIDES`（decay `0..10`、truncation `0.02..0.15`、
+  universe 只在 `LOW_SUB_UNIVERSE_SHARPE` 或明确 robustness 问题下由 Agent 选择）。
+- VALIDATE 决策扩展为单变量 contract（`validation_variable` / `old_value` / `new_value` /
+  `expected_effect` / `falsification` / `reason`），复用既有 `ValidationPlan` 与
+  settings override，不新增第二套 validation engine。
+- numeric / settings 变化一律 `experiment_stage="ROBUSTNESS"`，不得冒充 CHILD discovery。
+
+### Phase V 交付（offline 代码 + 测试 + 文档）
+
+- 唯一 pre-correlation 准入：`wqb_agent/pre_correlation.py`。delay 1 → Sharpe > 1.25 / Fitness > 1.0；
+  delay 0 → Sharpe > 2.0 / Fitness > 1.5（严格 `>`，`==` 不过线）；再加 `Returns > 0`、Turnover 区间、
+  Drawdown 上限、`health.ok` 与非相关性 checks 全 PASS；缺失值一律 `UNKNOWN`，不是 PASS。
+  `Agent._pre_correlation_candidates()` 与 `scripts/refresh_self_correlation.py::pre_correlation_selection()`
+  共用同一 selector，一致性由同一 fixture 测试覆盖。
+- 模板 numeric slot：`TemplateNumericSlot` + `AlphaTemplate.numeric_variants()` 只做单变量轮换、每 parent ≤3、
+  不构成笛卡尔积；`reversal_zscore_20`、`momentum_mean_20`、`change_delta_5`、`quality_smooth_change`、
+  `reversal_vol_adjusted` 已声明研究数值；divide epsilon `0.001` 与 operator 必需常量永不轮换（测试固定）。
+- settings VALIDATE：`validation_candidate_values()` 决定有界池（decay `base ± 1` clamp 到 0..10；
+  truncation 取相邻允许值；universe 只在 parent 有真实 `LOW_SUB_UNIVERSE_SHARPE` 证据、settings 与 Agent 理由
+  同时成立时才接受，当前无 universe 池 → fail-closed）。`AlphaFactory.validation_proposals()` 只产出
+  `experiment_stage="ROBUSTNESS"`，不冒充 CHILD；numeric/settings 变化不在机制多样性里制造新语义。
+- Agent context：`summarize_parent()` 携带 `metric_optimization_context`（delay/threshold/gap/turnover penalty/
+  drawdown headroom/readiness/opportunities）；`OptimizerWorkflow.optimizer_context()` 给出 bounded eligible
+  parents（≤8，按 readiness band → 结构 blocker → 可修 blocker → 过线距离排序，而非只看 Sharpe）、blocker 统计、
+  声明式 numeric 池、pre-correlation eligibility、self-correlation 状态计数、复用 `child_generation_bound()`
+  的有界多代边界与决策契约词；`SuggestionWorkflow` 的 `bundle["optimizer_context"]` 优先使用它。
+- `_alpha_rating()` 的 GOOD 分支改为 delay-aware：未知 delay 不再晋级，避免 delay 0 被 delay 1 阈值误判。
+
+### 已知未解决：TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT
+
+- 事实：`proposal_contract.validate_factory_batch()` 要求批次恰好 `FACTORY_BATCH_SIZE = 100`
+  （实测 "工厂批次必须恰好包含 100 个题案，实际 99" → 整批 BLOCKED），且 `FactoryRunner` 每轮用
+  `atomic_write_json_if_changed(self.proposals_path, payload)`（`batch_type="factory_100"`）覆盖唯一
+  canonical `proposals.json` inbox。因此 4–8 个定向优化题案目前无法通过工厂循环 materialize，
+  手写定向 proposals 也会被下一轮覆盖。
+- 本阶段不绕过该安全契约（§56/§57：先记录，再设计 owner-consistent 最小方案）。
+- 候选最小方案（未实现，需用户批准）：仍由同一 `FactoryRunner` 作为唯一 owner，在锁内按显式 batch mode
+  （`factory_100` vs `targeted_optimization`）选择 materialization；复用现有 member-level preflight、去重、
+  checkpoint、`SUBMIT_UNKNOWN` 与预算保护，只放宽"恰好 100"这一条并补行为/回归测试；不新增 inbox、
+  不新增 state owner、不绕过 `Agent.run_proposals()`。

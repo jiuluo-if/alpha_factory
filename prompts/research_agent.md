@@ -16,6 +16,32 @@
 6. 结果必须同时检查 Sharpe、Fitness、Turnover、Returns、Drawdown、Margin、全部 checks、健康、yearly evidence 和相关性（能力可用时）。缺失证据保持 `UNKNOWN` / `UNAVAILABLE`。
 7. 高 Sharpe 不等于真实发现；优先稳健、低相关、可解释且能增加信息的结构。
 
+## 指标与 Fitness 数学
+
+平台返回的 `sharpe`、`fitness`、`returns`、`turnover`、`drawdown`、`margin` 是 canonical observed evidence。公式只用于你自己的推理、sanity 诊断和机会判断，禁止本地重算后覆盖平台指标：
+
+```text
+Fitness = Sharpe × sqrt(abs(Returns) / max(Turnover, 0.125))
+```
+
+- `Sharpe` 代表稳定收益质量；`Returns` 必须为正，负收益不得借公式里的绝对值解释成有效 Alpha。
+- `Turnover > 0.125` 时它进入 Fitness 分母：其它指标稳定时压低换手可能改善 Fitness。
+- `Turnover <= 0.125` 后继续压低换手不再通过分母直接增加 Fitness，不要为分母做无意义压缩。
+- `Drawdown` 越小越好；`Margin` 用于资金使用效率判断；`Fitness` 是综合质量指标。
+- Fitness 偏低可能来自 Sharpe、Returns 或 Turnover，必须同时看三者，不能只归因于换手。
+
+## 优化决策纪律
+
+对每个已完成的 parent 按固定顺序决策，而不是把参数扫描包装成发现：
+
+1. 先修 hard blocker：`CONCENTRATED_WEIGHT` 与 `LOW_SUB_UNIVERSE_SHARPE` 是结构问题，优先 CHILD 结构修复（组中性化、组内相对构造、语义合理的字段分散）。
+2. 再看 metric gap：只有 `HIGH_TURNOVER` 或 Fitness 被 Turnover 拖累时才考虑单变量 VALIDATE（decay / truncation / 一个模板窗口），每次只改一项。
+3. 最后才考虑 numeric validation；`window`、`decay`、`truncation`、`universe` 的变化不是新经济机制，只能进入 VALIDATE / ROBUSTNESS，不能冒充 CHILD discovery。
+4. 一旦 `PRE_CORRELATION_READY`（除 `SELF_CORRELATION` 外全部 checks PASS、`health.ok`、`Returns > 0`、Turnover/Drawdown 合法、delay-aware Sharpe/Fitness 过线），立即改用只读结算 `SELF_CORRELATION`，不得继续扫窗口追求更高 Sharpe。
+5. `SELF_CORRELATION` 只在真正过线后查询；未过线时查询只增加延迟。查询 FAIL 后才考虑真正改变经济暴露来源的修复，不得靠窗口微调伪装成低相关新 Alpha。
+
+统一准入由 `wqb_agent/pre_correlation.py` 的 `pre_self_correlation_eligibility()` 实现：Agent 自动路径与 `scripts/refresh_self_correlation.py` 共用同一判定，不要在 prompt 或代码里另立门槛。
+
 ## 反过拟合与自相关准入
 
 以下规则是硬约束，不是提示词建议：

@@ -920,3 +920,26 @@
   Agent 视图反而看不到自己的子代。
 - `next_action` 映射逐项锁定：结构 blocker 且 `generation_bound.allowed == False` 时返回 `STOP`
   （`test_blocked_generation_turns_structural_repair_into_stop`），确保“修不动”时不再提议新 CHILD。
+
+### 真实控制链复检 2：targeted batch 执行侧的两处断点（2026-09-12）
+
+- **断点 A：DONE parent 被自己的终态表达式排除。** 真实 Agent 的
+  `hooks.terminal_expressions()` 包含已完成 parent 自身的表达式（如 `rank(field_a)`），
+  而 `OptimizerWorkflow.generate()` 原样把它当作优化初筛的 `excluded_expressions`，
+  于是 `screen_optimization_parents()` 判定该 parent“已终结”并丢弃 —— Agent authored 的
+  CHILD/VALIDATE 在真实路径下永远 0 生成。此前端到端测试用
+  `terminal_expressions=lambda: set()` 的空 hook，掩盖了这个断点。
+- **修复 A：** 新增 `OptimizerWorkflow._optimization_exclusions()`：终态集合只用于排除
+  “新提案”，再减去被优化 parent 自身的表达式；screen 与 optimize 各自读取一次 hook，
+  保留既有 dynamic terminal read 行为。
+- **断点 B：targeted envelope 缺 discovery 字段画像。** `run-proposals` 的生产 preflight
+  需要平台字段画像（`description` / `semantic_status`），而 `materialize_targeted_batch()`
+  写出的 envelope 只有 proposals，结果是 `PREFLIGHT_BLOCKED：缺少本轮 discovery 字段画像`：
+  targeted batch 能被写入却永远无法执行。
+- **修复 B：** `research_api._targeted_field_profiles()` 从 Agent 已有的只读 field cache
+  取出 batch 引用字段的真实画像写入 envelope `fields`；cache 缺失时不写画像、由 preflight
+  fail-closed，不伪造字段元数据。
+- **验收：** `tests/test_control_loop_repair.py::TestTargetedBatchRunsOnTheSingleExecutionPath`
+  三条测试：终态不再排除 parent 且真实 Agent 产出 1 个 CHILD；预置真实 field cache 后
+  `materialize → agent.run_proposals()` 被 accepted 并恰好提交 1 次 Simulation（唯一
+  `proposals.json`、唯一执行路径）；无字段画像时 0 次提交且 `PREFLIGHT_BLOCKED`。

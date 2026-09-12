@@ -2,11 +2,19 @@
 
 ## Alpha template change gate
 
-任何 Agent 在更新或拓展 `alpha_templates` 及其调用方前，必须先阅读根目录 `AGENTS.md`、[`docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](../docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md) 和 [`alpha_templates/AGENTS.md`](alpha_templates/AGENTS.md)，并在变更记录中确认。未完成阅读不得进行模板变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
+任何 Agent 在更新或拓展 `alpha_templates` 及其调用方前，必须先阅读根目录 `AGENTS.md`、本文件和 [`alpha_templates/AGENTS.md`](alpha_templates/AGENTS.md)，并在变更记录中确认。未完成阅读不得进行模板变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
 
 先读根 `AGENTS.md`、`docs/ARCHITECTURE_AGENT.md` 和 `research_api.py`。其他模块是 facade 所组合的现有运行时能力。
 
-## Architecture Freeze（2026-09-09）
+## Optimization Agent interface gate
+
+优化专项必须先阅读根 `AGENTS.md`、`docs/RESEARCH_POLICY.md` 和 `research_api.py`，
+并阅读 `optimization_interfaces.py` 的专项接口。只允许使用既有 `OptimizerWorkflow`、
+`OptimizationDecision`、`ClientOptimizationEvidenceProvider` 与 `ExperienceMemory` owner；
+不得创建第二套请求、状态或经验路径。无法完成预读时报告
+`OPTIMIZATION_CONSTRAINTS_NOT_READ`。
+
+## 稳定架构边界
 
 当前 package 边界已冻结：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。Optimizer 只消费 local `Trajectory` evidence，cloud cache 只能提供 metadata priority；审计 JSONL 无 owner lock 时明确为 best-effort。后续只因具体 feature/bug 或新的证据触碰边界，并同步测试、架构文档和完整质量门；不要新增 workflow/state/config abstraction 或继续拆 Agent 私有层。
 

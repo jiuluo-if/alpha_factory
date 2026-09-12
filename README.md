@@ -90,7 +90,7 @@ public attributes，以保持兼容 facade 和现有研究方法不变。`AlphaF
 `get_all_user_alphas`，维护 `America/New_York` 七个自然日的轻量元数据，不发送 Simulation
 POST、不 PATCH Alpha，也不写入指标或研究证据。
 
-## 架构冻结（2026-09-09）
+## 稳定架构边界
 
 当前 owner、状态和远端写路径已经冻结：配置经 `parse_config/normalize_config` 进入 typed `AppConfig`，再经过 `AgentRuntimePolicy`、`RuntimeComponents` 和 `Agent` 组合四个 workflow；远端颜色写入由显式 `alpha sync-colors` 独占。生产研究闭环仍只有：
 
@@ -110,6 +110,7 @@ python main.py run-proposals
 - [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)：概念、事实层级和调用边界
 - [`docs/BRAIN_PROTOCOL.md`](docs/BRAIN_PROTOCOL.md)：BRAIN 协议、Retry-After 和 capability
 - [`docs/RESEARCH_POLICY.md`](docs/RESEARCH_POLICY.md)：假设、反证、稳健性和统计纪律
+- [`docs/PRIVACY.md`](docs/PRIVACY.md)：公共仓库与本地研究数据边界
 
 算子与设置参考文档若被运行时需要，会在 `docs/README.md` 中标为 `REFERENCE`，不作为默认 mental model。
 
@@ -125,7 +126,7 @@ coverage run --branch -m unittest discover -s tests
 coverage report
 ```
 
-本地验证与 CI 使用同一质量门：Coverage 只统计 `wqb_agent` 并开启 branch coverage，初始 `fail_under=76.0`（依据 2026-09-09 配置生效后的 fresh baseline：statement `79.99%`、branch `68.31%`、branch-aware `76.74%`）；mypy 只检查九个 typed frontier 模块，Ruff 启用现有规则、import sorting、选定安全 UP 规则及 `B007/B904`。质量检查保持离线，不执行 live BRAIN、Simulation 或 Alpha submission。
+本地验证与 CI 使用同一质量门：Coverage 只统计 `wqb_agent` 并开启 branch coverage，初始 `fail_under=76.0`；mypy 只检查九个 typed frontier 模块，Ruff 启用现有规则、import sorting、选定安全 UP 规则及 `B007/B904`。质量检查保持离线，不执行 live BRAIN、Simulation 或 Alpha submission。
 
 ## 颜色、Agent 优化与阶段配额
 
@@ -134,6 +135,6 @@ coverage report
 - 当前阶段工厂本地配额为每周 `11200` 次（`7*1600`），每日 `1600` 次，按 `America/New_York` 本地日刷新。`factory_session.json` 只保存配额控制元数据；未完成 checkpoint 的恢复预留优先，不能通过新轮绕过。
 - `python main.py alpha sync-feed` 每次只读分页拉取当前工作日前推 7 个自然日的用户 Alpha：提交 Alpha 与模拟 Alpha 在同一刷新批次按纽约本地日分桶，写入 `.alpha_feed_cache/weekly.json`，保留 `updated_at`/`expires_at`，并按 `11200（7*1600）` 模拟元数据上限清理窗口外数据。
 
-旧式 boolean flag 命令在有限兼容窗口内仍可使用，但会输出弃用提示；新命令的完整 grammar 见 [`docs/superpowers/specs/2026-09-09-cli-subcommands-design.md`](docs/superpowers/specs/2026-09-09-cli-subcommands-design.md)。
+旧式 boolean flag 命令在有限兼容窗口内仍可使用，但会输出弃用提示；新命令使用结构化子命令。
 
 自主 factory round 分成两个研究层：优化层优先使用云端轻量 Alpha 元数据命中的本地完成证据，再使用本轮完成证据；代码先做证据和反过拟合初筛，Agent 再确认新的经济机制。探索层由工厂使用稳定轮次种子进行大批量随机字段/模板组合，目标是定位信号而非扫描参数。两层共享 100 题案原子 gate、预算和 `Agent.run_proposals()`，`factory_batch_stats` 会记录层级与来源。

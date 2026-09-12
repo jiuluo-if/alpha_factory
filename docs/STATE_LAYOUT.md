@@ -41,19 +41,19 @@
 - 需要归档的历史材料移至 `docs/archive/`，按对象类别分类；不要在 `.wqb_state` 内复制一份“整理版”状态。
 - 非 canonical 的状态备份可移入已有 `quarantine/<category>/` 子目录；保留原文件名和内容，并在本文件或审计记录中说明来源。
 - 轮次归档使用 `python scripts/archive_completed_rounds.py` 先 dry-run，再经确认加 `--apply`；默认保留最近 10 个摘要。
-# Feasibility probe scope (2026-09-10)
+# Feasibility probe scope
 
 Feasibility diagnostics are control-plane audit metadata only. They contain counts, evidence provenance, and failure taxonomy; they do not expand checkpoint, trajectory, ledger, Alpha Feed, or metrics state.
-# Route and handoff metadata (2026-09-10)
+# Route and handoff metadata
 
 `factory_session.json` may contain bounded route decision metadata and the latest feasibility probe summary. These fields are control-plane observations; they do not contain metrics, checks, Alpha payloads or checkpoint recovery data. Optimizer handoff counters are likewise diagnostic and do not establish a second research-state store.
 
-# Feed freshness and heartbeat (2026-09-10)
+# Feed freshness and heartbeat
 
 The existing `.alpha_feed_cache/weekly.json` remains the only Feed cache. Its `updated_at`/`expires_at` support a read-only freshness view; refresh attempts and failures are transient runtime metadata and do not replace the last successful timestamp. Heartbeat events are process-local and transient: no `heartbeat.jsonl`, metrics sidecar, checkpoint field, trajectory row, quota record, or separate scheduler is created.
 
 
-# ResearchYield projection (2026-09-11)
+# ResearchYield projection
 
 ResearchYield adds no new file and no new state owner. It is a derived
 in-memory / report projection over existing evidence (checkpoint experiments,
@@ -66,7 +66,7 @@ history replicas are forbidden in any ResearchYield persistence. Lightweight
 cloud metadata (e.g. Alpha Feed rows without expression/template/fields) is
 filtered out at funnel construction and can never become yield evidence.
 
-# Settled evidence revisions (2026-09-12)
+# Settled evidence revisions
 
 `trajectory.jsonl` stays the only canonical completed-Experiment evidence owner.
 One Experiment may now occupy more than one append-only row: the first canonical

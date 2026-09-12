@@ -102,7 +102,7 @@
 | `ts_decay_linear(x,d,dense=false)` | 近期高权重、历史递减 | 993 |
 | `hump(x,hump=0.01)` | 限制每天信号变化幅度 | 1 |
 
-> **2026-09-11 平台实测（round_4）**：`hump(x, 0.01)` 双参形式被拒（`exactly 1 input`），与多参 `normalize`/`winsorize` 同类；此 region 下 `hump` 仅单参 `hump(x)` 合法。
+> 平台兼容性记录：`hump(x, 0.01)` 双参形式被拒（`exactly 1 input`）；此 region 下 `hump` 仅单参 `hump(x)` 合法。
 | `ts_step(1)` | 每天递增 1 的计数器 | 0 |
 
 `ts_decay_linear` = 加权平滑；`hump` = 直接限制变化/换手。
@@ -117,7 +117,7 @@
 | `quantile(x,driver=gaussian,sigma=1)` | 排名后映射指定分布 | Gaussian/Cauchy/Uniform | 0 |
 | `winsorize(x,std=4)` | 截断极端值 | 降低异常值影响 | 1 |
 
-> **2026-09-11 平台实测（round_4）**：`winsorize(x, 4)` 双参形式被拒（`Invalid number of inputs : 2, should be exactly 1 input(s)`），与多参 `normalize` 同类；此 region 下 `winsorize` 仅单参形式 `winsorize(x)` 合法。上表参数列为文档态签名，live 以 1 参为准。
+> 平台兼容性记录：`winsorize(x, 4)` 双参形式被拒（`Invalid number of inputs : 2, should be exactly 1 input(s)`）；此 region 下 `winsorize` 仅单参形式 `winsorize(x)` 合法。上表参数列为文档态签名，live 以 1 参为准。
 | `scale(x,scale=1,longscale=1,shortscale=1)` | 调整整体持仓规模 | 控制 book size、多空规模 | 0 |
 
 易混淆点：
@@ -161,10 +161,10 @@
 
 `group_neutralize` = 从 Alpha 减去所属组平均 Alpha，消除行业/板块/国家共同暴露。
 
-## 平台实测拒绝记录（2026-09-11，USA/EQUITY/TOP3000/Delay1）
+## 平台兼容性拒绝记录
 
 BRAIN live response 高于本表；以下用法在本项目 300 次真实 Simulation 中被平台确定性拒绝
-（rounds 1-2 FAILED 全部 42 项与 round 3 前 17 项均可归因于此 4 个算子用法）：
+（历史失败样本均可归因于以下算子用法）：
 
 | 被拒用法 | 平台错误 | 现状与替代 |
 |---|---|---|

@@ -15,7 +15,24 @@ from .evidence_status import annotate_evidence
 from .metrics import num
 
 
+def decode_recordset(payload):
+    """Decode a BRAIN recordset by schema names, never fixed column indexes."""
+    if not isinstance(payload, dict):
+        return payload if isinstance(payload, list) else []
+    properties = ((payload.get("schema") or {}).get("properties") or [])
+    names = [item.get("name") for item in properties
+             if isinstance(item, dict) and isinstance(item.get("name"), str)]
+    records = payload.get("records")
+    if not isinstance(records, list):
+        return payload
+    if not names:
+        return records
+    return [dict(zip(names, row)) if isinstance(row, list) else row
+            for row in records]
+
+
 def _series(payload):
+    payload = decode_recordset(payload)
     if isinstance(payload, dict):
         for key in ("returns", "pnl", "data", "records"):
             candidate = payload.get(key)
@@ -34,6 +51,7 @@ def _series(payload):
 
 
 def _dated_series(payload):
+    payload = decode_recordset(payload)
     if isinstance(payload, dict):
         for key in ("returns", "pnl", "data", "records"):
             if isinstance(payload.get(key), list):

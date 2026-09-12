@@ -2,7 +2,7 @@
 
 本仓库是面向 AI Agents 的 WorldQuant BRAIN Alpha 研究工具。仓库是研究仪器，不是研究员：Agent 做研究判断，Python 保证真实执行、证据、恢复和安全边界。
 
-## 架构冻结（2026-09-09）
+## 稳定架构边界
 
 - 当前稳定对象图是 `raw config → parse_config/normalize_config → typed AppConfig → AgentRuntimePolicy → RuntimeComponents → Agent → 四个 AgentWorkflows`，另有独立 `AlphaColorWorkflow` 显式写路径。
 - 当前唯一生产 Simulation 写链是 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`；`WQBClient.run_simulation()` 仅保留旧库兼容且无生产调用。
@@ -109,7 +109,7 @@ Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实
 5. 一个相关测试
 6. 必要时一个 `docs/` 协议或研究政策文档
 
-不要默认递归阅读整个仓库。历史 phase 文档、`docs/superpowers/**`、兼容 factory、一次性 report 脚本和 specialized skills 只有在当前任务确实需要时才读。
+不要默认递归阅读整个仓库。历史 phase 文档、已删除的计划资料、兼容 factory、一次性 report 脚本和 specialized skills 只有在当前任务确实需要时才读。
 
 ## Prompt 结构
 
@@ -117,7 +117,7 @@ Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实
 - `prompts/maintenance_agent.md`：外层维护 Agent（architecture、tests、docs、privacy、profiling、dependency、交付）；遇到研究判断输出 `REQUIRES_INNER_RESEARCH_DECISION`。
 - `prompts/research_agent.md`：内层研究 Agent（hypothesis、`OptimizationDecision`、结果解释）。
 
-两个 prompt 只引用本文件，不复制契约正文；`docs/AGENT_VIBE_CODING_PROMPT.md` 是指向它们的 redirect。
+两个 prompt 只引用本文件，不复制契约正文。
 
 ## 运行入口
 
@@ -146,11 +146,21 @@ python main.py run-proposals
 
 ## 修改与验证
 
-### Alpha Probe Factory V1 constraints
+### Optimization Agent 专项接口约束
+
+优化 Agent 必须遵循 [`docs/RESEARCH_POLICY.md`](docs/RESEARCH_POLICY.md) 和
+`wqb_agent.optimization_interfaces` 的专项接口：
+只消费 local trajectory 的已有 evidence 和 `ClientOptimizationEvidenceProvider` 的只读快照；
+不得新增 HTTP client、Simulation POST、state/ledger/memory owner 或自行重算并覆盖平台指标。
+优化顺序固定为指标诊断 → Agent 经济假设/falsification → 单变量决策 → 既有安全入口 →
+完整证据复核 → 记录所有 trial。缺失数据保持 `UNKNOWN/UNAVAILABLE`；无法读取本协议时报告
+`OPTIMIZATION_CONSTRAINTS_NOT_READ`。
+
+### Alpha Probe Factory constraints
 
 #### Mandatory template-change reading
 
-任何 Agent 在更新或拓展 Alpha 模板、模板 schema、catalog、operator coverage、horizon 或 settings 规则前，必须先阅读并确认 [`docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md)、[`wqb_agent/AGENTS.md`](wqb_agent/AGENTS.md) 和 [`wqb_agent/alpha_templates/AGENTS.md`](wqb_agent/alpha_templates/AGENTS.md)。未完成阅读不得修改模板相关文件；无法阅读时必须报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。变更记录必须写明已完成预读及对应验证证据。
+任何 Agent 在更新或拓展 Alpha 模板、模板 schema、catalog、operator coverage、horizon 或 settings 规则前，必须先阅读并确认根 `AGENTS.md`、[`wqb_agent/AGENTS.md`](wqb_agent/AGENTS.md) 和 [`wqb_agent/alpha_templates/AGENTS.md`](wqb_agent/alpha_templates/AGENTS.md)。未完成阅读不得修改模板相关文件；无法阅读时必须报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
 
 - The tracked repository is a public engineering surface: real research templates, private field IDs/pairings, expressions, priors, ExperienceMemory, trajectory, and research evidence are local-only and must never be committed, documented, or printed in reports.
 - `wqb_agent.alpha_templates` is the only template owner. Public package data is synthetic only. Production/private loading is explicit-path → `WQB_ALPHA_TEMPLATE_CATALOG` → user-home private catalog and fails closed with `PRIVATE_TEMPLATE_CATALOG_MISSING`; it never searches cwd/parents or falls back to public templates.
@@ -179,6 +189,6 @@ python scripts/check_repo_privacy.py
 
 CI 中完整测试只在 coverage execution 中运行一次；coverage 与 full suite 合并承担测试和 branch coverage 质量门。
 
-质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，以 2026-09-09 配置生效后的 fresh baseline（statement `79.99%`、branch `68.31%`、branch-aware `76.74%`）为依据设置初始 `fail_under=76.0`；阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
+质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，初始 `fail_under=76.0`，阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
 
 提交或推送必须得到用户明确授权；获授权时 Git 邮箱必须为 `2966684515@qq.com`，提交信息必须以 `fix：` 或其他前缀加中文内容。

@@ -8,7 +8,7 @@
 | BRAIN API、Retry-After、能力状态和未知结果如何处理？ | [`BRAIN_PROTOCOL.md`](BRAIN_PROTOCOL.md) |
 | 如何设计可反证实验、记录 trial 并解释证据？ | [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md) |
 | 当前测试规则、增量验证和 CI 质量门是什么？ | [`TESTING.md`](TESTING.md) |
-| 测试套件删减的历史依据在哪里？ | [`TEST_SUITE_SIMPLIFICATION_REPORT.md`](TEST_SUITE_SIMPLIFICATION_REPORT.md) |
+| 公共和本地文件如何划分？ | [`PRIVACY.md`](PRIVACY.md) |
 | 算子、字段类型和设置有哪些平台参考？ | [`reference/OPERATORS_CHEATSHEET.md`](reference/OPERATORS_CHEATSHEET.md)、[`reference/SIMULATION_SETTINGS.md`](reference/SIMULATION_SETTINGS.md)（REFERENCE） |
 | 如何恢复或审计本地研究状态？ | [`STATE_LAYOUT.md`](STATE_LAYOUT.md)（按需） |
 
@@ -16,4 +16,4 @@
 
 `reference/OPERATORS_CHEATSHEET.md` 可能被运行时读取和校验 hash，因此即使不属于默认阅读路径也要保留。`reference/SIMULATION_SETTINGS.md` 是平台设置参考。其他研究路线、文件命名和工具纪律文档只有在当前任务需要时阅读。
 
-历史 phase 文档、已完成的 `superpowers` plan/spec、报告和 round summary 不属于当前 policy；清理后不在这里保留历史导航。Git history 承担历史存档职责。
+历史 phase、计划、报告和 round summary 不属于当前 policy；Git history 承担历史存档职责。

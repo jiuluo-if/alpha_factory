@@ -22,6 +22,14 @@ from .incremental_value import (
     build_incremental_value,
     select_trusted_pool,
 )
+from .optimization_interfaces import (
+    ClientOptimizationEvidenceProvider,
+    OptimizationEvidenceProvider,
+    OptimizationEvidenceSnapshot,
+    OptimizationTrial,
+    diagnose_optimization,
+    record_optimization_trial,
+)
 from .research_evidence import ResearchEvidenceBundle, classify_research
 from .robustness import RobustnessEvidence, evaluate_robustness, retention
 from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
@@ -70,6 +78,12 @@ __all__ = [
     "DiagnosticEvent",
     "ResearchEvidenceBundle",
     "classify_research",
+    "ClientOptimizationEvidenceProvider",
+    "OptimizationEvidenceProvider",
+    "OptimizationEvidenceSnapshot",
+    "OptimizationTrial",
+    "diagnose_optimization",
+    "record_optimization_trial",
     "candidate_identity",
     "HighSignalValidator",
     "FailureKind",

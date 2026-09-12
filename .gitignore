@@ -159,3 +159,16 @@ Desktop.ini
 *.prompt.local
 *.session.local
 *.task.local
+
+# Local research scripts and transient planning files kept outside the public tree
+/analyze_cross_round.py
+/analyze_round14_evidence.py
+/analyze_rounds_16_18.py
+/generate_round20_optimization.py
+/inspect_round15.py
+/inspect_round16.py
+/resume_round14_execution.py
+/findings.md
+/progress.md
+/task_plan.md
+docs/superpowers/

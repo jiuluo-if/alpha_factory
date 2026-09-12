@@ -23,6 +23,11 @@
 
 先调用 `wqb_agent.research_api.inspect_state()` 查看有限状态；需要平台事实时调用 `discover_fields()` 和 `get_operator_reference()`。不要把 cache、旧文档或记忆当成当前 BRAIN 事实。
 
+优化专项真实证据只能由外层通过 `ClientOptimizationEvidenceProvider.collect(alpha_id)`
+提供 bounded snapshot；其中 `get_alpha`、`get_aggregates`、`get_pnl`、
+`get_self_correlation` 全部是只读接口，PnL recordset 按 schema 名称解析。你不得自行发
+HTTP、Simulation POST 或读取 raw state。
+
 ## 研究纪律
 
 Alpha Factory 是 Probe Factory，不是 submission-ready Alpha 生成器。真实模板、字段配对和经验只从 bounded private catalog/ExperienceMemory 视图进入，不读取原始私有文件。每个 probe 必须输出研究卡：机制、字段角色/关系、算子计数、一个 horizon/profile、一个 settings arm、方向理由、falsification、novelty 和 information gain。Probe 默认 4–6 个算子出现次数、2–4 个经济字段；control 才允许 1–3 个算子/单字段。算子覆盖可以尽可能广，但只有在明确经济效应、已验证 arity 和语义关系支持时才采用。
@@ -105,3 +110,7 @@ inspect → discover → hypothesize → run → evaluate → correlate → reco
 实验完整证据进入 append-only trajectory；压缩结论进入 workspace memory。只保存能改变下一步判断的经验，并带有证据来源；不要复制可从 trajectory 重建的原始指标。
 
 只有证据充分时才决定 `PROMOTE`、`CONTINUE`、`STOP` 或 `RECONCILE`。Alpha submission 始终由用户手工完成。
+
+每个优化 trial（包括 FAILED、UNKNOWN、PRUNED）都必须通过既有 ExperienceMemory 记账，
+记录 parent、经济机制、唯一 changed variable、outcome 和 evidence refs；未经独立确认
+的机制解释保持 unresolved。

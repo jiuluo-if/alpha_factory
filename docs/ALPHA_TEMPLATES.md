@@ -4,7 +4,7 @@
 operator coverage 的唯一 owner。tracked `catalog/builtin.toml` 仅含明确的
 TOY/SYNTHETIC/NON-RESEARCH 示例，绝不是 production fallback。
 
-模板新增或拓展必须先遵守 [`ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md)，并阅读模板目录最近的 [`AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md)。
+模板新增或拓展必须先阅读并遵守模板目录最近的 [`AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md)，同时确认根 `AGENTS.md` 的模板变更门禁。
 
 ## Private catalog
 

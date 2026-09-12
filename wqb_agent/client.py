@@ -788,6 +788,20 @@ class WQBClient:
         )
         return resp.json()
 
+    def get_recordset(self, alpha_id, name):
+        """Fetch an explicitly allow-listed read-only Alpha recordset."""
+        if name not in {"pnl"}:
+            raise ValueError(f"unsupported alpha recordset: {name}")
+        resp = self._request(
+            "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets/{name}",
+            context=f"GET alpha recordset {name} {alpha_id}",
+        )
+        return resp.json()
+
+    def get_pnl(self, alpha_id):
+        """Fetch the official daily PnL recordset without inventing metrics."""
+        return self.get_recordset(alpha_id, "pnl")
+
     def set_alpha_color(self, alpha_id, color, *, verify=True):
         """Update only top-level Alpha metadata color and optionally read it back.
 

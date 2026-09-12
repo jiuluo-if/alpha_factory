@@ -2,7 +2,9 @@
 
 ## Mandatory pre-read
 
-这是模板目录的最近约束。任何 Agent 在本目录新增、修改、迁移、审查或扩展模板及其 schema/catalog/operator/horizon/settings 规则前，必须先阅读根目录 `AGENTS.md`、[`wqb_agent/AGENTS.md`](../AGENTS.md) 和 [`docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md`](../../docs/ALPHA_TEMPLATE_EXPANSION_CONSTRAINTS.md)，并在工作记录中确认。未阅读不得变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
+这是模板目录的最近约束。任何 Agent 在本目录新增、修改、迁移、审查或扩展模板及其 schema/catalog/operator/horizon/settings 规则前，必须先阅读根目录 `AGENTS.md`、[`wqb_agent/AGENTS.md`](../AGENTS.md) 和本文件，并在工作记录中确认。未阅读不得变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
+
+tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、字段、表达式、经验和 evidence 只能存在本地私有目录。私有 catalog 仅按显式绝对路径、`WQB_ALPHA_TEMPLATE_CATALOG` 或用户 home 默认路径加载，缺失必须 fail-closed。
 
 This directory owns the template schema, fail-closed loaders, registry, and numeric/operator audits. The tracked catalog is public synthetic material only; it must never contain production expressions, private field IDs, fixed private pairings, research evidence, or learned priors.
 

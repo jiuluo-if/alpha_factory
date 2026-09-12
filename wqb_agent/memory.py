@@ -326,6 +326,8 @@ class ExperienceMemory:
         if not isinstance(detail, dict):
             return
         for key in (
+            "optimization_trial", "parent_id", "outcome", "mechanism",
+            "changed_variable",
             "hypothesis_outcome", "mechanism_learning", "unresolved_question",
             "competing_explanations", "next_discriminating_question",
             "evidence_needed", "evidence_refs", "parent_hypothesis",

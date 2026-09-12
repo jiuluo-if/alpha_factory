@@ -62,10 +62,10 @@ class TestIncrementalValue(unittest.TestCase):
     def test_incremental_capability_audit_client_has_no_behavior_series(self):
         """Phase III incremental audit: only aggregate/correlation endpoints exist.
 
-        The client exposes ``GET /alphas/{id}``, ``/aggregates`` and
-        ``/correlations/{kind}``; it has no PnL / daily-return / behavior-series
-        reader, so incremental value stays explicitly UNAVAILABLE instead of
-        being faked from aggregate metrics or Sharpe deltas.
+        The client may expose the verified read-only PnL recordset, but it has
+        no daily-return / behavior-series owner, so incremental value stays
+        explicitly UNAVAILABLE instead of being faked from aggregate metrics
+        or Sharpe deltas.
         """
         package_root = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "wqb_agent"
@@ -74,9 +74,10 @@ class TestIncrementalValue(unittest.TestCase):
             source = handle.read()
         for endpoint in ("/alphas/{alpha_id}", "/aggregates", "/correlations/"):
             self.assertIn(endpoint, source)
+        self.assertIn("/recordsets/{name}", source)
+        self.assertIn('name not in {"pnl"}', source)
         for forbidden in (
-            "/pnl", "get_pnl", "daily_returns", "/records", "behavior_series",
-            "pnl_series",
+            "daily_returns", "behavior_series", "pnl_series",
         ):
             self.assertNotIn(forbidden, source)
 

@@ -983,3 +983,23 @@
 - `prompts/research_agent.md` 收敛为 Inner Research Agent：只有研究角色与 handoff 契约。
 - `docs/AGENT_VIBE_CODING_PROMPT.md` 从混合大 prompt 改为 redirect；`prompts/AGENTS.md` 声明
   两个 prompt 的分工，契约仍以根 `AGENTS.md` 为唯一 source-of-truth。
+
+### 测试瘦身与性能（Phase VII 收尾）
+
+- 测试：`tests/test_factory_boundaries.py` 从 2028 行/81 tests 拆为 7 个 contract 文件（保留文件
+  630 行）+ `tests/helpers.py`；拆前拆后 factory 测试数一致，全量 867 → 876（+9 privacy 测试）→ 888
+  （+12：harness smoke 与 batch-read 回归），coverage 80.0%（`1187790` worktree 实测）→ 80.1%
+  （最终树 888 tests）。
+- 性能：唯一被 profile 证明的真实 hotspot 是 `N × full scan`（`Trajectory.find_row()` 每次流式扫描，
+  `compare_experiments()` 逐 id 调用）。`5da9565` 新增 owner-local `find_rows()` 单次 canonical merge
+  pass、`iter_rows(prefilter=...)` 解码前预筛（含引号/反斜杠/控制字符/非 ASCII 的 identity 退回全量
+  解码，fail-closed）后：50k 行 compare 7681.6 → 241.4 ms（31.8x）、16 次单查 7817.8 → 1830.6 ms
+  （4.3x）、32 次 find_row 15511.9 → 3646.4 ms（4.3x），其余 workload 在噪声内不变。
+- `find_completed_expressions` 的 repeated canonicalization 候选做了实验（`canonical_expression`
+  有界缓存）但 50k 行 1195 → 1172 ms，无实质收益 → 回退，不提交未证明的 `perf`。
+- 依赖：orjson decode 快 2.75x 但语义不兼容（NaN/Infinity 从可解析变为 `JSONDecodeError`、大整数
+  `int` → `float`、dumps `NaN` → `null`、int key `TypeError`）→ REJECT / `NO_RUNTIME_LIBRARY_CHANGE`；
+  py-spy 与 pytest + pytest-xdist 为 dev-only（`perf` extra），CI authoritative unittest lane 不变；
+  msgspec 默认拒绝。
+- 未触碰：真实 Simulation、Alpha submission、remote color write、`.wqb_state`、durability
+  （`flush`/`fsync`/`os.replace`）、`SUBMIT_UNKNOWN` exactly-once、checkpoint、reward/optimizer 语义。

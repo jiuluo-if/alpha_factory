@@ -13,6 +13,7 @@
 | `replay_research_yield.py` | 只读重放历史证据为 mechanism funnel | 不写 `.wqb_state`，不触发 Simulation |
 | `research_quality_audit.py` | 生成 raw research audit | 默认输出 local-only `research_data/`，禁止写 tracked docs |
 | `check_repo_privacy.py` | research-data 隐私回归 | 只扫 `git ls-files`，不扫整块磁盘 |
+| `benchmark_local_io.py` | offline 本地 IO/JSONL 基准 harness | synthetic 临时数据，无 network/`Client`/`.wqb_state` |
 
 已删除的 report、ledger、schema enhance、memory maintenance 和一次性导入脚本不再是当前工程入口；完整历史由 Git 保留，研究事实仍从 `.wqb_state` 和 BRAIN 获取。
 

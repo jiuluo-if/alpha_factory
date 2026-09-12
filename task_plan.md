@@ -437,8 +437,20 @@
 - [x] sanitize 5 个文档 77 处隐私 token；`.gitignore` 补 `audit.json` 与 `docs/research_quality_audit_*/`
 - [x] 新增 `scripts/check_repo_privacy.py` + `tests/test_repo_privacy.py`（9 条）
 - [x] Prompt 分离：新增 `prompts/maintenance_agent.md`、收敛 `prompts/research_agent.md`、混合 prompt 改 redirect
-- [ ] 测试瘦身：按 contract 拆分过长测试，fixture 收敛到 `tests/helpers.py`（计数/覆盖/行为等价或更强）
-- [ ] profiling baseline + `scripts/benchmark_local_io.py` + smoke test
-- [ ] 依赖评估（py-spy dev-only、orjson A/B、pytest/xdist dev-only、msgspec 默认拒绝）+ `docs/PERFORMANCE.md`
-- [ ] profile 支持的小范围 production 优化（否则报告 `NO_JUSTIFIED_RUNTIME_OPTIMIZATION`）
-- [ ] 质量门 + 推送并核对 `REMOTE_SHA == LOCAL_HEAD`
+- [x] 测试瘦身：`tests/test_factory_boundaries.py`（2028 行/81 tests）按 contract 拆为 7 个文件 +
+  `tests/helpers.py`；factory 测试数 81 → 81 不变，全量 867 → 876（+9 privacy 测试）→ 888
+  （+12：harness smoke 1 条 + batch-read 回归 11 条），coverage 80.0%（`1187790` worktree 实测）
+  → 80.1%（最终树 888 tests）
+- [x] profiling baseline + `scripts/benchmark_local_io.py`（offline/synthetic/临时目录，默认 stdout）+
+  `tests/test_benchmark_harness.py` smoke；cProfile `state.py:iter_rows` 主导、py-spy 0.4.2 422 samples / 0 errors
+- [x] 依赖评估（记录 `docs/PERFORMANCE.md`）：py-spy dev-only ADOPT、orjson REJECT →
+  `NO_RUNTIME_LIBRARY_CHANGE`（decode 10/16 case 语义不同：NaN/Infinity 抛错、大整数→float；dumps NaN→null）、
+  pytest + pytest-xdist dev-only ADOPT（两轮 888 passed / 44.06 s，CI authoritative lane 不变）、
+  msgspec `DO_NOT_ADOPT_MSGSPEC`
+- [x] profile 支持的小范围 production 优化：`5da9565` `Trajectory.find_rows()` 单 pass + JSONL 预筛 +
+  `compare_experiments` 复用（50k 行 compare 7681.6 → 241.4 ms、16 次单查 7817.8 → 1830.6 ms、
+  32 次 find_row 15511.9 → 3646.4 ms；semantic diff = none，回归 `tests/test_trajectory_batch_reads.py`）
+- [x] `find_completed_expressions` canonical 缓存实验无实测收益 → 回退，未提交未证明 perf
+- [x] 质量门（unittest 876、compileall、ruff、mypy 9 frontier、coverage 80.1%、offline doctor/audit、
+  privacy findings=0）+ 推送并核对 `REMOTE_SHA == LOCAL_HEAD`（`111b5fe`、`08778ee`、`3741d71`、
+  `6c89bfa`、`5da9565`、`dc598a0` + 本收尾文档提交）

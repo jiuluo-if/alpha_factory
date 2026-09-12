@@ -591,3 +591,17 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   当前 0 findings）。
 - Prompt 分离：新增 `prompts/maintenance_agent.md`，收敛 `prompts/research_agent.md`，
   `docs/AGENT_VIBE_CODING_PROMPT.md` 改为 redirect。
+
+### 2026-09-12 Phase VII 收尾：测试瘦身与性能卫生（PAUSED/DISARMED，未运行真实 Simulation）
+
+- 测试拆分（`3741d71`）：`tests/test_factory_boundaries.py` → 7 个 contract 文件 + `tests/helpers.py`；
+  全量 `python -m unittest discover -s tests` = 867（`1187790` worktree）→ 876（拆分 + privacy 测试）→
+  888（+12：harness smoke 与 batch-read 回归）tests OK；coverage 80.0% → 80.1%（最终树 888 tests）。
+- 性能 harness（`6c89bfa`）：`scripts/benchmark_local_io.py`（offline、synthetic、临时目录、默认 stdout）
+  + `tests/test_benchmark_harness.py` smoke；cProfile/py-spy 证据与 before/after 数字见 `docs/PERFORMANCE.md`。
+- 唯一被证明的优化（`5da9565`）：`Trajectory.find_rows()` 单 pass + JSONL 预筛 + `compare_experiments`
+  复用；50k 行 compare 7681.6 → 241.4 ms、单查 7817.8 → 1830.6 ms；`dc598a0` 修正新测试的
+  settlement identity 构造（pytest 暴露的时间敏感缺陷）。
+- 依赖决策：orjson REJECT（卸载）、py-spy / pytest+xdist dev-only ADOPT、msgspec 拒绝；
+  `pyproject.toml` 新增 `perf` extra，runtime `dependencies` 仍只有 `requests>=2.28`。
+- 未运行真实 Simulation、未写 `.wqb_state`、未改 durability contract；推送后核对 `REMOTE_SHA == LOCAL_HEAD`。

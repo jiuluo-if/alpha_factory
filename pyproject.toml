@@ -11,6 +11,7 @@ dependencies = ["requests>=2.28"]
 
 [project.optional-dependencies]
 dev = ["ruff", "coverage", "mypy"]
+perf = ["py-spy", "pytest", "pytest-xdist"]
 
 [tool.coverage.run]
 branch = true

@@ -57,13 +57,17 @@ class TestFindRowsBatch(unittest.TestCase):
         self.assertEqual(found["proposal-e0"]["id"], "e0")
 
     def test_batch_keeps_latest_settlement_revision(self):
-        _write(self.path, [_experiment("e0")])
+        early = _experiment("e0")
+        _write(self.path, [early])
         trajectory = self._trajectory()
         trajectory.load()
-        settled = _experiment("e0")
+        # Execution identity (including created_at) must stay immutable, so the
+        # settlement revision is derived from the persisted row instead of a
+        # freshly constructed Experiment.
+        settled = Experiment.from_dict(early.to_dict())
         settled.final_outcome = {"reward": 2.0, "reward_quality": "FINAL_EVIDENCE"}
         settled.research_classification = {"label": "PROMISING"}
-        trajectory.settle(settled)
+        self.assertTrue(trajectory.settle(settled))
         found = self._trajectory().find_rows(["e0"])
         self.assertEqual(found["e0"]["final_outcome"]["reward"], 2.0)
         self.assertEqual(found["e0"], self._trajectory().find_row("e0"))

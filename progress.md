@@ -486,3 +486,6 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 全量质量门：`833 tests OK`、compileall exit 0、Ruff（排除 7 个未跟踪用户分析脚本）All checks passed、
   mypy 9 frontier Success、coverage branch-aware 79.8%（`fail_under=76.0`）、
   offline `state doctor` / `state audit` / `context --compact` exit 0。
+- 提交与推送：`2ce1f87` `feat：统一 SELF_CORRELATION 前置准入门槛并增加有界验证变体`、
+  `00a5672` `docs：记录 Phase V 指标感知优化与定向批次阻塞`；远端 `origin/main` 校验
+  `REMOTE_SHA == LOCAL_HEAD`（`00a5672300146ad46948636442c6acb8c558836f`）。

@@ -15,7 +15,8 @@
   mypy 9 frontier Success、coverage branch-aware 79.8%（`fail_under=76.0`）、
   offline `state doctor` / `state audit` / `context --compact` exit 0
 - [x] 文档同步（findings / progress / task_plan / RESEARCH_POLICY / ARCHITECTURE_AGENT / prompts）
-- [ ] 提交并推送，核对 `REMOTE_SHA == LOCAL_HEAD`
+- [x] 提交并推送：`2ce1f87`（前置准入与有界验证变体）、`00a5672`（文档）；`git ls-remote origin main`
+  在推送 `00a5672` 时与本地 HEAD 相同（本收尾提交只回填记录）
 - [x] 记录 `TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT`（不绕过 100 契约）
 
 ## 2026-09-12（前序）Phase III Autonomous Optimization（PAUSED/DISARMED，未运行真实 Simulation）

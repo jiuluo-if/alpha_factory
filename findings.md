@@ -6,7 +6,7 @@
 - 默认生产入口是 `python main.py --suggest` → 审阅 proposals → `python main.py --run-proposals`。
 - `SUBMIT_UNKNOWN` 不重发，known progress URL 只读对账，缺失证据保持 `UNKNOWN`/`UNAVAILABLE`。
 
-## 2026-09-11 round_12 结算（factory session 5d895622 第 2 轮）
+## 2026-09-11 round_12 结算（factory session <session> 第 2 轮）
 
 - 批次 100/100 DONE、0 平台拒绝；判定 RECONCILE×100（自相关 PENDING）。
 - 只读恢复：success=0 / promising=0（连续第 9 个零全过 100 批）。头部：
@@ -16,7 +16,7 @@
 - 跨 9 批元模式不变：Sharpe 带信号分散（volume/vwap/IV/forward price/parkinson/分析师/分红多族），但 **CONCENTRATED_WEIGHT + LOW_SUB_UNIVERSE_SHARPE + SELF_CORRELATION PENDING 三重系统性阻塞**使 0 候选过质量门；非模板问题（模板已 0 失败 4 批）。
 - 研究推论：当前横截面 rank 构造在 TOP3000 下的集中度/子域失败是构造-universe 层面的系统属性；下一机制方向应优先**组级/中性化输出构造**（降低 per-ticker 集中度）而非更多字段族探索——但 revere 族的 r8/r10 已证明组级构造对"集中度为字段族属性"的字段无效，需选择**非结构类字段**（volume/vwap 等交易类）做组级构造试验。
 
-## 2026-09-11 round_11 结算（factory session 5d895622 第 1 轮）：零失败验证 + 信号带读数
+## 2026-09-11 round_11 结算（factory session <session> 第 1 轮）：零失败验证 + 信号带读数
 
 - 批次 100/100 DONE、**0 平台拒绝**（连续第 4 个零失败批次；3 参 group_mean arity 修复经 factory 批量实证）；判定全部 RECONCILE（自相关 PENDING）。
 - 只读恢复 100 条指标：**success=0 / promising=0**（与 r5/r6 同——质量门 0 全过候选，第 8 个 100 批）。头部信号带：
@@ -33,7 +33,7 @@
 - **N2 IV 水平差分结构**（`rank(ts_zscore(ts_delta(implied_volatility_mean_270, 5), 60))`）：DONE，Sharpe 1.23（距 1.25 门槛 0.02）/ Fitness 0.36 / to 0.589；LOW_SUB_UNIVERSE_SHARPE 未 FAIL。预注册准入（fit>=0.5 且换手 <0.5）未达，且 0.36 不落入注册关闭分支（fit<0.3）——**判定：未达准入；按纪律不做 hump 救回（与 churn 谱系同型风险），IV 差分结构关闭；IV 状态分位族保持 r5 观察项，待 SELF_CORRELATION 回填证据**。
 - 批次小结：2/2 DONE、0 平台拒绝（3 参 group_mean arity 修复生效）、2 RECONCILE（自相关 PENDING）。
 - 谱系账本更新：关闭 revere 结构族（构造不敏感）、close/forward_price_270 churn 族、IV 斜率、IV 差分；存活观察项：revere_key_sector_total 的 r7 高分异类（fit 13.68/sharpe 4.9，同族集中度阻塞）与 IV 状态分位族。
-- 下一轮策略：① 恢复 3h factory 周期（preflight READY）让探索层继续产信号；② 如需 Agent 批次，优先把 r7 的 `rank(ts_rank(ts_zscore(pv13_revere_key_sector_total, 20), 60))`（fit 13.68）作为优化层父证据做构造检验（同一判据：集中度不降则同样关闭，避免谱系内反复微调）；③ 陈旧 session a4a3f3ac 控制面无需手工处理（factory 启动自动 mint）。
+- 下一轮策略：① 恢复 3h factory 周期（preflight READY）让探索层继续产信号；② 如需 Agent 批次，优先把 r7 的 `rank(ts_rank(ts_zscore(pv13_revere_key_sector_total, 20), 60))`（fit 13.68）作为优化层父证据做构造检验（同一判据：集中度不降则同样关闭，避免谱系内反复微调）；③ 陈旧 session <session> 控制面无需手工处理（factory 启动自动 mint）。
 
 ## 2026-09-11 round_9 Agent 优化批次：churn 谱系关闭 + group_mean arity 平台实测
 
@@ -47,12 +47,12 @@
 ## 2026-09-11 round_7 残留处置（授权跳过 + 恢复完成）与无 URL UNKNOWN 授权跳过路径扩展
 
 - 代码扩展（证据驱动局部维护）：`ProposalExecutionWorkflow.skip_submit_unknown_authorized` 现接受 `SUBMIT_UNKNOWN` **与无 progress_url 的 UNKNOWN**（同一 ambiguous-POST 证据缺口：不能安全重 POST、无远端身份可只读对账）；**有 URL 的 UNKNOWN 明确不可 skip**（远端作业可只读恢复，跳过会丢弃活证据），PENDING/终态拒绝；skip 审计按类分 reason（`user_authorized_skip_unknown_no_progress_url`）。3 条回归测试（拒绝有 URL UNKNOWN、拒绝 PENDING、接受无 URL UNKNOWN、SUBMIT_UNKNOWN 旧语义不变）+ unittest/compileall/ruff/mypy-9 全绿；CLI help 与 docs/ARCHITECTURE_AGENT.md 冻结边界章节已同步。
-- 处置：`recovery skip-submit-unknown 7 p-3d87af4949987b88`（pcr_vol_all downside_risk，无 URL）→ SKIPPED_UNKNOWN（审计入 stale_skip_log.jsonl）；随后以 round_7 恢复 stub inbox 经 canonical `run-proposals` 派发 4 PENDING → **round_7 `complete=true`（DONE=99、SKIPPED=1，0 FAILED、0 新 UNKNOWN）**，preflight 恢复 `READY`。
+- 处置：`recovery skip-submit-unknown 7 <proposal-id>`（<field> downside_risk，无 URL）→ SKIPPED_UNKNOWN（审计入 stale_skip_log.jsonl）；随后以 round_7 恢复 stub inbox 经 canonical `run-proposals` 派发 4 PENDING → **round_7 `complete=true`（DONE=99、SKIPPED=1，0 FAILED、0 新 UNKNOWN）**，preflight 恢复 `READY`。
 - round_7 末 4 题案全部 LOW（sharpe -0.37/-0.23/0.78、HIGH_TURNOVER 0.79、revere_key_sector 双失败延续 r4 模式）——探索层无新信号，不影响谱系结论。
 
 ## 2026-09-11 round_8 Agent 优化批次（用户指令：自编候选 + 单变量预注册）
 
-- 执行路径：round_7 残留（无 URL UNKNOWN `0db18e84c686` + 4 PENDING）无法经既有 CLI 跳过（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）；按用户明确指令经 `run-proposals --force-new-round`（内置授权逃生门："按用户明确授权开启新轮"）保留 round_7 原 checkpoint 并开启 round 8；round_7 残留保持为待人工决策项。
+- 执行路径：round_7 残留（无 URL UNKNOWN `<submission-id>` + 4 PENDING）无法经既有 CLI 跳过（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）；按用户明确指令经 `run-proposals --force-new-round`（内置授权逃生门："按用户明确授权开启新轮"）保留 round_7 原 checkpoint 并开启 round 8；round_7 残留保持为待人工决策项。
 - 4 个 Agent 自编候选（全部单变量、预注册反证、对 700 条历史表达式 0 重叠、本地 strict+经济完整性预验证 3 PASS / P4 仅本地缺 live 平台 dedupe 证据而 live 通过）：
   1. **P1 H-revere-neutralize** `group_neutralize(rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60)), industry)` → Sharpe 1.34 / Fitness 1.93 / to 0.109 / dd 0.090；`LOW_SUB_UNIVERSE_SHARPE` 不再 FAIL（父 r4 双失败之一被行业组中性化移除），但 `CONCENTRATED_WEIGHT` 仍 0.5 且 health 小账簿（long 9/short 8）。**判定：混合——集中度未降，按预注册判据（"集中度不降"分支）关闭该构造方向**；revere 谱系转向新构造（组级 group-mean 信号而非 per-ticker 横截面 rank），不做中性化水平继续微调。
   2. **P2 H-revere-return 端点对照** `rank(ts_zscore(ts_delta(pv13_revere_index_value, 20), 60))` → Sharpe -0.03 / Fitness -0.00。**判定：证伪**——端点 20 日变化无信号，r2 累计形式（ts_sum(ts_delta(5),20)）的结构本身承载信号；端点假设关闭。
@@ -64,17 +64,17 @@
 
 ## 2026-09-11 自主循环接管：交叉 dataset 门禁与关系契约失配
 
-- 接管 preflight 为 `READY`：round_1/round_2 checkpoint 均 `complete=true`（各 78 DONE），无 `SUBMIT_UNKNOWN`、无未完成 checkpoint；旧 session `6df26582cf244dc8` 为干净 `STOPPED` 终态。
+- 接管 preflight 为 `READY`：round_1/round_2 checkpoint 均 `complete=true`（各 78 DONE），无 `SUBMIT_UNKNOWN`、无未完成 checkpoint；旧 session `<session>cf244dc8` 为干净 `STOPPED` 终态。
 - 按 3 小时约束先执行 `alpha sync-feed`（3013 条周元数据，`updated_at=2026-09-10T18:05:47Z`，`network_write=false`），随后只读 preflight 再次 `READY`。
-- 启动 `factory run --hours 3`（新 session `dca94762e1a04b31`）：3 条 bounded route（current_bundle / same_dataset_relationship / same_dataset_new_mechanism）均在同一 6-dataset 池上失败，`pair_examined=256`、`relationship_allow=0`（86 REVIEW、86 UNKNOWN、170 INCOMPATIBLE）、`template_compatible_count=0`，最终 `STOP_MECHANISM_ROUTE / NO_INFORMATION_GAIN`，0 次 Simulation 消耗。
+- 启动 `factory run --hours 3`（新 session `<session>e1a04b31`）：3 条 bounded route（current_bundle / same_dataset_relationship / same_dataset_new_mechanism）均在同一 6-dataset 池上失败，`pair_examined=256`、`relationship_allow=0`（86 REVIEW、86 UNKNOWN、170 INCOMPATIBLE）、`template_compatible_count=0`，最终 `STOP_MECHANISM_ROUTE / NO_INFORMATION_GAIN`，0 次 Simulation 消耗。
 - 根因：2026-09-10 收紧后的多字段关系契约（option 仅 put/call IV、ratio 仅 earnings→fundamental 方向、频率 UNKNOWN 一律 REVIEW）在当前池（pv1/pv13/option8/option9/fundamental6/news18）中基本不存在可准入的跨 dataset pair；bundle 中 82/100 字段无显式频率证据。rounds 1-2 能过门是旧宽松契约下的结果，契约收紧造成“门禁需求”与“契约供给”结构性失配，不是字段数量或历史去重问题（本次 `historical_expression_exclusion_count=0`）。
 - 研究控制决策（可逆、不改代码）：本周期将 `config.agent.field_selection.min_cross_dataset_pairs` 由 `1` 调为 `0`，保留 `min_datasets=3` 的批次广度约束；单字段经济模板探索批次（9-11 审计已证明同 bundle 可生成 100 候选）先恢复信号探索吞吐。跨 dataset 关系探索列为下一周期方向：扩展 dataset_pool 引入含显式 daily 频率且机制互补的数据集，或待平台频率证据完善后恢复门禁。
-- 决策依据与证据：`factory-run-3.stdout.log` 的 3 条 FEASIBILITY 心跳、session `dca94762e1a04b31` 的 `route_decision`/`feasibility_probe`、9-11 审计 REPORT（pair 30 抽样 0 ALLOW、15 REVIEW、15 REJECT）。
-- 放宽门禁后新 session `89c78860` 通过首条 bounded route：round_3 批次 100 题案（全部 `exploration/EXPLORE`、12 个模板族、0 多字段、100 唯一表达式、与 rounds 1/2 的 156 条历史 DONE 表达式 0 重叠），`simulations_reserved=100`，进入 `RUN_PROPOSALS`。
+- 决策依据与证据：`factory-run-3.stdout.log` 的 3 条 FEASIBILITY 心跳、session `<session>e1a04b31` 的 `route_decision`/`feasibility_probe`、9-11 审计 REPORT（pair 30 抽样 0 ALLOW、15 REVIEW、15 REJECT）。
+- 放宽门禁后新 session `<session>` 通过首条 bounded route：round_3 批次 100 题案（全部 `exploration/EXPLORE`、12 个模板族、0 多字段、100 唯一表达式、与 rounds 1/2 的 156 条历史 DONE 表达式 0 重叠），`simulations_reserved=100`，进入 `RUN_PROPOSALS`。
 
 ## 2026-09-11 round_6 结算与跨轮模板×字段类元模式
 
-- session `a4a3f3ac` round_6：`complete=true`，**DONE=100/100、FAILED=0**（连续第三轮零平台失败，7 模板修复稳定）。批次含 12 模板族、7 数据集（analyst4 首次入 bundle）、16 条多字段题案。
+- session `<session>` round_6：`complete=true`，**DONE=100/100、FAILED=0**（连续第三轮零平台失败，7 模板修复稳定）。批次含 12 模板族、7 数据集（analyst4 首次入 bundle）、16 条多字段题案。
 - 100 条 round_6 指标只读恢复：0 success、2 promising；失败分布 `LOW_FITNESS=100、LOW_SHARPE=97、LOW_SUB_UNIVERSE_SHARPE=62、CONCENTRATED_WEIGHT=34、HIGH_TURNOVER=15、LOW_TURNOVER=9`。
 - 头部：`risk_adjusted_reversal`（波动率缩放的 5 日反转）跨轮复现——r5 `forward_price_60/150/720` fit 0.59-0.64/sharpe 1.34-1.38；r6 `close` fit 0.69/sharpe 1.33、`pv13_custretsig_retsig` fit 0.71/sharpe 1.82、`forward_price_270` 0.56/1.28。共性弱点：turnover 0.42-0.84（HIGH_TURNOVER）→ 该族的单一后续变量为单参 `hump` 换手控制（已修复验证的算子）。
 - 跨 5 轮 500 条 DONE 的元模式：头部信号集中于 4 个模板×字段类组合（distribution_regime×revere、risk_adjusted_reversal×价格/IV、robust_cross_section×IV、persistent_level×IV 均值）；无全 check 通过的 success 候选（探索阶段正常）；`LOW_SUB_UNIVERSE_SHARPE` 与 `CONCENTRATED_WEIGHT` 是板块/结构字段簇的系统性瓶颈，`HIGH_TURNOVER` 是日频反转族的系统性瓶颈。
@@ -83,7 +83,7 @@
 
 ## 2026-09-11 round_5 全修复模板验证与新信号簇（option IV / forward price）
 
-- 新 session `a4a3f3ac218e4b3c`（无人工 stop）round_5：`complete=true`，**DONE=100/100、FAILED=0**——7 模板修复经 live 完整验证（对比 r1-r4 的 22/20/27/15 项失败归零）；runner 判定 RECONCILE=100（自相关 PENDING），best=null。
+- 新 session `<session>218e4b3c`（无人工 stop）round_5：`complete=true`，**DONE=100/100、FAILED=0**——7 模板修复经 live 完整验证（对比 r1-r4 的 22/20/27/15 项失败归零）；runner 判定 RECONCILE=100（自相关 PENDING），best=null。
 - 100 条 DONE 指标只读恢复：0 success、4 promising（sharpe≥0.9 且 fit≥0.6）；失败检查分布 `LOW_FITNESS=100、LOW_SHARPE=92、LOW_SUB_UNIVERSE_SHARPE=49、CONCENTRATED_WEIGHT=48、HIGH_TURNOVER=15、LOW_TURNOVER=7`。
 - **新信号簇（修复模板首次可测）：option IV / forward price 期限结构**：
   - `implied_volatility_call_150` 三模板同向：`robust_cross_section`(单参 winsorize) fit 0.65/sharpe 1.78、`distribution_regime` 0.50/1.47、`distributional_change` 0.42/1.39；
@@ -97,7 +97,7 @@
 
 ## 2026-09-11 round_4 结算与新模板缺陷（round_4 平台实测）
 
-- 用户授权处置后：`skip-submit-unknown`（`864ff495f2b7`→SKIPPED_UNKNOWN）+ 3 次只读 STALE 对账后 `skip-stale`（`2P0mkygQn4W2bdq14rKNHQil`→SKIPPED_STALE），round_3 checkpoint 完整收尾（DONE=66/FAILED=32/SKIPPED×2），preflight 恢复 `READY`；`alpha sync-feed`（3060 条）后启动新 session `3a803043`（stop 控制由新 session 干净清除）。
+- 用户授权处置后：`skip-submit-unknown`（`<alpha-id>`→SKIPPED_UNKNOWN）+ 3 次只读 STALE 对账后 `skip-stale`（`2P0mkygQn4W2bdq14rKNHQil`→SKIPPED_STALE），round_3 checkpoint 完整收尾（DONE=66/FAILED=32/SKIPPED×2），preflight 恢复 `READY`；`alpha sync-feed`（3060 条）后启动新 session `<session>`（stop 控制由新 session 干净清除）。
 - 期间又出现一次人工 stop（round_4 派发中）；已遵守：round_4 完整结算后 session 干净 `STOPPED`，未启动 round_5。
 - round_4：`complete=true`，DONE=85/FAILED=15（85 条 RECONCILE 判定 = 自相关 PENDING，无 best）。15 项 FAILED 分类：13× `robust_cross_section`（双参 winsorize 被拒：`exactly 1 input`）、1× `turnover_control`（双参 hump 同签名）、1× `trend_residual`（**新类**：`ts_regression(..., 0)` 的 lookback=0 被拒：`invalid value "0" for attribute "lookback"`）——6 个模板缺陷全部修复于工作树（winsorize/hump 改单参、trend_residual 省略 lookback），全量质量门通过（unittest exit=0、ruff、mypy 9 frontier），干跑验证（`postfix_validation_2`）100/100 批次 0 拒绝片段。
 - 85 条 DONE 指标恢复（只读）：0 success、1 promising；失败检查分布 `LOW_SHARPE=84、LOW_FITNESS=84、LOW_SUB_UNIVERSE_SHARPE=48、CONCENTRATED_WEIGHT=37、HIGH_TURNOVER=23、LOW_TURNOVER=6`。
@@ -126,8 +126,8 @@
 
 ## 2026-09-11 round_3 收尾、模板缺陷修复与 revere 簇跨轮确认
 
-- 人工 stop 控制（02:40）后 session `89c78860` 在安全边界收尾：`status=STOPPED、stop_requested=true、finished_at` 已写；round_3 checkpoint 未完成：`DONE=48、FAILED=27、UNKNOWN=1、SUBMIT_UNKNOWN=1、PENDING=23`。
-- 只读对账：UNKNOWN `55892f20bf2a`（`compounding_pressure/cashflow_op`）保有 progress URL，平台快照仍未结算（status=None），保持 UNKNOWN 不升 PASS；SUBMIT_UNKNOWN `864ff495f2b7`（`accumulated_change/cashflow_op`）无 URL，提交发生在进程退出前 39 秒内，属 exactly-once 边界，**需人工经 `main.py recovery` 授权处置**；23 个 PENDING 按 fail-closed 批次规则在 SUBMIT_UNKNOWN 处置前不得 POST。未做任何写操作。
+- 人工 stop 控制（02:40）后 session `<session>` 在安全边界收尾：`status=STOPPED、stop_requested=true、finished_at` 已写；round_3 checkpoint 未完成：`DONE=48、FAILED=27、UNKNOWN=1、SUBMIT_UNKNOWN=1、PENDING=23`。
+- 只读对账：UNKNOWN `<alpha-id>`（`compounding_pressure/<field>`）保有 progress URL，平台快照仍未结算（status=None），保持 UNKNOWN 不升 PASS；SUBMIT_UNKNOWN `<alpha-id>`（`accumulated_change/<field>`）无 URL，提交发生在进程退出前 39 秒内，属 exactly-once 边界，**需人工经 `main.py recovery` 授权处置**；23 个 PENDING 按 fail-closed 批次规则在 SUBMIT_UNKNOWN 处置前不得 POST。未做任何写操作。
 - 模板算子缺陷（本轮修复，工作树待提交）：rounds 1-3 共 63 项 FAILED 全部归因 4 个模板的 live 拒绝用法：三参 `normalize`（r1×8/r2×7/r3×9）、裸位置参数 `gaussian` 驱动（r1×13/r2×13/r3×8，分布于 `distributional_change` 与 `distribution_regime`）、`group_rank(group_backfill(...))` arity（r1×1）。替换表达式只使用 156 条 DONE 实证算子；`TestTemplateLiveOperatorEvidence` 3 项回归 + 全量质量门通过（unittest exit=0、compileall=0、ruff、mypy 9 frontier）。
 - round_3 的 48 条 DONE 指标恢复：0 success、0 promising；头部为 `pv13_revere_term_sector_total` 簇：
   - `rank(divide(reverse(ts_delta(pv13_revere_term_sector_total, 5)), add(ts_std_dev(pv13_revere_term_sector_total, 20), 0.001)))`：Sharpe 1.25 / Fitness 0.84 / turnover 0.118 / dd 0.053；FAIL `LOW_FITNESS(0.84)`、`CONCENTRATED_WEIGHT(v=0.5)`、`LOW_SUB_UNIVERSE_SHARPE(0.39)`；SELF_CORRELATION PENDING。
@@ -146,7 +146,7 @@
 - 当前测试已有 analyst revision、slow fundamental、option volatility、UNKNOWN mechanism、fixed seed 和 incomplete catalog 回归，但尚未覆盖 analyst estimate level/target price、open interest、put-call skew、coverage 三种字段键/百分比表达和 invalid coverage。
 - 下一步需直接阅读 `FieldDiscovery` 的 coverage/profile 归一化路径与 AlphaFactory 的 semantic fallback，先确认真实 false-positive/false-negative，再写红灯测试。
 - 新增红灯已复现：`category=analyst` 的无 revision 字段落入 `analyst_revision`；`option open interest` 被通用 `open` 命中为 `market_price`；Discovery 没有共享 `normalize_coverage`，且动态 dataset 规模测试在导入 helper 处失败。
-- 用户明确授权删除外部 `F:\\codex\\wqb_alpha_factory\\.wqb_state`；本目录“多余”文件需按证据判定。
+- 用户明确授权删除外部 `外部 workspace 的 `.wqb_state``；本目录“多余”文件需按证据判定。
 
 ## 当前目录快照
 
@@ -172,7 +172,7 @@
 
 ## 清理核准清单
 
-- 删除：`F:\\codex\\wqb_alpha_factory\\.wqb_state`（用户明确指定；包含历史研究状态、checkpoint、trajectory、ledger、cache、reports 和局部 AGENTS）。
+- 删除：`外部 workspace 的 `.wqb_state``（用户明确指定；包含历史研究状态、checkpoint、trajectory、ledger、cache、reports 和局部 AGENTS）。
 - 删除：根目录未跟踪临时 helper：`_analyze_model16.py`、`_build_proposals.py`、`_check_settings.py`、`_check_status.py`、`_debug_fields.py`、`_diag_1964.py`、`_discover_analyst.py`、`_discover_more.py`、`_find_best.py`、`_resolve_1964.py`。
 - 删除：可再生构建/缓存物：`__pycache__`、`.ruff_cache`、`alpha_factory.egg-info`、`build`、`.coverage`。
 - 保留：正式源码、测试、文档、`AGENTS.md`、`.planning`、配置和版本库；本任务的 `task_plan.md`、`findings.md`、`progress.md` 作为审查记录保留。
@@ -216,7 +216,7 @@
 ## 2026-09-09 真实 round 11 恢复审计
 
 - `python main.py --takeover-preflight --offline` 与 `python main.py --agent-context --compact --json` 均确认 `BLOCKED`，安全动作是先只读对账/恢复，不能启动新 Simulation。
-- round 11 的未知提交为 `id=5d49051762fc`、`proposal_id=p-52b9c26b61b4e283`，`status=SUBMIT_UNKNOWN`、`progress_url=null`；它占用 exactly-once 边界，不能自动重发或跳过。
+- round 11 的未知提交为 `id=<proposal-row-id>`、`proposal_id=<proposal-id>`，`status=SUBMIT_UNKNOWN`、`progress_url=null`；它占用 exactly-once 边界，不能自动重发或跳过。
 - 同一 checkpoint 还有 3 个已知 URL 的 `RUNNING` 任务和 32 个无 URL 的 `PENDING` 题案。当前 `_resume_proposal_checkpoint()` 仅排除 `SUBMIT_UNKNOWN` 本身，却仍会将其余 `PENDING` 交给 `Simulator.run()`，存在未知 POST 未对账前继续新增 POST 的流程漏洞。
 - `scripts/reconcile_pending.py` 只扫描 `trajectory.jsonl`；当前运行时结果/trajectory 不持久化，因此它无法发现仅存在于 checkpoint 的 3 个已知 URL，说明恢复工具也需要与 checkpoint 边界对齐后再进行有效只读对账。
 - 最小修复位置是 `Agent._resume_proposal_checkpoint()`：在构造 `runnable` 后、调用 `Simulator.run()` 前检查 `SUBMIT_UNKNOWN`，发现时仅保留带已知 `progress_url` 的任务进入只读轮询，过滤无 URL 的 `PENDING`/未知任务；这样不改变未知提交、不新增 POST。
@@ -325,7 +325,7 @@
 
 ## 2026-09-10 工厂字段生成效率诊断与优化计划
 
-- 当前 live factory session `6df26582cf244dc8` 仍为 `RUNNING`，round 3 最近结果为 `FACTORY_BATCH_NOT_READY`，`simulations_reserved=0`。
+- 当前 live factory session `<session>cf244dc8` 仍为 `RUNNING`，round 3 最近结果为 `FACTORY_BATCH_NOT_READY`，`simulations_reserved=0`。
 - 当前字段 bundle 有 100 个字段、6 个 dataset（`fundamental6/news18/option8/option9/pv1/pv13`）；静态诊断显示不排除历史表达式时可生成 17 个跨 dataset 多字段候选，排除 round 1/2 完成表达式后为 0，说明主要损耗在“历史去重后的关系兼容性”，不是字段数量不足。
 - `generate_factory_batch()` 对 verified fields 逐字段排名模板，并通过 `assemble_proposals(..., max_candidates=1)` 逐模板尝试；批次门禁在完整组装后才发现跨 dataset pair 为 0，导致 100 个 proposal 生成工作不能转化为可执行批次。
 - 优先优化顺序：先记录 pair feasibility/排除原因，再在组装前做 bounded pair feasibility；pair 数为 0 时切换兼容 discovery/template route，禁止对同一 bundle 只递增 seed 重试；保留 canonical expression dedupe 与 relationship fail-closed。
@@ -341,7 +341,7 @@
 
 ## 2026-09-10 阻塞根因核查结论
 
-- **主阻塞是未知提交的 exactly-once 边界**：round 11 唯一 `SUBMIT_UNKNOWN` 为 `id=5d49051762fc`、`proposal_id=p-52b9c26b61b4e283`；`submission_started_at=2026-09-09 08:16:55 +08:00`，`progress_url=null`。`Simulator._simulate_one()` 已先持久化 `SUBMITTING`，随后任何不能证明 POST 未被 BRAIN 接受的异常都会变成 `SUBMIT_UNKNOWN`；自动重发会有重复 Simulation 风险。
+- **主阻塞是未知提交的 exactly-once 边界**：round 11 唯一 `SUBMIT_UNKNOWN` 为 `id=<proposal-row-id>`、`proposal_id=<proposal-id>`；`submission_started_at=2026-09-09 08:16:55 +08:00`，`progress_url=null`。`Simulator._simulate_one()` 已先持久化 `SUBMITTING`，随后任何不能证明 POST 未被 BRAIN 接受的异常都会变成 `SUBMIT_UNKNOWN`；自动重发会有重复 Simulation 风险。
 - **具体传输异常已不可从当前状态判定**：`WQBClient.submit_simulation()` 对 ambiguous POST 的超时/网络异常、无契约 429、`WQBSubmitUnknownError`、缺少 `Location` 都走同一安全分支；`CheckpointStore.write()` 的 allow-list 刻意不保存 `error`，所以当前 checkpoint 只能证明“提交结果未知”，不能证明是哪一种异常。无 URL 时也没有可安全调用的 `GET /simulations/{id}` 身份。
 - **32 个 PENDING 是连带暂停，不是 32 个独立失败**：它们的 `submission_started_at=null` 且 `progress_url=null`；同一 checkpoint 存在无 URL UNKNOWN 时，恢复逻辑只允许已有 URL 的任务只读轮询，并过滤无 URL PENDING，避免在未知 POST 未对账前新增写入。
 - **ledger 缺失不是主要因果点**：当前 runtime composition 使用 `persist=False`，接管后的 `state audit` 在 `lifecycle_persistent=false` 下仍为 `ok=true`；doctor 的 `LEDGER_MISSING` 与 `PNL_CAPABILITY_UNAVAILABLE` 是证据能力警告。preflight 的硬 blocking 列表实际只有未完成 `round_11.checkpoint.json`。
@@ -946,3 +946,40 @@
   仍产出 ROBUSTNESS proposal（`changed_variable=decay`、`settings={"decay": 5}`）；预置真实 field cache 后
   `materialize → agent.run_proposals()` 被 accepted 并恰好提交 1 次 Simulation（唯一
   `proposals.json`、唯一执行路径）；无字段画像时 0 次提交且 `PREFLIGHT_BLOCKED`。
+
+## 2026-09-12 Phase VII：外层维护 / 内层研究边界与隐私审计
+
+### 审计结论
+
+- public tree 上确实存在 raw 研究审计产物：`docs/research_quality_audit_2026-09-11/` 下 3 个
+  `audit.json`（各约 1.6 MB）与 3 个 `REPORT.md`，内容含 machine-specific 绝对路径
+  （`.wqb_state` 盘符路径）与真实字段排名 dump。
+- `.gitignore` 的 `*.audit.json` **不覆盖**裸名 `audit.json`：`git check-ignore -v` 对
+  `docs/research_quality_audit_2026-09-11/audit.json` 返回 exit 1，而 `x.audit.json` 被忽略；
+  已 tracked 文件本就不受 ignore 影响。
+- 根因：`scripts/research_quality_audit.py` 原先默认
+  `--output-dir docs/research_quality_audit_2026-09-11`，把 raw audit 直接写进 public tree。
+- 其余散落隐私：`findings.md`/`progress.md`/`task_plan.md`/`docs/RESEARCH_ISSUES_2026-09-11.md`
+  含真实 session id、proposal/submission id（`p-…`）、真实字段名与表达式；两个文档含本机
+  绝对路径。未发现真实 `alpha-<id>`、凭据或 secret 值。
+
+### 处置
+
+- raw audit 移到 local-only `research_data/research_quality_audit_2026-09-11/` 并从 tracked tree
+  移除；`docs/` 只保留 sanitized 摘要 `RESEARCH_QUALITY_AUDIT_2026-09-11_SUMMARY.md`。
+- 生成脚本默认输出改为 `research_data/research_quality_audit`（local-only），不再默认写 `docs/`。
+- sanitize 77 处 token：真实 session id、proposal/submission id、真实字段名、表达式中的真实字段
+  引用与本机绝对路径。
+- `.gitignore` 增加 `audit.json` 与 `docs/research_quality_audit_*/`。
+- 新增 `scripts/check_repo_privacy.py`（只扫 `git ls-files`，不扫整块磁盘）与
+  `tests/test_repo_privacy.py`（9 条）。
+- history 未改写：历史 commit 可能仍含这些数据；purge 需要用户显式授权，不做
+  filter-repo/BFG/force push。
+
+### Prompt 分离
+
+- 新增 `prompts/maintenance_agent.md`：外层维护 Agent（architecture、tests、docs、privacy、
+  profiling、dependency、交付），遇到研究判断输出 `REQUIRES_INNER_RESEARCH_DECISION`。
+- `prompts/research_agent.md` 收敛为 Inner Research Agent：只有研究角色与 handoff 契约。
+- `docs/AGENT_VIBE_CODING_PROMPT.md` 从混合大 prompt 改为 redirect；`prompts/AGENTS.md` 声明
+  两个 prompt 的分工，契约仍以根 `AGENTS.md` 为唯一 source-of-truth。

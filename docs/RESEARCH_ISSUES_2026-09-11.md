@@ -1,6 +1,6 @@
 # 研究过程问题整理汇总（2026-09-11）
 
-范围：本次自主 Alpha 研究 campaign（rounds 1-13，factory sessions `e6ec7891`/`6df26582`/`dca94762`/`89c78860`/`3a803043`/`a4a3f3ac`/`5d895622` + Agent 自编批次 round_8/10）。
+范围：本次自主 Alpha 研究 campaign（rounds 1-13，factory sessions `<session>`/`<session>`/`<session>`/`<session>`/`<session>`/`<session>`/`<session>` + Agent 自编批次 round_8/10）。
 所有条目基于 `findings.md`、`progress.md`、各 round checkpoint 与执行日志；未验证的标注"待验证"。
 
 ## 1. 平台语法 / 参数个数拒绝（rounds 1-4 的 FAILED 根源）
@@ -30,9 +30,9 @@ BRAIN live response 高于静态 cheatsheet；本项目 42+20+32+15 条平台拒
 | # | 现象 | 根因/机制 | 处置 | 状态 |
 |---|---|---|---|---|
 | 9 | 某 UNKNOWN 模拟卡在 progress 0.1 超 2h | 远端作业停滞（STALE） | 3 次只读 reconcile 记录在案后经授权 `recovery skip-stale` 跳过（既有 CLI，min_attempts=3） | 已处置（r2） |
-| 10 | SUBMIT_UNKNOWN `p-8b55502e89a6cc12`（pcr_vol_all，r3） | POST 结果含糊且无唯一远端身份 | 重复只读对账后经授权 `recovery skip-submit-unknown` 跳过（冻结契约：不重 POST） | 已处置（r3） |
-| 11 | **无 URL UNKNOWN** `0db18e84c686`（pcr_vol_all downside_risk，r7，proposal `p-3d87af4949987b88`） | ambiguous-POST 家族：有 `submission_started_at` 但 `progress_url=null` → 既有 CLI 均不覆盖（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）→ 同批 4 PENDING fail-closed 暂停 → round_7 无法 complete → preflight BLOCKED → 新轮被 `[CHECKPOINT BLOCKED]` 拦截 | 扩展授权跳过路径（`ProposalExecutionWorkflow.skip_submit_unknown_authorized` 接受"无 URL 的 UNKNOWN"；有 URL 的 UNKNOWN 明确不可 skip）+ 3 条回归测试 + 全质量门 + `docs/ARCHITECTURE_AGENT.md` 冻结边界同步；经授权 skip → canonical `run-proposals` 以 round_7 恢复 stub inbox 派发 4 PENDING → **round_7 complete（99 DONE + 1 SKIPPED，0 FAILED），preflight 恢复 READY** | 已处置（本 campaign 期间） |
-| 12 | factory 进程在 round_7 派发中静默死亡（session `a4a3f3ac`，08:21） | 进程意外终止（日志 0 字节，缓冲区丢失）；session 停留 stale `RUNNING` | canonical `run-proposals` 恢复该轮 checkpoint；后续 factory 启动自动 mint 新 session（陈旧控制面自愈，无需手改） | 已处置 |
+| 10 | SUBMIT_UNKNOWN `<proposal-id>`（<field>，r3） | POST 结果含糊且无唯一远端身份 | 重复只读对账后经授权 `recovery skip-submit-unknown` 跳过（冻结契约：不重 POST） | 已处置（r3） |
+| 11 | **无 URL UNKNOWN** `<submission-id>`（<field> downside_risk，r7，proposal `<proposal-id>`） | ambiguous-POST 家族：有 `submission_started_at` 但 `progress_url=null` → 既有 CLI 均不覆盖（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）→ 同批 4 PENDING fail-closed 暂停 → round_7 无法 complete → preflight BLOCKED → 新轮被 `[CHECKPOINT BLOCKED]` 拦截 | 扩展授权跳过路径（`ProposalExecutionWorkflow.skip_submit_unknown_authorized` 接受"无 URL 的 UNKNOWN"；有 URL 的 UNKNOWN 明确不可 skip）+ 3 条回归测试 + 全质量门 + `docs/ARCHITECTURE_AGENT.md` 冻结边界同步；经授权 skip → canonical `run-proposals` 以 round_7 恢复 stub inbox 派发 4 PENDING → **round_7 complete（99 DONE + 1 SKIPPED，0 FAILED），preflight 恢复 READY** | 已处置（本 campaign 期间） |
+| 12 | factory 进程在 round_7 派发中静默死亡（session `<session>`，08:21） | 进程意外终止（日志 0 字节，缓冲区丢失）；session 停留 stale `RUNNING` | canonical `run-proposals` 恢复该轮 checkpoint；后续 factory 启动自动 mint 新 session（陈旧控制面自愈，无需手改） | 已处置 |
 | 13 | 未完成 checkpoint 期间的 inbox 覆盖（r7 未完成时 proposals.json 被写成 r8 批次） | Agent 批次覆盖工厂 inbox → r7 恢复需匹配 round_no | 写入 round_no=7 的恢复 stub inbox（数据全部来自 round_7 checkpoint，非伪造）→ resume 派发成功 | 已处置（流程留痕） |
 
 ## 4. 证据缺口（架构冻结带来的研究约束）
@@ -70,4 +70,4 @@ BRAIN live response 高于静态 cheatsheet；本项目 42+20+32+15 条平台拒
 1. **#14 优化层 handoff 缺口**——是否立项做 checkpoint→trajectory 证据重连（冻结边界改动：测试 + 文档 + 质量门）。
 2. **工作树 commit 授权**——`alpha_factory.py`（模板修复）、`tests`（arity/skip 守卫）、`docs`（cheatsheet/ARCHITECTURE_AGENT）、`findings.md`/`progress.md`、`proposal_execution.py`+`cli.py`（无 URL UNKNOWN 授权跳过扩展）尚未提交（git 邮箱 `2966684515@qq.com`，前缀中文提交信息，需用户明确授权）。
 3. **Alpha 提交**：全部手工（用户）；当前 0 个"全 checks 通过"候选，无可提交对象。
-4. **研究恢复**：用户已下令暂停；在途 round_13（session `5d895622`，300 槽位第 3/3 轮）自然收尾后不启动新周期；恢复时按 3h 周期约束先 `alpha sync-feed` → 只读 preflight → `factory run --hours 3`。
+4. **研究恢复**：用户已下令暂停；在途 round_13（session `<session>`，300 槽位第 3/3 轮）自然收尾后不启动新周期；恢复时按 3h 周期约束先 `alpha sync-feed` → 只读 preflight → `factory run --hours 3`。

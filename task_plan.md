@@ -144,7 +144,7 @@
 
 | 错误 | 尝试 | 处理 |
 |---|---:|---|
-| Superpowers 初始路径不存在 | 1 | 已定位实际安装路径，改用 `C:\\Users\\联想\\.agents\\skills\\superpowers\\...` |
+| Superpowers 初始路径不存在 | 1 | 已定位实际安装路径，改用 `$CODEX_HOME/skills/superpowers/...` |
 | 用户提示更新后的 proposal_contract 缩进错误 | 1 | 复查 diff 与 py_compile 发现，恢复 `if not profiles_by_id` 体缩进并重新通过全量测试 |
 
 ## 2026-09-09 增量修复阶段
@@ -357,7 +357,7 @@
 ## 接管证据（2026-09-10）
 
 - live `context --compact` / `state preflight`: `BLOCKED`，`round_11.checkpoint.json` 未完成，`SUBMIT_UNKNOWN=1`，`network_write=false`。
-- round 11 checkpoint：`DONE=59, FAILED=8, PENDING=32, SUBMIT_UNKNOWN=1`；未知项 proposal `p-52b9c26b61b4e283` 无 `progress_url`，32 个 PENDING 也均无 `progress_url`。
+- round 11 checkpoint：`DONE=59, FAILED=8, PENDING=32, SUBMIT_UNKNOWN=1`；未知项 proposal `<proposal-id>` 无 `progress_url`，32 个 PENDING 也均无 `progress_url`。
 - `scripts/reconcile_pending.py --timeout 1`：`[SCAN] 0 reconcilable experiments with progress_url`，无远端任务可只读轮询。
 - `factory_session.json`：`status=RUNNING` 但 `stop_requested=true`、`last_action=STOP_REQUESTED`；不能在未解决 checkpoint 上清除控制状态或新开轮次。
 - `state audit`：`ok=true`、无 errors；doctor 报 `LEDGER_MISSING`、`checkpoint_consistency=UNRESOLVED`，属于恢复证据缺口而非可自动修复项。
@@ -429,3 +429,16 @@
 - 禁止真实 Simulation / run-proposals / factory run / Alpha submission / remote color write；
   只允许 fixtures、synthetic Experiment、offline AlphaFactory 与只读历史证据。
 - 不新增 reward engine、scheduler、trajectory/checkpoint owner、第二 inbox 或第二 Simulation path。
+
+## 2026-09-12 Phase VII：外层/内层 Agent 边界、隐私与卫生
+
+- [x] 审计 tracked tree：raw audit、machine paths、session/proposal id、真实字段名
+- [x] raw audit 移到 local-only `research_data/` 并留 sanitized 摘要；生成脚本默认输出改 local-only
+- [x] sanitize 5 个文档 77 处隐私 token；`.gitignore` 补 `audit.json` 与 `docs/research_quality_audit_*/`
+- [x] 新增 `scripts/check_repo_privacy.py` + `tests/test_repo_privacy.py`（9 条）
+- [x] Prompt 分离：新增 `prompts/maintenance_agent.md`、收敛 `prompts/research_agent.md`、混合 prompt 改 redirect
+- [ ] 测试瘦身：按 contract 拆分过长测试，fixture 收敛到 `tests/helpers.py`（计数/覆盖/行为等价或更强）
+- [ ] profiling baseline + `scripts/benchmark_local_io.py` + smoke test
+- [ ] 依赖评估（py-spy dev-only、orjson A/B、pytest/xdist dev-only、msgspec 默认拒绝）+ `docs/PERFORMANCE.md`
+- [ ] profile 支持的小范围 production 优化（否则报告 `NO_JUSTIFIED_RUNTIME_OPTIMIZATION`）
+- [ ] 质量门 + 推送并核对 `REMOTE_SHA == LOCAL_HEAD`

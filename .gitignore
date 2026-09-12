@@ -56,6 +56,8 @@ docs/archive/
 reports/
 report/
 research_data/
+audit.json
+docs/research_quality_audit_*/
 data/
 outputs/
 exports/

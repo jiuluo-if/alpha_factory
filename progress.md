@@ -1,13 +1,13 @@
 # 进度日志
 
-## 2026-09-11 goal round 8：factory 周期 5d895622 恢复运行 + round_11 结算
+## 2026-09-11 goal round 8：factory 周期 <session> 恢复运行 + round_11 结算
 
-- 复核：goal round 7 收尾时 3h factory 周期（session `5d895622a0dc484b`，前 session a4a3f3ac 陈旧 RUNNING 已按设计自动 mint 替换）首轮结算 **round_11 100/100 DONE、0 平台拒绝**（第 4 个零失败批次，3 参 group_mean 修复经 factory 批量验证）。
+- 复核：goal round 7 收尾时 3h factory 周期（session `<session>a0dc484b`，前 session <session> 陈旧 RUNNING 已按设计自动 mint 替换）首轮结算 **round_11 100/100 DONE、0 平台拒绝**（第 4 个零失败批次，3 参 group_mean 修复经 factory 批量验证）。
 - round_11 只读指标恢复（100/100）：success=0/promising=0（第 8 个 0 全过 100 批）；头部信号带：`split`（fit 0.76/0.66，LOW_SHARPE+集中度）、`forward_price_30/120`（sh 1.29-1.36，族内观察项不追测）、`IV put_10`（sh 1.33-1.34 复现）、`parkinson_volatility_90`（新族，4 题案入 top-12）。
 - round_12 批次已结算：**100/100 DONE、0 平台拒绝**（第 5 个零失败批次）；只读恢复 success=0/promising=0（第 9 个零全过 100 批）；头部：volume 对数水平 fit 1.5（三重阻塞）、vwap 反转 fit 0.62/sh 1.23、anl4/fnd6 观察带。跨批推论已入 findings：下轮优先交易类字段（volume/vwap）的组级构造试验（非结构类字段，绕开字段族集中度属性）。
-- round_13 批次运行中（session 5d895622 第 3/3 轮，预留 300 槽位）；结算后同法恢复指标并记录；之后 session 按 3h 期限收尾（DEADLINE 终态），下一 goal 轮再启新 3h 周期。
+- round_13 批次运行中（session <session> 第 3/3 轮，预留 300 槽位）；结算后同法恢复指标并记录；之后 session 按 3h 期限收尾（DEADLINE 终态），下一 goal 轮再启新 3h 周期。
 - **2026-09-11 用户指令：先暂停研究，整理研究过程遇到的问题（汇总文档）**——执行：① 不再启动新 factory 周期/新 Agent 批次；② 在途 round_13 按既有 stop 语义完成收尾（不启动第 4 轮）；③ 产出问题整理汇总文档（docs/），基于 findings/progress/checkpoint 证据，不编造状态。
-- 收尾确认：round_13 100/100 DONE、0 平台拒绝（第 5 个零失败批次）；session `5d895622` 3 轮（300 槽位）全部结算后干净 `DEADLINE` 终态（exit 0，无新轮启动）；preflight `READY`（13 个 checkpoint 全 complete、0 SUBMIT_UNKNOWN、无阻塞）；无本 campaign 残留进程。**研究暂停状态已生效，恢复时按 3h 周期约束走标准入口**。
+- 收尾确认：round_13 100/100 DONE、0 平台拒绝（第 5 个零失败批次）；session `<session>` 3 轮（300 槽位）全部结算后干净 `DEADLINE` 终态（exit 0，无新轮启动）；preflight `READY`（13 个 checkpoint 全 complete、0 SUBMIT_UNKNOWN、无阻塞）；无本 campaign 残留进程。**研究暂停状态已生效，恢复时按 3h 周期约束走标准入口**。
 - 当前边界：11 个 checkpoint 中 10 个 complete（round_12 在途）；工作树改动（skip 扩展、3 参模板修复、测试、文档）仍待 commit 授权；Alpha 提交保持手工。
 
 ## 2026-09-11 goal round 7：round_7 残留关闭、round_9 结算与 group_mean arity 修复
@@ -16,23 +16,23 @@
 - round_8 Agent 批次 4/4 DONE：1 混合关闭（revere 行业中性化）、3 证伪关闭（端点形式、close churn、IV 斜率）——全部按预注册判据裁决。
 - round_9 Agent 批次（2 题案）：E1 forward_price_270 hump **churn 证伪**（fitness 0.03，与 r8 close 同判据 → risk_adjusted_reversal 族双证关闭）；E2 revere 组级构造**平台拒绝**——实测 `group_mean` 仅接受 3 参 `group_mean(X, N, G)`。
 - 证据驱动修复：round_4 的 `group_filled_rank` 模板含 2 参 group_mean 潜在 bug → 已改 3 参（与 group_scaled_mean 的 38 次 DONE 实证对齐）；cheatsheet 拒绝记录 + arity 全注册表测试守卫新增；unittest/compileall/ruff/mypy-9 全绿。
-- 当前边界：9 个 checkpoint 全部 complete；factory session a4a3f3ac 仍为陈旧 RUNNING 控制面（进程已死，下次 factory 启动自动 mint）；工作树新增改动：proposal_execution.py（授权跳过扩展）、cli.py（help 文本）、alpha_factory.py（group_filled_rank 3 参）、tests（skip 3 条 + arity 守卫）、cheatsheet、ARCHITECTURE_AGENT.md、findings/progress——commit 仍待用户授权。
+- 当前边界：9 个 checkpoint 全部 complete；factory session <session> 仍为陈旧 RUNNING 控制面（进程已死，下次 factory 启动自动 mint）；工作树新增改动：proposal_execution.py（授权跳过扩展）、cli.py（help 文本）、alpha_factory.py（group_filled_rank 3 参）、tests（skip 3 条 + arity 守卫）、cheatsheet、ARCHITECTURE_AGENT.md、findings/progress——commit 仍待用户授权。
 - round_10 Agent 批次（2 题案）已执行并结算：2/2 DONE、0 平台拒绝、2 RECONCILE。N1 revere 组级 3 参重投 → 集中度 0.5 未降 + 子域 FAIL → **按预注册关闭整条 revere 谱系**（构造不敏感）；N2 IV 差分结构 → fit 0.36/换手 0.59 未达准入（不救回）→ IV 差分关闭、状态分位族保持观察项。
 - 下一轮：恢复 3h factory 周期（preflight READY；`alpha sync-feed` → 只读 preflight → `factory run --hours 3`，新 session 自动 mint）；探索层继续产信号，优化层手托 r7 的 revere_key_sector_total fit-13.68 异类（按同判据一次性构造检验）。
 
 ## 2026-09-11 goal round 6：round_7 恢复、无 URL UNKNOWN 残留与 round_8 Agent 优化批次
 
-- 复核：factory 进程（session a4a3f3ac）于 08:21 在 round_7 派发中消失；round_7 checkpoint 冻结 23 DONE/74 PENDING/3 RUNNING，无 SUBMIT_UNKNOWN。经 canonical `run-proposals` 恢复 round_7：95 DONE 结算完毕；出现**无 URL UNKNOWN `0db18e84c686`**（pcr_vol_all，ambiguous-POST 家族）→ 同批 4 PENDING fail-closed 暂停；该残留无既有 CLI 处置路径（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）→ 记录为待人工决策项。
+- 复核：factory 进程（session <session>）于 08:21 在 round_7 派发中消失；round_7 checkpoint 冻结 23 DONE/74 PENDING/3 RUNNING，无 SUBMIT_UNKNOWN。经 canonical `run-proposals` 恢复 round_7：95 DONE 结算完毕；出现**无 URL UNKNOWN `<submission-id>`**（<field>，ambiguous-POST 家族）→ 同批 4 PENDING fail-closed 暂停；该残留无既有 CLI 处置路径（skip-submit-unknown 仅 SUBMIT_UNKNOWN；skip-stale 需 URL）→ 记录为待人工决策项。
 - 用户新指令：“针对高信号阿尔法开启专门优化轮，此轮你自己编写阿尔法候选，满足约束之后开始模拟”——已执行 round_8 Agent 批次 4 题案（H-revere-neutralize / H-revere-return / close-hump 换手控制 / IV 期限结构斜率；单变量、预注册反证、对 700 条历史表达式 0 重叠；EXPLOIT 父引用在新进程不可解析 → 按 BASELINE 注册并保留 parent 审计元数据）。
 - round_7 的 `run-proposals` 被 `[CHECKPOINT BLOCKED]` 拦截 → 按用户指令使用内置 `--force-new-round` 授权逃生门（保留 round_7 checkpoint，日志 `[FORCE NEW ROUND]`）；round_8 4/4 DONE（3.2 分钟，P4 经 live 平台 dedupe 覆盖通过）。
 - 结果（全部按预注册判据裁决，详见 findings）：P1 混合关闭（行业组中性化修复 LOW_SUB_UNIVERSE_SHARPE 但 CONCENTRATED_WEIGHT 仍 0.5 → revere 谱系转组级构造）；P2 端点形式证伪；P3 churn 证伪（hump 后 fitness 0.07 → close 谱系关闭）；P4 IV 斜率证伪。
-- 当前边界：round_7 未完成（无 URL UNKNOWN + 4 PENDING）→ preflight BLOCKED；factory session a4a3f3ac 为陈旧 RUNNING 控制面（进程已死，下次 factory 启动自动 mint 新 session）；round_8 完成（4 RECONCILE 判定，自相关 PENDING）。
+- 当前边界：round_7 未完成（无 URL UNKNOWN + 4 PENDING）→ preflight BLOCKED；factory session <session> 为陈旧 RUNNING 控制面（进程已死，下次 factory 启动自动 mint 新 session）；round_8 完成（4 RECONCILE 判定，自相关 PENDING）。
 - 下一轮：① round_7 无 URL UNKNOWN 人工处置（授权跳过路径扩展或平台身份反查）；② 下一周期执行 forward_price hump 检验 + revere 组级构造批次；③ 5 文件工作树（7 模板修复等）仍待 commit 授权。
 
 ## 2026-09-11 goal round 4：恢复研究循环，round_5 零失败验证模板修复
 
-- 状态复核：上轮人工 stop 的 session `3a803043` 已干净 `STOPPED`（round_4 完整结算），preflight `READY`、4 个 checkpoint 全 complete、无 SUBMIT_UNKNOWN、feed 新鲜（21:07Z 同步）；无活动 stop 控制作用于新工作。依用户 standing 授权（"选1和2、自行决定最优"）与 goal 自主指令，启动新 factory 周期。
-- 新 session `a4a3f3ac218e4b3c`：round_5 批次 100（0 平台拒绝片段，7 模板全修复生效）→ **DONE=100/100、FAILED=0**（平台语法失败归零；对比 r1-r4 的 22/20/27/15），判定 RECONCILE=100（自相关 PENDING）。
+- 状态复核：上轮人工 stop 的 session `<session>` 已干净 `STOPPED`（round_4 完整结算），preflight `READY`、4 个 checkpoint 全 complete、无 SUBMIT_UNKNOWN、feed 新鲜（21:07Z 同步）；无活动 stop 控制作用于新工作。依用户 standing 授权（"选1和2、自行决定最优"）与 goal 自主指令，启动新 factory 周期。
+- 新 session `<session>218e4b3c`：round_5 批次 100（0 平台拒绝片段，7 模板全修复生效）→ **DONE=100/100、FAILED=0**（平台语法失败归零；对比 r1-r4 的 22/20/27/15），判定 RECONCILE=100（自相关 PENDING）。
 - 100 条 round_5 指标只读恢复：0 success/4 promising；**新信号簇 option IV / forward price 期限结构**（`implied_volatility_call_150` 三模板同向、`forward_price_60/150/720` 三期限同构、turnover 0.47-0.65 为共性问题）——机制读法与反证判据、下一周期题案排序（H-revere-neutralize 优先）已入 findings。
 - round_6 已自动进入 `RUN_PROPOSALS`（reserved=200，checkpoint 建立）；session deadline（约 01:10Z）将按既有行为收尾：等待 round_6 在途批次自然结算后 `DEADLINE` 终态。
 - round_6 结算：`complete=true`，DONE=100/100、FAILED=0（连续第三轮零平台失败）；100 条指标只读恢复：0 success/2 promising；`risk_adjusted_reversal`（波动率缩放 5 日反转）跨 r5/r6 复现头部信号（close fit 0.69/sharpe 1.33、pv13_custretsig_retsig 0.71/1.82、forward_price_270 0.56/1.28），共性弱点为 turnover 0.42-0.84 → 下一周期单变量换手控制（单参 hump，已验证算子）。
@@ -43,28 +43,28 @@
 ## 2026-09-11 用户授权处置 SUBMIT_UNKNOWN 与恢复研究循环
 
 - 用户明确授权：跳过 SUBMIT_UNKNOWN（选项 1）与解除 stop 控制重启 factory（选项 2）；commit（选项 3）未授权，工作树保持待提交。
-- 已执行 `python main.py recovery skip-submit-unknown 3 p-8b55502e89a6cc12`：`864ff495f2b7`（`rank(ts_zscore(ts_sum(ts_delta(cashflow_op, 5), 20), 60))`）→ `SKIPPED_UNKNOWN` 终态，审计行写入 `stale_skip_log.jsonl`（reason=user_authorized_skip_after_repeated_read_only_reconciliation、submission_fingerprint 保留、remote_id=null、不重 POST）。
+- 已执行 `python main.py recovery skip-submit-unknown 3 <proposal-id>`：`<alpha-id>`（`rank(ts_zscore(ts_sum(ts_delta(<field>, 5), 20), 60))`）→ `SKIPPED_UNKNOWN` 终态，审计行写入 `stale_skip_log.jsonl`（reason=user_authorized_skip_after_repeated_read_only_reconciliation、submission_fingerprint 保留、remote_id=null、不重 POST）。
 - round_3 当前：`DONE=48、FAILED=27、UNKNOWN=1、SKIPPED_UNKNOWN=1、PENDING=23`；exactly-once 边界解除后，23 PENDING 不再被 fail-closed 规则阻塞。
 - 正在执行 canonical `python main.py run-proposals` 恢复 round_3（UNKNOWN 只读轮询 + 23 PENDING 派发，日志 `factory-recover-r3.stdout.log`）；完成后核验 preflight `READY`，再启动 `factory run --hours 3` 新 session（自动清除旧 stop 控制，round_4+ 使用修复后模板与 min_cross=0 配置）。
-- 恢复结果：`run-proposals` exit 0；23 PENDING 全部结算（DONE 48→66、FAILED 27→32）；唯一遗留 UNKNOWN `55892f20bf2a` 平台侧停滞（`progress=0.1` 持续 2h+，疑似平台卡死作业）。
+- 恢复结果：`run-proposals` exit 0；23 PENDING 全部结算（DONE 48→66、FAILED 27→32）；唯一遗留 UNKNOWN `<alpha-id>` 平台侧停滞（`progress=0.1` 持续 2h+，疑似平台卡死作业）。
 - 卡死作业处置（用户"自行决定最优选择"授权下的最优路径）：经 `scripts/reconcile_pending.py --timeout 1 --simulation-id 2P0mkygQn4W2bdq14rKNHQil` 完成 3 次只读对账（均 `STALE`，计入 `reconcile_history.jsonl`），随后 `python main.py recovery skip-stale 3 2P0mkygQn4W2bdq14rKNHQil` → `SKIPPED_STALE`（审计入 `stale_skip_log.jsonl`）。round_3 checkpoint `complete=true`：DONE=66 / FAILED=32 / SKIPPED_STALE=1 / SKIPPED_UNKNOWN=1；preflight 恢复 `READY`。
 - 按 3 小时约束刷新 `alpha sync-feed`（3060 条周元数据，`updated_at=2026-09-10T21:07:49Z`，`network_write=false`）。
-- 已启动新 factory session `3a80304335a945cf`（`stop_requested=false`，旧 stop 控制由新 session 干净清除）：round_4 批次 100 题案（0 平台拒绝片段、100 唯一表达式、与 226 条历史结算表达式 0 重叠、15 个模板族），`RUN_PROPOSALS` 派发中，`daily_reserved=100`。round_4 将首次实证 `turnover_control`(hump) 与 `group_relative_extreme`(group_zscore) 两个未验证算子，失败诊断将给出平台事实。
+- 已启动新 factory session `<session>35a945cf`（`stop_requested=false`，旧 stop 控制由新 session 干净清除）：round_4 批次 100 题案（0 平台拒绝片段、100 唯一表达式、与 226 条历史结算表达式 0 重叠、15 个模板族），`RUN_PROPOSALS` 派发中，`daily_reserved=100`。round_4 将首次实证 `turnover_control`(hump) 与 `group_relative_extreme`(group_zscore) 两个未验证算子，失败诊断将给出平台事实。
 - round_4 结算（期间又出现一次人工 stop；round_4 完整结算后 session 干净 `STOPPED`，未启动 round_5）：`complete=true`，DONE=85/FAILED=15；runner 判定 RECONCILE=85/FAIL=15（best=null）。
 - 15 项 FAILED 100% 归因：13× 双参 winsorize、1× 双参 hump（同 `exactly 1 input` 签名）、1× `trend_residual` 的 `ts_regression(..., lookback=0)` 属性值被拒（**新拒绝类**）。工作树新增修复：`robust_cross_section`→单参 winsorize、`turnover_control`→单参 hump、`trend_residual`→省略 lookback；共 7 个模板缺陷全部闭环（回归测试 3 项扩展、cheatsheet 平台实测表更新、全量质量门通过、干跑 `postfix_validation_2` 100/100 批次 0 拒绝片段）。
 - 85 条 round_4 DONE 指标只读恢复：0 success/1 promising；**revere 簇第三次跨轮复现**——修复后 `distribution_regime` 模板产出 `rank(ts_rank(ts_zscore(pv13_revere_term_sector_total, 20), 60))` Sharpe 1.39/Fitness 2.05（仅 CONCENTRATED_WEIGHT 0.5 失败，health 提示小账簿 longCount=9/shortCount=8）；次级 `implied_volatility_*` 簇 4 条中段信号。假设卡更新入 findings（H-revere-neutralize 优先，truncation 为第二单变量候选）。
-- 当前边界：无未完成 checkpoint（rounds 1-4 均 complete）、无 SUBMIT_UNKNOWN；factory 处于人工 stop 暂停态（session `3a803043` STOPPED）。下一 factory 运行将使用 7 模板全修复代码；H-revere 单变量验证题案待用户确认继续后生成。
+- 当前边界：无未完成 checkpoint（rounds 1-4 均 complete）、无 SUBMIT_UNKNOWN；factory 处于人工 stop 暂停态（session `<session>` STOPPED）。下一 factory 运行将使用 7 模板全修复代码；H-revere 单变量验证题案待用户确认继续后生成。
 
 ## 2026-09-11 goal round 3：同一外部阻塞第 3 轮确认（标记 blocked）
 
-- 权威复核：preflight 仍 `BLOCKED`（`round_3.checkpoint.json` + `SUBMIT_UNKNOWN=1`）；session `89c78860` 仍 `STOPPED/stop_requested=true`；round_3 计数不变（48/27/1/1/23）；状态文件 mtime 与 round 1 收尾一致（1789066245），无 reconcile、无进程、无新提交。
-- 只读轮询 UNKNOWN `55892f20bf2a`：平台仍 `{"progress":0.1}`（远端作业停滞但未结算；保有已知 URL，恢复时只读轮询可收敛，不构成新阻塞项）。
-- 判定：与 goal round 1/2 相同的三项外部条件连续 3 轮未变化：① `SUBMIT_UNKNOWN 864ff495f2b7` 无远端身份、冻结契约禁止自动重 POST，须用户经 `main.py recovery` 授权处置；② 人工 stop 控制（`stop_requested=true`）未解除；③ 23 个 PENDING 在 SUBMIT_UNKNOWN 处置前按 fail-closed 批次规则不得 POST。安全侧自主工作（对账、证据恢复、模板缺陷修复+质量门、干跑验证）已全部完成，BLOCKED 窗口内无剩余安全推进项。按 goal-tool 策略将目标标记为 `blocked`，待用户处置后由后续轮次恢复：recovery 分支接续 round_3 → round_4（修复模板探索批次 + H-revere 单变量验证）。
+- 权威复核：preflight 仍 `BLOCKED`（`round_3.checkpoint.json` + `SUBMIT_UNKNOWN=1`）；session `<session>` 仍 `STOPPED/stop_requested=true`；round_3 计数不变（48/27/1/1/23）；状态文件 mtime 与 round 1 收尾一致（1789066245），无 reconcile、无进程、无新提交。
+- 只读轮询 UNKNOWN `<alpha-id>`：平台仍 `{"progress":0.1}`（远端作业停滞但未结算；保有已知 URL，恢复时只读轮询可收敛，不构成新阻塞项）。
+- 判定：与 goal round 1/2 相同的三项外部条件连续 3 轮未变化：① `SUBMIT_UNKNOWN <alpha-id>` 无远端身份、冻结契约禁止自动重 POST，须用户经 `main.py recovery` 授权处置；② 人工 stop 控制（`stop_requested=true`）未解除；③ 23 个 PENDING 在 SUBMIT_UNKNOWN 处置前按 fail-closed 批次规则不得 POST。安全侧自主工作（对账、证据恢复、模板缺陷修复+质量门、干跑验证）已全部完成，BLOCKED 窗口内无剩余安全推进项。按 goal-tool 策略将目标标记为 `blocked`，待用户处置后由后续轮次恢复：recovery 分支接续 round_3 → round_4（修复模板探索批次 + H-revere 单变量验证）。
 
 ## 2026-09-11 goal round 2：BLOCKED 期间只读推进
 
-- 状态复核：preflight 仍 `BLOCKED`（`round_3.checkpoint.json` 未完成 + `SUBMIT_UNKNOWN=1`）；session `89c78860` 仍 `STOPPED/stop_requested=true`；状态文件 mtime 未变，无进程、无 reconcile 活动——人工处置尚未发生，本 Agent 未越权触碰 exactly-once 边界。
-- 只读对账 UNKNOWN `55892f20bf2a`：平台返回 `{"progress":0.1}` + `Retry-After: 5` —— 远端作业仍在运行中（非孤儿），恢复时只读轮询可自然收敛；保持 UNKNOWN 不升 PASS。
+- 状态复核：preflight 仍 `BLOCKED`（`round_3.checkpoint.json` 未完成 + `SUBMIT_UNKNOWN=1`）；session `<session>` 仍 `STOPPED/stop_requested=true`；状态文件 mtime 未变，无进程、无 reconcile 活动——人工处置尚未发生，本 Agent 未越权触碰 exactly-once 边界。
+- 只读对账 UNKNOWN `<alpha-id>`：平台返回 `{"progress":0.1}` + `Retry-After: 5` —— 远端作业仍在运行中（非孤儿），恢复时只读轮询可自然收敛；保持 UNKNOWN 不升 PASS。
 - 年度稳定性证据边界确认：平台 simulation 阶段 alpha payload 的 `is` 块无 `yearly`、`test/train` 块为空、`selfCorrelation=None` → yearly 证据为 `UNAVAILABLE`、自相关 `PENDING`，按规则记录为缺失证据而非通过。
 - 模板修复的端到端干跑验证：`scripts/research_quality_audit.py --output-dir docs/research_quality_audit_2026-09-11/postfix_validation`（纯本地、不写状态目录、不刷 discovery、不调 client）：`dry_run_batch=100`，100/100 表达式 0 个被平台拒绝片段（`gaussian`/多参 `normalize`/`group_rank(`、`group_backfill(` 全数消失）；修复模板生成 `rank(winsorize(ts_delta(X,5),4))`、`rank(ts_zscore(ts_delta(X,5),60))`、`rank(ts_rank(ts_zscore(X,20),60))`；优先级分布 92 NORMAL / 8 LOW 与修复前一致（确定性推导未漂移）。
 - 工作树未变：5 个已修改文件（模板修复 + 3 回归 + cheatsheet 实测记录 + findings/progress）待用户授权提交；`config.json`（min_cross=0）为本地未跟踪研究控制。
@@ -72,16 +72,16 @@
 
 ## 2026-09-11 自主研究循环接管（goal round 1）
 
-- 接管 preflight `READY`：round_1/round_2 均 `complete=true`（78+78 DONE），无 `SUBMIT_UNKNOWN`；旧 session `6df26582` 干净 `STOPPED`。
+- 接管 preflight `READY`：round_1/round_2 均 `complete=true`（78+78 DONE），无 `SUBMIT_UNKNOWN`；旧 session `<session>` 干净 `STOPPED`。
 - 按 3 小时约束完成 `alpha sync-feed`（3013 条周元数据，`expires_at=2026-09-11T04:00Z`）+ 只读 preflight。
-- 首次 `factory run --hours 3`（session `dca94762`）3 条 bounded route 全部 `RELATIONSHIP_REVIEW`（256 pairs、0 ALLOW、82/100 字段无显式频率），`STOP_MECHANISM_ROUTE`，0 模拟消耗；根因记录在 `findings.md`。
-- 研究控制：`min_cross_dataset_pairs` 1→0（保留 `min_datasets=3`），重启 `factory run --hours 3`（新 session `89c78860`）。
+- 首次 `factory run --hours 3`（session `<session>`）3 条 bounded route 全部 `RELATIONSHIP_REVIEW`（256 pairs、0 ALLOW、82/100 字段无显式频率），`STOP_MECHANISM_ROUTE`，0 模拟消耗；根因记录在 `findings.md`。
+- 研究控制：`min_cross_dataset_pairs` 1→0（保留 `min_datasets=3`），重启 `factory run --hours 3`（新 session `<session>`）。
 - 并行只读证据恢复：round_1/2 的 156 个 DONE progress URL 全部恢复指标（`_metrics_recover.json`）；唯一超阈值信号簇为 `pv13_revere_*`（affiliated-index momentum），全部败于 `CONCENTRATED_WEIGHT`+`LOW_SUB_UNIVERSE_SHARPE`；152/156 `LOW_FITNESS`。
 - round_3 批次 100 题案全部新鲜（0 与历史重叠），进入 `RUN_PROPOSALS`。
-- **模板算子缺陷修复（代码，工作树待提交）**：rounds 1-3 共 63 项 FAILED 全部归因 4 个模板的 live 平台拒绝用法（三参 `normalize`、裸 `gaussian` 驱动、`group_rank(group_backfill(...))` arity）；已替换为 156 条 DONE 实证算子（`rank/winsorize/ts_zscore/ts_delta/ts_rank/subtract/ts_backfill/group_mean`），更新 OPERATORS_CHEATSHEET 平台实测拒绝记录，新增 `TestTemplateLiveOperatorEvidence` 3 项回归。质量门：全量 unittest exit=0、compileall=0、ruff 通过、mypy 9 frontier 通过。该修复不影响正在运行的 `89c78860` 进程（已加载旧模板），自下一 factory 运行生效。
-- **02:40 出现人工 stop 控制**：session `89c78860` 被置 `stop_requested=true`（非本 Agent 发出）；按安全边界不清除控制、不启动新轮，等待在途 round_3 自然收尾（`STOPPED` 终态）后停止。
+- **模板算子缺陷修复（代码，工作树待提交）**：rounds 1-3 共 63 项 FAILED 全部归因 4 个模板的 live 平台拒绝用法（三参 `normalize`、裸 `gaussian` 驱动、`group_rank(group_backfill(...))` arity）；已替换为 156 条 DONE 实证算子（`rank/winsorize/ts_zscore/ts_delta/ts_rank/subtract/ts_backfill/group_mean`），更新 OPERATORS_CHEATSHEET 平台实测拒绝记录，新增 `TestTemplateLiveOperatorEvidence` 3 项回归。质量门：全量 unittest exit=0、compileall=0、ruff 通过、mypy 9 frontier 通过。该修复不影响正在运行的 `<session>` 进程（已加载旧模板），自下一 factory 运行生效。
+- **02:40 出现人工 stop 控制**：session `<session>` 被置 `stop_requested=true`（非本 Agent 发出）；按安全边界不清除控制、不启动新轮，等待在途 round_3 自然收尾（`STOPPED` 终态）后停止。
 - round_3 收尾终态（02:50 进程 exit 0）：checkpoint 未完成 `DONE=48、FAILED=27、UNKNOWN=1、SUBMIT_UNKNOWN=1、PENDING=23`；session `STOPPED`（finished_at 已写，控制面干净收尾）。
-- 只读对账：UNKNOWN `55892f20bf2a` 有 URL 但平台未结算（保持 UNKNOWN）；SUBMIT_UNKNOWN `864ff495f2b7`（`rank(ts_zscore(ts_sum(ts_delta(cashflow_op, 5), 20), 60))`）无 URL，需人工经 `main.py recovery` 授权处置；23 PENDING 在处置前 fail-closed 不得 POST。下一周期 preflight 预计 `BLOCKED`，恢复路径为人工处置 SUBMIT_UNKNOWN 后由 runner 的 checkpoint 恢复分支接续 round_3（已知 URL 只读轮询 + PENDING 派发）。
+- 只读对账：UNKNOWN `<alpha-id>` 有 URL 但平台未结算（保持 UNKNOWN）；SUBMIT_UNKNOWN `<alpha-id>`（`rank(ts_zscore(ts_sum(ts_delta(<field>, 5), 20), 60))`）无 URL，需人工经 `main.py recovery` 授权处置；23 PENDING 在处置前 fail-closed 不得 POST。下一周期 preflight 预计 `BLOCKED`，恢复路径为人工处置 SUBMIT_UNKNOWN 后由 runner 的 checkpoint 恢复分支接续 round_3（已知 URL 只读轮询 + PENDING 派发）。
 - round_3 指标恢复（48/48 DONE）：0 success/0 promising；`pv13_revere_term_sector_total` 簇头部（fit 0.84/0.82）与 r2 `revere_index_value`（fit 2.98）跨轮复现，`CONCENTRATED_WEIGHT` 两轮同值 0.5 → 板块暴露机制假说；假设卡（H-revere-neutralize / H-revere-return）已写入 findings 待下一周期。
 - 当前工作树未提交改动：`wqb_agent/alpha_factory.py`（4 模板修复）、`tests/test_factory_boundaries.py`（3 回归）、`docs/reference/OPERATORS_CHEATSHEET.md`（平台实测拒绝记录）、`config.json`（`min_cross_dataset_pairs=0`）、findings/progress。提交需用户明确授权。
 - 跨 dataset 关系探索列为下一周期方向（扩展 dataset_pool 或待频率证据完善后恢复门禁）。
@@ -322,7 +322,7 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 11 | root-cause investigation | 追踪 client → simulator → checkpoint → doctor/preflight → factory session 数据流 | 主因是无 URL ambiguous POST；PENDING 为连带暂停，ledger 为 warning，session 为未收尾控制状态；无现成安全反查身份 | 已完成阻塞原因核查，未修改研究状态 | 等待人工确认 UNKNOWN 处置后恢复
 11 | canonical recovery | 执行 `python main.py run-proposals` 并复核时间戳/状态 | 仅恢复 checkpoint、重建 100 条内存结果；无 POST，checkpoint/session 未变化；deadline 尚未到期 | 证明现有安全入口正确停在 exactly-once 边界 | 保持 active，等待可验证的外部身份或人工处置
 11 | read-only platform diagnosis | `python main.py smoke`；启动 `alpha sync-feed` 后观察 PID 39672 | smoke PASS（datasets=14、fields=10）；sync-feed 30 秒无输出但进程仍存活，缓存未更新 | 排除整体网络/凭据故障，发现分页等待可观测性不足 | 继续观察 PID，不重复启动；不影响 Simulation 安全边界
-11 | observation | 复核 PID 39672、cache/checkpoint/session 时间戳与 cache metadata | feed 进程随后退出并更新 `.alpha_feed_cache/weekly.json`（04:23:43 +08）；checkpoint/session 未改写，cache `updated_at`/`expires_at` 已刷新 | 元数据同步完成，但不改变无 URL UNKNOWN 的恢复边界；未修改 canonical research state | 继续只读对账；等待 `5d49051762fc` 获得可验证远端身份或人工处置
+11 | observation | 复核 PID 39672、cache/checkpoint/session 时间戳与 cache metadata | feed 进程随后退出并更新 `.alpha_feed_cache/weekly.json`（04:23:43 +08）；checkpoint/session 未改写，cache `updated_at`/`expires_at` 已刷新 | 元数据同步完成，但不改变无 URL UNKNOWN 的恢复边界；未修改 canonical research state | 继续只读对账；等待 `<proposal-row-id>` 获得可验证远端身份或人工处置
 11 | reconcile recheck | 再次运行 `scripts/reconcile_pending.py --timeout 1` 与 `context --compact` | `[SCAN] 0 reconcilable experiments with progress_url`；workspace 仍 `BLOCKED`，`round_11.checkpoint.json` 与 1 条 `SUBMIT_UNKNOWN` 仍未决 | 现有安全恢复入口已确认无可执行只读目标；没有安全的新 Simulation 路径 | 保持 active，等待外部远端身份或人工处置，不清除 UNKNOWN/stop control
 11 | recovery boundary audit | 查看 `recovery --help` 及 `state/factory` CLI 边界 | `skip-submit-unknown` 明确要求人工授权；`finalize-round` 只收尾已记录轮次，不能恢复无 URL UNKNOWN；未执行任何写操作 | 确认阻塞不是遗漏 CLI，而是缺少远端身份且安全契约要求人工决策 | 保持 active；不执行授权动作，继续等待外部状态变化
 ## 2026-09-10 长期自主接管
@@ -346,7 +346,7 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 首次新 factory 因 `min_cross_dataset_pairs=1` 与 live 字段 `frequency=null` 冲突，100 候选均被 `FACTORY_BATCH_NOT_READY` 拒绝；7 个多字段模板的可用 cross/same pairs 均为 0。
 - TDD 修复：`wqb_agent.discovery.normalize_frequency()` 仅从显式频率 metadata 或字段描述中的明确频率词推导频率；普通描述保持 UNKNOWN/None。新增 discovery 回归；既有 frequency-review 安全回归保留。
 - 质量门：`656 tests OK`、compileall 通过、Ruff `All checks passed`。
-- 修复后新 session `e6ec789108544cb2` 进入 round 1 `RUN_PROPOSALS`，预留 100 次；提案层级 `exploration=100`，跨 dataset 题案 20 个。
+- 修复后新 session `<session>08544cb2` 进入 round 1 `RUN_PROPOSALS`，预留 100 次；提案层级 `exploration=100`，跨 dataset 题案 20 个。
 - 当前只读状态：`DONE=4 / FAILED=2 / PENDING=91 / RUNNING=3`，无 `SUBMIT_UNKNOWN`；沿同一进程继续等待结算。
 - 后续状态：`DONE=6 / FAILED=2 / PENDING=89 / RUNNING=3`；已核验跨 dataset 样例 `rank(ts_zscore(ts_corr(open, rel_ret_all, 20), 60))`，关系 `ALLOW`、频率 `daily/daily`。
 - 过程错误：一次 PowerShell 内联 Python 因引号解析失败；一次定向 unittest 使用了错误测试类/方法名。均未修改研究状态，随后改用管道脚本并运行正确测试。
@@ -360,7 +360,7 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 `2026-09-10 09:30 | factory_runner | new batch admitted after frequency evidence repair | reserved=100, exploration=100, cross_dataset=20, checkpoint active; no SUBMIT_UNKNOWN | restored research throughput while preserving 100-item atomic gate | retain batch stats and monitor settlement quality across mechanisms | P1`
 ## 2026-09-10 Alpha Feed 核查
 
-- 当前 factory session `e6ec789108544cb2` 正在 `RUN_PROPOSALS`，由 `factory_runner.py` 直接执行 discovery/batch/proposals；调用图中没有 `refresh_remote_alpha_feed`。
+- 当前 factory session `<session>08544cb2` 正在 `RUN_PROPOSALS`，由 `factory_runner.py` 直接执行 discovery/batch/proposals；调用图中没有 `refresh_remote_alpha_feed`。
 - `.alpha_feed_cache/weekly.json` 最近更新时间为 `2026-09-09T20:23:43Z`，覆盖 6 个纽约本地日、3483 条 simulations 元数据；缓存 `local_date=2026-09-09`，但没有 2026-09-09 日桶，且 `expires_at=2026-09-10T04:00:00Z`。
 - 根因：`alpha sync-feed` 是独立 CLI 路径，factory 未按 AGENTS 的每 3 小时约束自动触发；当前单实例 `run.lock` 也不允许并行同步。缓存设计只保留 ID/状态/时间戳，不是指标或表达式数据源。
 - 工程改进候选：在不让 AlphaFeedWorkflow 依赖 Simulator/Agent 编排的前提下，为 3 小时 factory 控制周期增加同批只读 feed refresh 调度/可观测标记；优先级 P1。
@@ -580,3 +580,14 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   恰好 1 次 Simulation、无画像时 fail-closed。
 - 复跑质量门：`867 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
   coverage `TOTAL 80.1%`、`state doctor`/`state audit`/`context --compact` exit 0。
+
+### 2026-09-12 Phase VII：边界与隐私卫生
+
+- 审计发现并处理已 tracked 的 raw 研究审计数据（3× `audit.json` + 3× `REPORT.md`）：移到
+  local-only `research_data/`，`docs/` 只留 sanitized 摘要；生成脚本默认输出改为 local-only。
+- sanitize 5 个文档中 77 处真实 session/proposal id、真实字段名与本机绝对路径；`.gitignore`
+  补 `audit.json`、`docs/research_quality_audit_*/`。
+- 新增 `scripts/check_repo_privacy.py` + `tests/test_repo_privacy.py`（9 条，tracked tree
+  当前 0 findings）。
+- Prompt 分离：新增 `prompts/maintenance_agent.md`，收敛 `prompts/research_agent.md`，
+  `docs/AGENT_VIBE_CODING_PROMPT.md` 改为 redirect。

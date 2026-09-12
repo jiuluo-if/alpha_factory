@@ -851,7 +851,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", default=".wqb_state", type=Path)
     parser.add_argument(
-        "--output-dir", default="docs/research_quality_audit_2026-09-11", type=Path
+        "--output-dir",
+        default="research_data/research_quality_audit",
+        type=Path,
+        help=(
+            "local-only output directory for raw audit data; keep it under "
+            "research_data/ (git-ignored) and never inside tracked docs"
+        ),
     )
     args = parser.parse_args()
     report = run(args.state_dir.resolve(), args.output_dir.resolve())

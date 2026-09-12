@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 标准库、`unittest`、现有 `CheckpointStore`/`Trajectory`、Ruff、coverage。
 
-**Spec:** `C:\Users\联想\.codex\attachments\7e3fc2fc-7fdc-41c6-a100-61d212d98f8c\goal-objective.md`
+**Spec:** `<codex-attachments>/goal-objective.md`
 
 ## Global Constraints
 

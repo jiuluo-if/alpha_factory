@@ -148,17 +148,25 @@ python main.py run-proposals
 
 优先删除重复概念，合并而不是新增第二套 state、proposal contract、evaluation、facade 或 manager/orchestrator。研究策略不要硬编码成机制。
 
-修改代码后运行：
+本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion，普通本地修改默认不跑 whole suite。
+
+改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。是否执行本地 full gate 由任务明确要求决定；push 后由 CI 承担 authoritative whole-repository regression。
+
+CI authoritative full lane 执行：
 
 ```powershell
 python -m compileall -q wqb_agent scripts tests
 python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
-python -m unittest discover -s tests
 python -m ruff check .
 coverage erase
 coverage run --branch -m unittest discover -s tests
 coverage report
+python main.py --state-dir tests/fixtures state doctor
+python main.py --state-dir tests/fixtures state audit
+python scripts/check_repo_privacy.py
 ```
+
+CI 中完整测试只在 coverage execution 中运行一次；coverage 与 full suite 合并承担测试和 branch coverage 质量门。
 
 质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，以 2026-09-09 配置生效后的 fresh baseline（statement `79.99%`、branch `68.31%`、branch-aware `76.74%`）为依据设置初始 `fail_under=76.0`；阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
 

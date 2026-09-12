@@ -5,5 +5,6 @@
 - 架构、安全与 owner 契约：根 `AGENTS.md`
 - 外层维护 Agent：`prompts/maintenance_agent.md`
 - 内层研究 Agent：`prompts/research_agent.md`
+- 测试规则与质量门：`docs/TESTING.md`
 
 不要再向本文件追加内容；历史正文由 Git 保留。

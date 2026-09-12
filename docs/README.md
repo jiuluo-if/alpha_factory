@@ -7,7 +7,8 @@
 | Agent 如何理解项目和事实层级？ | [`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) |
 | BRAIN API、Retry-After、能力状态和未知结果如何处理？ | [`BRAIN_PROTOCOL.md`](BRAIN_PROTOCOL.md) |
 | 如何设计可反证实验、记录 trial 并解释证据？ | [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md) |
-| 测试边界和删减依据在哪里？ | [`TEST_SUITE_SIMPLIFICATION_REPORT.md`](TEST_SUITE_SIMPLIFICATION_REPORT.md) |
+| 当前测试规则、增量验证和 CI 质量门是什么？ | [`TESTING.md`](TESTING.md) |
+| 测试套件删减的历史依据在哪里？ | [`TEST_SUITE_SIMPLIFICATION_REPORT.md`](TEST_SUITE_SIMPLIFICATION_REPORT.md) |
 | 算子、字段类型和设置有哪些平台参考？ | [`reference/OPERATORS_CHEATSHEET.md`](reference/OPERATORS_CHEATSHEET.md)、[`reference/SIMULATION_SETTINGS.md`](reference/SIMULATION_SETTINGS.md)（REFERENCE） |
 | 如何恢复或审计本地研究状态？ | [`STATE_LAYOUT.md`](STATE_LAYOUT.md)（按需） |
 

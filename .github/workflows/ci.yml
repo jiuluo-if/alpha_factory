@@ -28,13 +28,16 @@ jobs:
           wqb_agent/alpha_feed_workflow.py
           wqb_agent/optimizer_workflow.py
           wqb_agent/alpha_color_workflow.py
-      - name: Unit layer
-        run: python -m unittest discover -s tests
       - name: Ruff
         run: python -m ruff check .
-      - name: Coverage report
-        run: coverage erase && coverage run --branch -m unittest discover -s tests && coverage report
+      - name: Full tests and coverage
+        run: |
+          coverage erase
+          coverage run --branch -m unittest discover -s tests
+          coverage report
       - name: Offline doctor
         run: python main.py --state-dir tests/fixtures state doctor
       - name: Offline state audit
         run: python main.py --state-dir tests/fixtures state audit
+      - name: Privacy
+        run: python scripts/check_repo_privacy.py

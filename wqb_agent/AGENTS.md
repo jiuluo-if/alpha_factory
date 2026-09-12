@@ -49,16 +49,25 @@
 
 ## 验证
 
-代码修改后运行：
+本地默认采用增量验证：
 
 ```powershell
-python -m compileall -q wqb_agent scripts tests
-python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
-python -m unittest discover -s tests
-python -m ruff check .
+python -m unittest tests.test_<affected_module>.<TestClass>.<test_method>
+python -m unittest tests.test_<nearest_contract>
+python -m py_compile <changed-python-files>
+python -m ruff check <changed-python-files>
+```
+
+先跑直接受影响行为和一个最近邻 regression；失败时再扩大到相关 subsystem contract suite。改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，使用 Local Expanded Lane。普通本地修改默认不跑 whole repository regression。
+
+仅当 typed frontier 被改动时，运行对应的 mypy。typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。
+
+CI authoritative full lane 执行 whole-tree syntax、上述 typed frontier、full Ruff、offline doctor/audit、privacy，以及 coverage 驱动的完整测试；完整 test suite 只执行一次：
+
+```powershell
 coverage erase
 coverage run --branch -m unittest discover -s tests
 coverage report
 ```
 
-typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。Coverage 只统计 `wqb_agent` production package，安全关键模块不得通过 omit 排除。
+Coverage 只统计 `wqb_agent` production package，安全关键模块不得通过 omit 排除。

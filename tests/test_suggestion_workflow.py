@@ -146,6 +146,29 @@ class TestSuggestionWorkflow(unittest.TestCase):
         self.assertNotIn("agent", parameter_names)
         self.assertNotIn("client", parameter_names)
 
+    def test_bundle_exposes_the_metric_aware_optimizer_context(self):
+        agent, _ = make_agent(self._tmp, rounds=1)
+        agent.discovery.discover = lambda space, target_count: []
+        bundle = agent.run_suggestion_round(round_no=1)
+
+        context = bundle["optimizer_context"]
+        for key in (
+            "eligible_parents", "failure_blocker_summary", "readiness_counts",
+            "self_correlation_counts", "numeric_variants_available",
+            "pre_correlation_eligibility", "generation_bound",
+            "decision_contract", "blocked_reasons",
+        ):
+            self.assertIn(key, context)
+
+    def test_optimizer_context_falls_back_to_the_gate_report(self):
+        agent, _ = make_agent(self._tmp, rounds=1)
+        workflow = agent.suggestion_workflow
+        workflow.hooks = replace(workflow.hooks, optimizer_context=None)
+
+        self.assertEqual(
+            workflow._optimizer_context(), workflow.hooks.optimizer_gate_report()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

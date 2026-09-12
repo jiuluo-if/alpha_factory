@@ -8,6 +8,7 @@ self-correlation admission contract.
 """
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from wqb_agent.alpha_factory import AlphaFactory
@@ -15,6 +16,7 @@ from wqb_agent.optimization_decision import (
     CHILD_REQUIRED_TEXT_FIELDS,
     OPPORTUNITY_CATEGORIES,
     VALID_DECISIONS,
+    VALIDATION_VARIABLES,
     OptimizationDecision,
     decision_rejections,
     parent_opportunity,
@@ -26,6 +28,7 @@ from wqb_agent.optimizer_workflow import (
     optimization_eligibility_map,
     optimizer_conversions,
 )
+from wqb_agent.pre_correlation import READINESS_BANDS
 from wqb_agent.proposal_contract import validate_proposal
 from wqb_agent.research_yield import build_research_yield
 
@@ -94,6 +97,21 @@ def child_decision(parent_id, *, expression=CHILD_EXPRESSION, **overrides):
     return OptimizationDecision(**payload)
 
 
+def validate_decision(parent_id, **overrides):
+    payload = {
+        "parent_id": parent_id,
+        "decision": "VALIDATE",
+        "validation_variable": "decay",
+        "old_value": 4,
+        "new_value": 5,
+        "expected_effect": "验证 decay 邻域内换手与稳定性是否单调",
+        "falsification": "若邻域内 Sharpe 反向恶化则稳定性假设不成立",
+        "reason": "Fitness 未过线且 turnover 进入分母",
+    }
+    payload.update(overrides)
+    return OptimizationDecision(**payload)
+
+
 class FakeTrajectory:
     def __init__(self, rows=()):
         self.rows = list(rows)
@@ -121,13 +139,15 @@ class RecordingFactory:
         return ["factory-result"]
 
 
-def workflow(trajectory=None, factory=None):
+def workflow(trajectory=None, factory=None, operators=None):
     return OptimizerWorkflow(
         trajectory=trajectory or FakeTrajectory(),
         alpha_feed_cache=FakeCache(),
         alpha_factory=factory or RecordingFactory(),
         quality_policy={},
-        operator_reference={"operators": ["rank", "group_neutralize"]},
+        operator_reference={
+            "operators": list(operators or ["rank", "group_neutralize"])
+        },
         hooks=OptimizerHooks(
             ensure_loaded=lambda: None,
             terminal_expressions=lambda: set(),
@@ -432,6 +452,7 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         self.assertEqual(result["proposals"], ["factory-result"])
         self.assertEqual(result["decision_report"], {
             "reviewed": 1, "accepted": 1, "rejected": 0, "child_generated": 1,
+            "validation_requests": 0, "validation_generated": 0,
         })
         self.assertEqual(len(factory.optimize_calls), 1)
         optimized, reference, kwargs = factory.optimize_calls[0]
@@ -508,7 +529,6 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         factory = RecordingFactory()
         flow = workflow(FakeTrajectory([parent]), factory=factory)
         result = flow.generate_from_decisions([
-            OptimizationDecision(parent_id="p1", decision="VALIDATE"),
             OptimizationDecision(parent_id="p1", decision="REROUTE"),
             OptimizationDecision(parent_id="p1", decision="STOP"),
         ])
@@ -517,6 +537,20 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         self.assertEqual(result["decision_report"]["child_generated"], 0)
         for entry in result["rejected"]:
             self.assertIn("NOT_A_CHILD_DECISION", entry["reasons"])
+
+    def test_incomplete_validate_decision_is_rejected_without_proposal(self):
+        """VALIDATE 缺单变量 contract 时必须 fail-closed，不猜参数。"""
+        parent = parent_record("p1")
+        factory = RecordingFactory()
+        flow = workflow(FakeTrajectory([parent]), factory=factory)
+        result = flow.generate_from_decisions([
+            OptimizationDecision(parent_id="p1", decision="VALIDATE"),
+        ])
+        self.assertEqual(result["proposals"], [])
+        self.assertEqual(factory.optimize_calls, [])
+        self.assertIn(
+            "VALIDATION_FIELDS_MISSING", result["rejected"][0]["reasons"]
+        )
 
     def test_invalid_or_unknown_parent_decisions_are_rejected(self):
         flow = workflow(FakeTrajectory([parent_record("p1")]))
@@ -550,6 +584,310 @@ class TestAgentDecisionToProposal(unittest.TestCase):
             "CheckpointStore", "Trajectory(", "alpha_feed", "alpha_colors",
         ):
             self.assertNotIn(forbidden, source)
+
+
+    def test_single_variable_decay_validation_emits_robustness_proposal(self):
+        field_profile = {
+            "id": "field_a",
+            "dataset": "fundamental6",
+            "type": "MATRIX",
+            "description": "已核验字段",
+            "semantic_status": "KNOWN",
+        }
+        parent = parent_record(
+            "p-decay",
+            settings={"delay": 1, "decay": 4, "truncation": 0.08,
+                      "universe": "TOP3000"},
+            field_analysis={"field_a": {
+                "semantic": "已核验字段", "coverage": None,
+                "frequency": None, "data_type": "MATRIX",
+            }},
+        )
+        flow = workflow(FakeTrajectory([parent]), factory=AlphaFactory())
+        result = flow.generate_from_decisions(
+            [validate_decision("p-decay")], max_candidates=2
+        )
+        self.assertEqual(result["decision_report"]["validation_requests"], 1)
+        self.assertEqual(len(result["proposals"]), 1)
+        proposal = result["proposals"][0]
+        self.assertEqual(proposal["experiment_stage"], "ROBUSTNESS")
+        self.assertEqual(proposal["change_type"], "decay")
+        self.assertEqual(proposal["changed_variable"], "decay")
+        self.assertEqual(proposal["settings"], {"decay": 5})
+        self.assertEqual(proposal["parent_id"], "p-decay")
+        self.assertEqual(proposal["settings_variant"]["change_count"], 1)
+        self.assertEqual(proposal["settings_variant"]["candidate_value"], 5)
+        ok, problems = validate_proposal(
+            proposal,
+            discovered_fields=[field_profile],
+            strict_experiment=True,
+            operator_reference={"operators": ["rank", "group_neutralize"],
+                                "sha256": "sha"},
+            require_economic_integrity=True,
+        )
+        self.assertEqual(problems, [])
+        self.assertTrue(ok)
+
+    def test_window_validation_is_robustness_not_child(self):
+        field_profile = {
+            "id": "field_a",
+            "dataset": "fundamental6",
+            "type": "MATRIX",
+            "description": "已核验字段",
+            "semantic_status": "KNOWN",
+        }
+        parent = parent_record(
+            "p-window",
+            expression="-rank(ts_zscore(field_a, 20))",
+            template_id="reversal_zscore_20",
+            field_analysis={"field_a": {
+                "semantic": "已核验字段", "coverage": None,
+                "frequency": None, "data_type": "MATRIX",
+            }},
+        )
+        flow = workflow(
+            FakeTrajectory([parent]), factory=AlphaFactory(),
+            operators=["rank", "ts_zscore", "group_neutralize"],
+        )
+        shifted = "-rank(ts_zscore(field_a, 60))"
+        result = flow.generate_from_decisions([
+            validate_decision(
+                "p-window", validation_variable="template_window",
+                old_value=20, new_value=60,
+            )
+        ], max_candidates=2)
+        self.assertEqual(len(result["proposals"]), 1)
+        proposal = result["proposals"][0]
+        self.assertEqual(proposal["expression"], shifted)
+        self.assertEqual(proposal["change_type"], "window_change")
+        self.assertEqual(proposal["experiment_stage"], "ROBUSTNESS")
+        self.assertEqual(proposal["numeric_variant"]["slot"], "short_window")
+        self.assertEqual(proposal["numeric_variant"]["change_count"], 1)
+        # 同样的窗口变化若声明为 CHILD，必须被参数化检查拒绝。
+        self.assertIn(
+            "PARAMETER_ONLY_CHANGE",
+            decision_rejections(
+                child_decision("p-window", expression=shifted), parent
+            ),
+        )
+        ok, problems = validate_proposal(
+            proposal,
+            discovered_fields=[field_profile],
+            strict_experiment=True,
+            operator_reference={"operators": ["rank", "ts_zscore",
+                                              "group_neutralize"],
+                                "sha256": "sha"},
+            require_economic_integrity=True,
+        )
+        self.assertEqual(problems, [])
+        self.assertTrue(ok)
+
+    def test_decay_and_truncation_in_one_validate_decision_is_rejected(self):
+        parent = parent_record("p1")
+        flow = workflow(FakeTrajectory([parent]), factory=RecordingFactory())
+        result = flow.generate_from_decisions([
+            validate_decision(
+                "p1", new_value={"decay": 5, "truncation": 0.10}
+            ),
+        ])
+        self.assertEqual(result["proposals"], [])
+        self.assertIn(
+            "VALIDATION_MULTIPLE_VARIABLES", result["rejected"][0]["reasons"]
+        )
+
+    def test_numeric_slots_declare_research_numbers_not_safety_constants(self):
+        factory = AlphaFactory()
+        template = factory.registry.get("reversal_vol_adjusted")
+        self.assertEqual(
+            template.research_slot_names, ("delta_window", "vol_window")
+        )
+        variants = template.numeric_variants(max_variants=3)
+        self.assertEqual(len(variants), 3)
+        for variant in variants:
+            self.assertEqual(variant["change_count"], 1)
+            self.assertEqual(variant["source_template"], "reversal_vol_adjusted")
+            # 未声明的 divide epsilon 0.001 永远保持字面量。
+            self.assertIn("0.001", variant["expression"])
+            self.assertNotEqual(variant["expression"], template.expression)
+        changed = {
+            (variant["slot"], str(variant["candidate_value"]))
+            for variant in variants
+        }
+        self.assertNotIn(("delta_window", "5"), changed)
+        self.assertNotIn(("vol_window", "20"), changed)
+
+    def test_numeric_variants_never_form_a_cartesian_product(self):
+        template = AlphaFactory().registry.get("quality_smooth_change")
+        variants = template.numeric_variants(max_variants=8)
+        self.assertEqual(len(variants), 4)
+        for variant in variants:
+            others = {
+                slot.name: slot.default for slot in template.numeric_slots
+            }
+            others.pop(variant["slot"], None)
+            for name, value in others.items():
+                self.assertIn(str(value), variant["expression"], name)
+            self.assertNotEqual(variant["expression"], template.expression)
+
+    def test_undeclared_numeric_slot_cannot_be_rendered(self):
+        template = AlphaFactory().registry.get("reversal_zscore_20")
+        self.assertIsNone(template.numeric_slot("epsilon"))
+        with self.assertRaises(KeyError):
+            template.render_numeric_variant("epsilon", 0.002)
+        with self.assertRaises(ValueError):
+            template.render_numeric_variant("short_window", 17)
+
+
+class TestOptimizerMetricContext(unittest.TestCase):
+    """§39-§54：metric-aware、bounded 的 optimizer context（只读派生）。"""
+
+    @staticmethod
+    def blocked_metrics(**overrides):
+        metrics = {
+            "sharpe": 1.6,
+            "fitness": 1.3,
+            "turnover": 0.25,
+            "returns": 0.12,
+            "drawdown": 0.05,
+            "checks": [
+                {"name": "CONCENTRATED_WEIGHT", "result": "FAIL"},
+                {"name": "SELF_CORRELATION", "result": "PENDING"},
+            ],
+        }
+        metrics.update(overrides)
+        return metrics
+
+    @staticmethod
+    def eligible_metrics(**overrides):
+        metrics = {
+            "sharpe": 1.5,
+            "fitness": 1.2,
+            "turnover": 0.18,
+            "returns": 0.12,
+            "drawdown": 0.05,
+            "checks": [{"name": "SELF_CORRELATION", "result": "PENDING"}],
+        }
+        metrics.update(overrides)
+        return metrics
+
+    def test_context_is_bounded_and_exposes_the_decision_contract(self):
+        rows = [
+            parent_record(
+                f"p{index}", settings={"delay": 1},
+                health={"ok": True},
+                self_correlation={"status": "PENDING"},
+                metrics=self.blocked_metrics(),
+            )
+            for index in range(3)
+        ]
+        context = workflow(FakeTrajectory(rows)).optimizer_context(limit=2)
+
+        self.assertEqual(context["parent_limit"], 2)
+        self.assertEqual(context["parent_count"], 2)
+        self.assertLessEqual(len(context["eligible_parents"]), 2)
+        self.assertEqual(
+            context["failure_blocker_summary"], {"CONCENTRATED_WEIGHT": 2}
+        )
+        self.assertEqual(
+            context["readiness_counts"]["STRUCTURAL_REPAIR_REQUIRED"], 2
+        )
+        self.assertEqual(context["self_correlation_counts"], {"PENDING": 2})
+        contract = context["decision_contract"]
+        self.assertEqual(set(contract["decisions"]), set(VALID_DECISIONS))
+        self.assertEqual(
+            set(contract["validation_variables"]), set(VALIDATION_VARIABLES)
+        )
+        self.assertEqual(set(contract["readiness_bands"]), set(READINESS_BANDS))
+        self.assertIn("blocked_reasons", context)
+        self.assertIn("generation_bound", context)
+        self.assertIn("ranking", context)
+
+    def test_blocked_parent_needs_structural_repair_before_correlation(self):
+        row = parent_record(
+            "p-blocked", settings={"delay": 1}, health={"ok": True},
+            metrics=self.blocked_metrics(),
+        )
+        context = workflow(FakeTrajectory([row])).optimizer_context(limit=4)
+
+        entry = context["pre_correlation_eligibility"][0]
+        self.assertEqual(entry["parent_id"], "p-blocked")
+        self.assertFalse(entry["eligible"])
+        self.assertEqual(entry["readiness"], "STRUCTURAL_REPAIR_REQUIRED")
+        self.assertIn("CONCENTRATION_REPAIR", entry["opportunities"])
+        self.assertIn("NON_CORRELATION_CHECKS_NOT_PASS", entry["reasons"])
+        metric_context = context["eligible_parents"][0]["metric_optimization_context"]
+        self.assertFalse(metric_context["pre_correlation_eligible"])
+        self.assertEqual(metric_context["structural_blockers"], ["CONCENTRATED_WEIGHT"])
+        self.assertEqual(metric_context["blocking_checks"], ["CONCENTRATED_WEIGHT"])
+
+    def test_repaired_parent_moves_to_ready_for_correlation(self):
+        row = parent_record(
+            "p-ready", settings={"delay": 1}, health={"ok": True},
+            metrics=self.eligible_metrics(),
+        )
+        context = workflow(FakeTrajectory([row])).optimizer_context(limit=4)
+
+        entry = context["pre_correlation_eligibility"][0]
+        self.assertTrue(entry["eligible"])
+        self.assertEqual(entry["readiness"], "PRE_CORRELATION_READY")
+        self.assertEqual(context["readiness_counts"]["PRE_CORRELATION_READY"], 1)
+        self.assertEqual(context["failure_blocker_summary"], {})
+
+    def test_ranking_is_readiness_first_not_sharpe_only(self):
+        rows = [
+            parent_record(
+                "p-higher-sharpe", settings={"delay": 1}, health={"ok": True},
+                metrics=self.eligible_metrics(sharpe=0.9, fitness=0.4, turnover=0.35),
+            ),
+            parent_record(
+                "p-structural", settings={"delay": 1}, health={"ok": True},
+                metrics=self.blocked_metrics(sharpe=0.5, fitness=0.4, turnover=0.25),
+            ),
+        ]
+        context = workflow(FakeTrajectory(rows)).optimizer_context(limit=4)
+
+        self.assertEqual(
+            [summary["parent_id"] for summary in context["eligible_parents"]],
+            ["p-structural", "p-higher-sharpe"],
+        )
+        self.assertEqual(context["readiness_counts"]["LOW_INFORMATION"], 1)
+
+    def test_delay_hook_controls_the_metric_line(self):
+        row = parent_record(
+            "p-delay", settings={"delay": 1},
+            health={"ok": True},
+            metrics=self.eligible_metrics(sharpe=1.6),
+        )
+        flow = workflow(FakeTrajectory([row]))
+        flow.hooks = replace(flow.hooks, simulation_delay=lambda: 0)
+
+        entry = flow.optimizer_context(limit=4)["pre_correlation_eligibility"][0]
+        self.assertFalse(entry["eligible"])
+        self.assertEqual(entry["readiness"], "LOW_INFORMATION")
+        self.assertIn("SHARPE_BELOW_THRESHOLD", entry["reasons"])
+        self.assertIn("FITNESS_BELOW_THRESHOLD", entry["reasons"])
+
+    def test_declared_numeric_slots_and_settings_pools_are_bounded(self):
+        row = parent_record(
+            "p-numeric", template_id="reversal_zscore_20",
+            settings={"delay": 1, "decay": 4, "truncation": 0.08},
+            metrics=self.eligible_metrics(),
+        )
+        context = workflow(
+            FakeTrajectory([row]), factory=AlphaFactory()
+        ).optimizer_context(limit=4)
+
+        variants = context["numeric_variants_available"]
+        self.assertEqual(len(variants), 1)
+        entry = variants[0]
+        self.assertEqual(entry["template_id"], "reversal_zscore_20")
+        self.assertEqual(
+            [(slot["slot"], slot["default"]) for slot in entry["template_slots"]],
+            [("short_window", 20)],
+        )
+        self.assertEqual(entry["settings_pools"]["decay"], [3, 5])
+        self.assertEqual(entry["settings_pools"]["truncation"], [0.06, 0.1])
+        self.assertEqual(entry["settings_pools"]["universe"], [])
 
 
 if __name__ == "__main__":

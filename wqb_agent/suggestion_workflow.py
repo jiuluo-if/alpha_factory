@@ -24,6 +24,8 @@ class SuggestionHooks:
     ensure_best_field: Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
     optimizer_gate_report: Callable[[], Mapping[str, Any]]
     fallback_templates: Callable[[], Sequence[Mapping[str, Any]]]
+    # metric-aware bounded optimizer context；缺省时回落纯 gate 计数，保持兼容。
+    optimizer_context: Callable[[], Mapping[str, Any]] | None = None
 
 
 class SuggestionWorkflow:
@@ -58,6 +60,13 @@ class SuggestionWorkflow:
         self.simulation_settings = simulation_settings
         self.operator_reference = operator_reference
         self.hooks = hooks
+
+    def _optimizer_context(self):
+        """优先给出 metric-aware bounded context；缺 hook 时回落 gate 计数。"""
+        hook = getattr(self.hooks, "optimizer_context", None)
+        if callable(hook):
+            return hook()
+        return self.hooks.optimizer_gate_report()
 
     def run(self, round_no=None):
         """Discover fields and write the suggestion bundle without Simulation."""
@@ -116,7 +125,7 @@ class SuggestionWorkflow:
             "research_guard": ResearchLoopGuard(
                 self.trajectory.experiments
             ).snapshot(),
-            "optimizer_context": self.hooks.optimizer_gate_report(),
+            "optimizer_context": self._optimizer_context(),
             "field_selection": {
                 "max_alpha_count": self.discovery.max_alpha_count,
                 "excluded_high_usage": self.discovery.last_excluded_high_usage,

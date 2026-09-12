@@ -27,10 +27,13 @@ from .incremental_value import build_incremental_value
 from .metrics import (
     check_pass,
     checks_passed,
-    checks_ready_for_self_correlation_refresh,
     num,
 )
 from .optimizer_workflow import OptimizerHooks
+from .pre_correlation import (
+    delay_metric_thresholds,
+    pre_self_correlation_eligibility,
+)
 from .proposal_contract import (
     SETTING_OVERRIDES,
     _operator_reference,
@@ -219,6 +222,7 @@ class Agent:
                 trusted_current_best=self._trusted_current_best,
                 ensure_best_field=self._ensure_best_field,
                 optimizer_gate_report=self.optimizer_gate_report,
+                optimizer_context=self.optimizer_context,
                 fallback_templates=lambda: list(EXPLORATION_HYPOTHESES) + list(SEED_HYPOTHESES),
             ),
             proposal_execution=ProposalExecutionHooks(
@@ -259,6 +263,9 @@ class Agent:
             optimizer=OptimizerHooks(
                 ensure_loaded=self._ensure_loaded,
                 terminal_expressions=self._terminal_expressions,
+                simulation_delay=lambda: (
+                    self.simulation_settings or {}
+                ).get("delay"),
             ),
         )
 
@@ -320,6 +327,10 @@ class Agent:
     def inspect_optimizer_parents(self, limit=8):
         """Agent-facing：有限、只读的 evidence-eligible parent summaries。"""
         return self.optimizer_workflow.inspect_optimizer_parents(limit=limit)
+
+    def optimizer_context(self, *, limit=8):
+        """Agent-facing：bounded、只读的 metric-aware optimizer context。"""
+        return self.optimizer_workflow.optimizer_context(limit=limit)
 
     def propose_optimization(self, decisions, *, max_candidates=4):
         """Agent-facing：校验 OptimizationDecision 后走唯一 CHILD 生成路径。"""
@@ -1059,37 +1070,11 @@ class Agent:
 
         Exploratory and clearly sub-threshold results cannot enter the manual
         submission pool, so querying their asynchronous correlation endpoint
-        only adds latency and cannot change a decision.
+        only adds latency and cannot change a decision.  The admission rule is
+        the shared ``pre_self_correlation_eligibility`` policy, so the Agent and
+        ``scripts/refresh_self_correlation.py`` can never select different rows.
         """
-        alpha_ids = []
-        candidates = list(experiments or [])
-        candidates.extend(self.trajectory.recent(self.correlation_refresh_window))
-        for parent, _report in getattr(self, "_validation_candidates", []) or []:
-            candidates.append(parent)
-        seen = set()
-        for exp in candidates:
-            if exp.status != "DONE" or not exp.alpha_id:
-                continue
-            if exp.alpha_id in seen:
-                continue
-            seen.add(exp.alpha_id)
-            metrics = exp.metrics or {}
-            rating = self._alpha_rating(metrics)
-            turnover = metrics.get("turnover")
-            turnover_value = num(turnover)
-            minimum_turnover = num(self.quality_policy.get("min_turnover", 0.01))
-            maximum_turnover = num(self.quality_policy.get("max_turnover", 0.70))
-            turnover_ok = (
-                turnover_value is not None
-                and minimum_turnover is not None
-                and maximum_turnover is not None
-                and minimum_turnover <= turnover_value <= maximum_turnover
-            )
-            if (rating in {"EXCELLENT", "SPECTACULAR"}
-                    and checks_ready_for_self_correlation_refresh(metrics)
-                    and bool((exp.health or {}).get("ok"))
-                    and turnover_ok):
-                alpha_ids.append(exp.alpha_id)
+        alpha_ids = self._pre_correlation_candidates(experiments)
         # Unit-test/fallback clients intentionally do not expose the live HTTP
         # session; leave their synthetic metrics untouched.
         if not alpha_ids or not hasattr(self.client, "_session"):
@@ -1105,6 +1090,35 @@ class Agent:
         )
         self.reflector.evidence_cache.update(ephemeral_evidence)
         print(f"[EVIDENCE] SELF_CORRELATION refreshed {refreshed}/{len(alpha_ids)}")
+
+    def _pre_correlation_candidates(self, experiments=None):
+        """Return DONE alpha ids passing the shared pre-correlation gate.
+
+        This is the single Agent-side selector: it reuses the same pure policy as
+        the read-only backfill script, so both surfaces always agree.
+        """
+        alpha_ids = []
+        candidates = list(experiments or [])
+        candidates.extend(self.trajectory.recent(self.correlation_refresh_window))
+        for parent, _report in getattr(self, "_validation_candidates", []) or []:
+            candidates.append(parent)
+        seen = set()
+        delay = (self.simulation_settings or {}).get("delay")
+        for exp in candidates:
+            if exp.status != "DONE" or not exp.alpha_id:
+                continue
+            if exp.alpha_id in seen:
+                continue
+            seen.add(exp.alpha_id)
+            eligibility = pre_self_correlation_eligibility(
+                exp.metrics or {},
+                delay=delay,
+                quality_policy=self.quality_policy,
+                health=exp.health,
+            )
+            if eligibility["eligible"]:
+                alpha_ids.append(exp.alpha_id)
+        return alpha_ids
 
     @staticmethod
     def _correlation_under(evidence, max_corr):
@@ -1423,7 +1437,14 @@ class Agent:
                 and fitness > threshold(excellent, "min_fitness", 1.5)
                 and margin > threshold(excellent, "min_margin", 0.0004)):
             return "EXCELLENT"
-        if sharpe > 1.25 and 0.01 <= turnover <= 0.70 and fitness > 1.0:
+        # Delay-aware 过线纪律：delay 0 与 delay 1 的门槛不同，未知 delay 不晋级。
+        thresholds = delay_metric_thresholds(
+            (self.simulation_settings or {}).get("delay")
+        )
+        if (thresholds is not None
+                and sharpe > thresholds["sharpe"]
+                and 0.01 <= turnover <= 0.70
+                and fitness > thresholds["fitness"]):
             return "GOOD"
         return "BELOW_GOOD"
 

@@ -11,6 +11,7 @@ import itertools
 import json
 import math
 import random
+import re
 from dataclasses import dataclass
 
 from .discovery import frequency_evidence, normalize_coverage
@@ -22,6 +23,45 @@ from .diversity import (
 from .expression import analyze_expression, canonical_expression
 from .proposal_contract import CHILD_CHANGE_TYPES, FACTORY_BATCH_SIZE
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
+
+_NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
+
+
+def _render_numeric_token(expression, token, value, occurrence=0):
+    """Replace one declared numeric token; an undeclared digit is never touched."""
+    matches = [
+        match for match in _NUMBER_TOKEN_RE.finditer(expression)
+        if match.group(1) == str(token)
+    ]
+    index = max(0, int(occurrence))
+    if index >= len(matches):
+        raise ValueError(f"numeric slot token not found: {token}#{index}")
+    match = matches[index]
+    return expression[:match.start(1)] + str(value) + expression[match.end(1):]
+
+
+@dataclass(frozen=True)
+class TemplateNumericSlot:
+    """模板中显式声明的研究数值（只有声明的数字允许轮换）。
+
+    ``token`` 是该数字在骨架里的字面量，``occurrence`` 指同值 token 出现的第
+    几次（从 0 开始）。divide epsilon、operator arity 等 safety constant 永远
+    不声明成 slot。
+    """
+
+    name: str
+    kind: str = "window"
+    default: float = 0.0
+    allowed_values: tuple = ()
+    economic_role: str = ""
+    token: str = ""
+    occurrence: int = 0
+
+    def render(self, expression, value):
+        """在已填充 slot 的真实表达式上替换本声明的数值。"""
+        return _render_numeric_token(
+            expression, self.token or str(self.default), value, self.occurrence
+        )
 
 
 @dataclass(frozen=True)
@@ -35,6 +75,7 @@ class AlphaTemplate:
     stage_path: str = "L0:raw -> L1:cross_sectional -> L2:none"
     rationale: str = ""
     economic: bool = False
+    numeric_slots: tuple = ()
 
     @property
     def operator_count(self):
@@ -80,6 +121,50 @@ class AlphaTemplate:
             "falsification": "独立样本、健康或平台 checks 不能支持机制时停止该模板。",
         }
 
+    @property
+    def research_slot_names(self):
+        return tuple(slot.name for slot in self.numeric_slots)
+
+    def numeric_slot(self, name):
+        for slot in self.numeric_slots:
+            if slot.name == name:
+                return slot
+        return None
+
+    def render_numeric_variant(self, slot_name, value):
+        """只替换声明过的 slot，其余数字保持字面量。"""
+        slot = self.numeric_slot(slot_name)
+        if slot is None:
+            raise KeyError(f"undeclared numeric slot: {slot_name}")
+        if slot.allowed_values and value not in slot.allowed_values:
+            raise ValueError(f"{value} is not an allowed value for {slot_name}")
+        return slot.render(self.expression, value)
+
+    def numeric_variants(self, *, max_variants=3):
+        """default + 单变量 variant；一次只改一个 slot，绝不生成笛卡尔积。"""
+        try:
+            cap = max(0, int(max_variants))
+        except (TypeError, ValueError):
+            cap = 3
+        variants = []
+        for slot in self.numeric_slots:
+            for value in slot.allowed_values or ():
+                if value == slot.default:
+                    continue
+                variants.append({
+                    "source_template": self.template_id,
+                    "slot": slot.name,
+                    "kind": slot.kind,
+                    "parent_default_value": slot.default,
+                    "candidate_value": value,
+                    "expression": slot.render(self.expression, value),
+                    "change_count": 1,
+                    "economic_role": slot.economic_role,
+                    "template_variant_id": f"{self.template_id}@{slot.name}={value}",
+                    "semantic_mechanism_family": self.family,
+                })
+        return variants[:cap]
+
 
 DEFAULT_TEMPLATES = (
     AlphaTemplate(
@@ -94,16 +179,37 @@ DEFAULT_TEMPLATES = (
         "reversal_zscore_20", "reversal", "-rank(ts_zscore({p}, 20))",
         stage_path="L0:raw -> L1:ts_zscore -> L2:rank",
         rationale="检验短期异常值的反转机制。",
+        numeric_slots=(
+            TemplateNumericSlot(
+                "short_window", kind="window", default=20,
+                allowed_values=(5, 20, 60), economic_role="短期反转窗口",
+                token="20",
+            ),
+        ),
     ),
     AlphaTemplate(
         "momentum_mean_20", "momentum", "rank(ts_mean({p}, 20))",
         stage_path="L0:raw -> L1:ts_mean -> L2:rank",
         rationale="检验慢化后的持续性机制。",
+        numeric_slots=(
+            TemplateNumericSlot(
+                "smoothing_window", kind="window", default=20,
+                allowed_values=(5, 20, 60), economic_role="趋势平滑窗口",
+                token="20",
+            ),
+        ),
     ),
     AlphaTemplate(
         "change_delta_5", "change", "rank(ts_delta({p}, 5))",
         stage_path="L0:raw -> L1:ts_delta -> L2:rank",
         rationale="检验字段变化而非水平本身。",
+        numeric_slots=(
+            TemplateNumericSlot(
+                "delta_window", kind="window", default=5,
+                allowed_values=(5, 10, 20), economic_role="变化观察窗口",
+                token="5",
+            ),
+        ),
     ),
     AlphaTemplate(
         "group_neutralized_rank", "group_neutralized", "group_neutralize(rank({p}), {g})",
@@ -136,6 +242,18 @@ ECONOMIC_TEMPLATES = (
         stage_path="L0:raw -> L1:change -> L2:decay -> L3:rank",
         rationale="平滑盈利或质量指标的变化，检验信息持续性而非单日跳变。",
         economic=True,
+        numeric_slots=(
+            TemplateNumericSlot(
+                "delta_window", kind="window", default=5,
+                allowed_values=(5, 10, 20), economic_role="质量变化窗口",
+                token="5",
+            ),
+            TemplateNumericSlot(
+                "smoothing_window", kind="window", default=10,
+                allowed_values=(5, 10, 20), economic_role="变化平滑窗口",
+                token="10",
+            ),
+        ),
     ),
     AlphaTemplate(
         "reversal_vol_adjusted", "risk_adjusted_reversal",
@@ -143,6 +261,18 @@ ECONOMIC_TEMPLATES = (
         stage_path="L0:raw -> L1:delta/reversal -> L2:volatility adjustment -> L3:rank",
         rationale="把短期反转幅度按自身波动率调整，区分异常变化与正常噪声。",
         economic=True,
+        numeric_slots=(
+            TemplateNumericSlot(
+                "delta_window", kind="window", default=5,
+                allowed_values=(5, 10, 20), economic_role="反转变化窗口",
+                token="5",
+            ),
+            TemplateNumericSlot(
+                "vol_window", kind="window", default=20,
+                allowed_values=(10, 20, 60), economic_role="波动率估计窗口",
+                token="20",
+            ),
+        ),
     ),
     AlphaTemplate(
         "persistent_level", "persistent_level",
@@ -399,6 +529,15 @@ ECONOMIC_TEMPLATES = (
 )
 
 MAX_TEMPLATE_FAMILY_PER_BATCH = 2
+
+# 参数验证只复用既有 change_type 词表：window / decay / truncation / universe
+# 的变化不是新经济机制，只能进入 ROBUSTNESS。
+VALIDATION_CHANGE_TYPES = {
+    "decay": "decay",
+    "truncation": "decay_truncation",
+    "universe": "universe",
+    "template_window": "window_change",
+}
 
 
 _SEMANTIC_CONCEPT_RULES = (
@@ -1858,6 +1997,138 @@ class AlphaFactory:
                 )
                 out.append(proposal)
                 excluded.add(normalized)
+        return out
+
+    def validation_proposals(self, requests, operator_reference, *,
+                             max_candidates=4, excluded_expressions=None):
+        """Build bounded ROBUSTNESS proposals from Python-resolved VALIDATE requests.
+
+        The Agent chose *what* to validate; Python only resolves the legal
+        candidate value, the settings override and the provenance.  Parameter
+        variation is never a new economic mechanism, so every proposal is
+        ``ROBUSTNESS`` with a pre-registered ValidationPlan.
+        """
+        from .validation_report import default_validation_plan
+
+        if not isinstance(requests, (list, tuple)) or not isinstance(operator_reference, dict):
+            return []
+        try:
+            limit = max(0, int(max_candidates))
+        except (TypeError, ValueError):
+            return []
+        excluded = {
+            canonical_expression(value)
+            for value in (excluded_expressions or [])
+            if isinstance(value, str) and value.strip()
+        }
+        allowed_ops = {
+            str(value) for value in (operator_reference.get("operators") or [])
+        }
+        out = []
+        for request in requests or ():
+            if len(out) >= limit or not isinstance(request, dict):
+                break
+            parent = request.get("parent")
+            variable = str(request.get("variable") or "")
+            if not isinstance(parent, dict) or variable not in VALIDATION_CHANGE_TYPES:
+                continue
+            base = parent.get("expression")
+            if not isinstance(base, str) or not base.strip():
+                continue
+            expression = request.get("expression") or base
+            normalized = canonical_expression(expression)
+            if not normalized or normalized in excluded:
+                continue
+            actual_ops = list(analyze_expression(expression).operators)
+            if not set(actual_ops).issubset(allowed_ops):
+                continue
+            fields = parent.get("fields_used") or []
+            datasets = parent.get("datasets") or []
+            if not fields or not datasets:
+                continue
+            if any(not parent.get(key) for key in (
+                    "field_understanding", "field_analysis",
+                    "field_source", "field_hypothesis_basis")):
+                continue
+            settings_override = request.get("settings_override")
+            expected_override = set() if variable == "template_window" else {variable}
+            if (not isinstance(settings_override, dict)
+                    or set(settings_override) != expected_override):
+                continue
+            mechanism = parent.get("economic_mechanism")
+            if not isinstance(mechanism, str) or not mechanism.strip():
+                continue
+            expected_effect = str(request.get("expected_effect") or "").strip()
+            falsification = str(request.get("falsification") or "").strip()
+            reason = str(request.get("reason") or "").strip()
+            if not (expected_effect and falsification and reason):
+                continue
+            proposal = {
+                "expression": expression,
+                "fields": list(fields),
+                "datasets": list(datasets),
+                "field_understanding": parent.get("field_understanding"),
+                "field_analysis": parent.get("field_analysis"),
+                "field_source": parent.get("field_source"),
+                "field_hypothesis_basis": parent.get("field_hypothesis_basis"),
+                "operator_mapping": reason,
+                "economic_mechanism": mechanism,
+                "operator_evidence": {
+                    "sha256": operator_reference.get("sha256"),
+                    "operators": actual_ops,
+                    "rationale": reason,
+                },
+                "experiment_question": expected_effect,
+                "expected_failure_modes": [
+                    "参数邻域内的改善只是噪声或过拟合",
+                    "换手、健康或平台 checks 在新取值下恶化",
+                ],
+                "tuning_risk": False,
+                "experiment_stage": "ROBUSTNESS",
+                "change_type": VALIDATION_CHANGE_TYPES[variable],
+                "parent_expression": base,
+                "parent_id": parent.get("id") or parent.get("proposal_id"),
+                "changed_variable": variable,
+                "research_role": "VALIDATION",
+                "lineage_id": parent.get("lineage_id") or parent.get("hypothesis_id"),
+                "template_id": f"validate_{variable}",
+                "template_family": "bounded_validation",
+                "template_stage_path": "L0:completed signal -> L1:one-variable validation",
+                "template_ref": {
+                    "source": "bounded_validation",
+                    "parent": canonical_expression(base),
+                },
+                "template_slots": {"parent": base},
+                "rationale": reason,
+                "direction": parent.get("direction") or "long",
+                "expected_horizon": parent.get("expected_horizon") or "short-term",
+                "falsification": falsification,
+                "direction_transform": parent.get("direction_transform") or {
+                    "applied": False,
+                    "reason": "沿用 parent 的方向，不把方向翻转当作新机制。",
+                },
+                "self_correlation_impact": parent.get("self_correlation_impact") or {
+                    "expected_effect": "UNKNOWN",
+                    "basis": "pre_simulation_structural_forecast",
+                    "rationale": "参数验证不改变经济暴露来源，先不假设相关性。",
+                    "admission": "REVIEW",
+                },
+                "settings": dict(settings_override),
+                "validation_plan": default_validation_plan(parent),
+                "proposal_origin": "agent_optimizer",
+                "research_layer": "optimization",
+            }
+            numeric_variant = request.get("numeric_variant")
+            if isinstance(numeric_variant, dict) and numeric_variant:
+                proposal["numeric_variant"] = dict(numeric_variant)
+            settings_variant = request.get("settings_variant")
+            if isinstance(settings_variant, dict) and settings_variant:
+                proposal["settings_variant"] = dict(settings_variant)
+            decision_payload = parent.get("optimization_decision")
+            if isinstance(decision_payload, dict) and decision_payload:
+                proposal["optimization_decision"] = dict(decision_payload)
+            out.append(proposal)
+            excluded.add(normalized)
         return out
 
     def assemble_proposals(self, hypothesis, fields, operator_reference,

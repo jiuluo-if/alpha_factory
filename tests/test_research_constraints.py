@@ -13,6 +13,23 @@ from wqb_agent.research_guard import (
 )
 
 
+def _correlation_row(alpha_id, *, sharpe=1.60, fitness=1.30, returns=0.05,
+                     turnover=0.25, drawdown=0.05, checks=None):
+    """A complete DONE row: the shared pre-correlation gate needs full evidence."""
+    return {
+        "status": "DONE", "alpha_id": alpha_id, "created_at": 10,
+        "metrics": {
+            "sharpe": sharpe, "fitness": fitness, "returns": returns,
+            "turnover": turnover, "drawdown": drawdown, "margin": 0.001,
+            "checks": checks if checks is not None else [
+                {"name": "LOW_SHARPE", "pass": True},
+                {"name": "SELF_CORRELATION", "pass": None, "result": "PENDING"},
+            ],
+        },
+        "health": {"ok": True},
+    }
+
+
 class TestResearchConstraints(unittest.TestCase):
     def _proposal(self, **updates):
         proposal = {
@@ -173,18 +190,19 @@ class TestResearchConstraints(unittest.TestCase):
 
     def test_correlation_backfill_selects_only_real_quality_rows_in_window(self):
         rows = [
-            {"status": "DONE", "alpha_id": "good", "created_at": 10,
-             "metrics": {"checks": [
-                 {"name": "LOW_SHARPE", "pass": True},
-                 {"name": "SELF_CORRELATION", "pass": None},
-             ]}},
-            {"status": "DONE", "alpha_id": "bad-check", "created_at": 10,
-             "metrics": {"checks": [
-                 {"name": "LOW_SHARPE", "pass": False},
-                 {"name": "SELF_CORRELATION", "pass": None},
-             ]}},
+            _correlation_row("good"),
+            _correlation_row("bad-check", checks=[
+                {"name": "LOW_SHARPE", "pass": False},
+                {"name": "SELF_CORRELATION", "pass": None},
+            ]),
+            _correlation_row("negative-returns", returns=-0.01),
         ]
-        self.assertEqual(select_alpha_ids(rows, 0, 20), ["good"])
+        self.assertEqual(select_alpha_ids(rows, 0, 20, delay=1), ["good"])
+        borderline = [_correlation_row("delay-sensitive", sharpe=1.26, fitness=1.01)]
+        self.assertEqual(
+            select_alpha_ids(borderline, 0, 20, delay=1), ["delay-sensitive"]
+        )
+        self.assertEqual(select_alpha_ids(borderline, 0, 20, delay=0), [])
 
     def test_correlation_backfill_until_date_is_exclusive_midnight(self):
         self.assertLess(

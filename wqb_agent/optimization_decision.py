@@ -16,7 +16,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from .expression import analyze_expression, expression_field_identifiers
-from .metrics import check_pass
+from .metrics import check_pass, num
+from .pre_correlation import metric_optimization_context
 from .proposal_contract import CHILD_CHANGE_TYPES, validate_self_correlation_impact
 from .research_guard import (
     is_direction_only_change,
@@ -26,6 +27,23 @@ from .research_guard import (
 
 VALID_DECISIONS = ("CHILD", "VALIDATE", "REROUTE", "STOP")
 CHILD_DECISION = "CHILD"
+VALIDATE_DECISION = "VALIDATE"
+
+# VALIDATE 只允许单变量、有界、平台已授权的研究变量；window / decay /
+# truncation / universe 的变化不是新经济机制，只能进 ROBUSTNESS。
+VALIDATION_VARIABLES = ("template_window", "decay", "truncation", "universe")
+VALIDATE_REQUIRED_TEXT_FIELDS = (
+    "parent_id",
+    "validation_variable",
+    "expected_effect",
+    "falsification",
+    "reason",
+)
+
+# decay 有界邻域；truncation 只允许平台已授权 whitelist 内的相邻取值。
+DECAY_MIN = 0
+DECAY_MAX = 10
+TRUNCATION_ALLOWED = (0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.15)
 
 # Legacy ``child_economic_hypothesis`` rows predate any identity requirement, so
 # they are adapted with an explicit placeholder instead of inventing a real id.
@@ -84,6 +102,10 @@ class OptimizationDecision:
     direction_transform: Mapping = field(default_factory=dict)
     self_correlation_impact: Mapping = field(default_factory=dict)
     why_not_parameter_tuning: str = ""
+    validation_variable: str = ""
+    old_value: object = None
+    new_value: object = None
+    reason: str = ""
 
     def __post_init__(self):
         decision = _text(self.decision).upper() or "STOP"
@@ -107,6 +129,19 @@ class OptimizationDecision:
             return []
         return [
             name for name in CHILD_REQUIRED_TEXT_FIELDS
+            if not _text(getattr(self, name, None))
+        ]
+
+    @property
+    def is_validate(self):
+        return self.decision == VALIDATE_DECISION
+
+    def missing_validation_fields(self):
+        """VALIDATE 决策尚未由 Agent 补齐的字段（其余决策为空）。"""
+        if not self.is_validate:
+            return []
+        return [
+            name for name in VALIDATE_REQUIRED_TEXT_FIELDS
             if not _text(getattr(self, name, None))
         ]
 
@@ -168,12 +203,20 @@ class OptimizationDecision:
             direction_transform=_transform(payload.get("direction_transform")),
             self_correlation_impact=dict(payload.get("self_correlation_impact") or {}),
             why_not_parameter_tuning=_text(payload.get("why_not_parameter_tuning")),
+            validation_variable=_text(payload.get("validation_variable")),
+            old_value=payload.get("old_value"),
+            new_value=payload.get("new_value"),
+            reason=_text(payload.get("reason")),
         )
 
     def as_dict(self):
         payload = self.to_child_hypothesis()
         payload["parent_id"] = self.parent_id
         payload["decision"] = self.decision
+        payload["validation_variable"] = self.validation_variable
+        payload["old_value"] = self.old_value
+        payload["new_value"] = self.new_value
+        payload["reason"] = self.reason
         return payload
 
 
@@ -243,6 +286,114 @@ def decision_rejections(decision, parent, *, allowed_operators=None):
     return reasons
 
 
+def _scalar_number(value):
+    """有限数值；bool / 非数值返回 None。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    number = num(value)
+    return number
+
+
+def _as_int(value):
+    number = _scalar_number(value)
+    if number is None or not float(number).is_integer():
+        return None
+    return int(number)
+
+
+def _values_equal(left, right):
+    left_number = _scalar_number(left)
+    right_number = _scalar_number(right)
+    if left_number is None or right_number is None:
+        return str(left) == str(right)
+    return left_number == right_number
+
+
+def validation_candidate_values(variable, *, current=None, allowed_universes=()):
+    """Python 给出的合法有界候选值；绝不生成笛卡尔积或参数全扫描。
+
+    Agent 只选择"验证哪个变量"；具体数值必须来自这个 bounded pool，不能由
+    LLM 自由书写（例如 ``decay=73`` / ``window=937``）。
+    """
+    name = str(variable or "")
+    if name == "decay":
+        base = _as_int(current)
+        if base is None:
+            return ()
+        return tuple(
+            value for value in (base - 1, base + 1)
+            if DECAY_MIN <= value <= DECAY_MAX
+        )
+    if name == "truncation":
+        base = _scalar_number(current)
+        if base is None:
+            return ()
+        below = [value for value in TRUNCATION_ALLOWED if value < base]
+        above = [value for value in TRUNCATION_ALLOWED if value > base]
+        candidates = []
+        if below:
+            candidates.append(below[-1])
+        if above:
+            candidates.append(above[0])
+        return tuple(candidates)
+    if name == "universe":
+        return tuple(
+            str(value) for value in (allowed_universes or ())
+            if isinstance(value, str) and value.strip()
+            and str(value) != str(current)
+        )
+    # template_window 的合法值由模板自己声明的 numeric slot 提供。
+    return ()
+
+
+def validation_rejections(decision, parent, *, allowed_values=None,
+                          allow_universe=False):
+    """VALIDATE 单变量 contract 的确定性校验（fail-closed）。"""
+    if not isinstance(decision, OptimizationDecision):
+        return ["DECISION_INVALID"]
+    record = parent.to_dict() if hasattr(parent, "to_dict") else parent
+    if not isinstance(record, Mapping):
+        return ["PARENT_INVALID"]
+    if str(record.get("id") or "") != str(decision.parent_id or ""):
+        return ["PARENT_IDENTITY_MISMATCH"]
+    if not decision.is_validate:
+        return ["NOT_A_VALIDATE_DECISION"]
+    reasons = []
+    if decision.missing_validation_fields():
+        reasons.append("VALIDATION_FIELDS_MISSING")
+    variable = _text(decision.validation_variable)
+    if variable and variable not in VALIDATION_VARIABLES:
+        reasons.append("VALIDATION_VARIABLE_UNKNOWN")
+    new_value = decision.new_value
+    if isinstance(new_value, Mapping):
+        keys = {str(key) for key in new_value}
+        if keys != {variable}:
+            reasons.append("VALIDATION_MULTIPLE_VARIABLES")
+        else:
+            new_value = new_value[variable]
+    elif isinstance(new_value, (list, tuple, set)):
+        reasons.append("VALIDATION_MULTIPLE_VARIABLES")
+    if variable == "universe" and not allow_universe:
+        reasons.append("VALIDATION_UNIVERSE_NOT_JUSTIFIED")
+    if allowed_values is not None and variable and not reasons:
+        if not any(_values_equal(new_value, value) for value in allowed_values):
+            reasons.append("VALIDATION_NEW_VALUE_OUT_OF_POOL")
+    return reasons
+
+
+def numeric_variant_provenance(decision, *, source_template=None, slot=None,
+                               parent_default=None, candidate=None):
+    """参数变化必须自带 provenance；不靠 diff 猜（§30）。"""
+    return {
+        "source_template": source_template,
+        "slot": slot or _text(getattr(decision, "validation_variable", "")),
+        "parent_default_value": parent_default,
+        "candidate_value": candidate,
+        "change_count": 1,
+        "reason": _text(getattr(decision, "reason", "")),
+    }
+
+
 def _checks(record):
     metrics = record.get("metrics") if isinstance(record, Mapping) else None
     checks = metrics.get("checks") if isinstance(metrics, Mapping) else None
@@ -294,13 +445,21 @@ def parent_opportunity(record):
     return "NO_CLEAR_OPPORTUNITY"
 
 
-def summarize_parent(record, *, mechanism_state=None, opportunity=None):
+def summarize_parent(record, *, mechanism_state=None, opportunity=None,
+                     delay=None, quality_policy=None):
     """有限 parent evidence summary；不复制完整 metrics/checks 历史。"""
     if isinstance(record, Mapping):
         get = record.get
     else:
         get = lambda key, default=None: getattr(record, key, default)  # noqa: E731
     metrics = get("metrics") if isinstance(get("metrics"), Mapping) else {}
+    health = get("health")
+    if delay is None:
+        settings = get("settings")
+        if isinstance(settings, Mapping) and "delay" in settings:
+            delay = settings.get("delay")
+        else:
+            delay = get("delay")
     summary = {
         "parent_id": get("id"),
         "expression": get("expression"),
@@ -332,5 +491,8 @@ def summarize_parent(record, *, mechanism_state=None, opportunity=None):
         "research_classification": get("research_classification"),
         "mechanism_state": mechanism_state or "UNKNOWN",
         "opportunity": opportunity or parent_opportunity(record),
+        "metric_optimization_context": metric_optimization_context(
+            metrics, delay=delay, quality_policy=quality_policy, health=health
+        ),
     }
     return summary

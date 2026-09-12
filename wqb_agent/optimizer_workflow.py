@@ -8,14 +8,22 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from .optimization_decision import (
+    OPPORTUNITY_CATEGORIES,
+    VALID_DECISIONS,
+    VALIDATION_VARIABLES,
     OptimizationDecision,
     decision_rejections,
+    numeric_variant_provenance,
     summarize_parent,
+    validation_candidate_values,
+    validation_rejections,
 )
+from .pre_correlation import READINESS_BANDS, failing_check_names
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
+from .research_yield import ResearchYieldFunnel, child_generation_bound
 from .state import Experiment
 
 
@@ -25,6 +33,11 @@ class OptimizerHooks:
 
     ensure_loaded: Callable[[], None]
     terminal_expressions: Callable[[], set]
+    # universe 的合法候选池由配置提供；缺省时 universe VALIDATE 仍需真实
+    # LOW_SUB_UNIVERSE_SHARPE 证据才会被接受（fail-closed）。
+    allowed_universes: Callable[[], tuple] | None = None
+    # 当前 Simulation delay：pre-correlation 门槛按 0/1 分开，未知即 fail-closed。
+    simulation_delay: Callable[[], Any] | None = None
 
 
 class OptimizerGateReport(TypedDict):
@@ -49,6 +62,34 @@ class OptimizerGateReport(TypedDict):
     optimizer_candidates: int
     optimizer_rejected: int
     child_generated: int
+
+
+# Optimization readiness band 的确定性优先级（§41/§42）：先 readiness，再可修
+# blocker，最后才是过线距离；绝不退化成 ORDER BY sharpe DESC。
+_READINESS_PRIORITY = {band: index for index, band in enumerate(READINESS_BANDS)}
+
+
+def _metric_gap_distance(context):
+    """到过线门槛的综合距离（越小越接近）；缺失证据视为最远，不假设已过线。"""
+    if not isinstance(context, Mapping):
+        return float("inf")
+    distance = 0.0
+    for key in ("sharpe_gap", "fitness_gap"):
+        gap = context.get(key)
+        if isinstance(gap, bool) or not isinstance(gap, (int, float)):
+            return float("inf")
+        distance = max(distance, abs(float(gap)))
+    return distance
+
+
+def _same_value(left, right):
+    """数值比较（含 int/float 混用）；非数值退化为字符串比较。"""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return str(left) == str(right)
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return str(left) == str(right)
 
 
 def _decision_for_parent(parent):
@@ -287,23 +328,164 @@ class OptimizerWorkflow:
 
     def inspect_optimizer_parents(self, limit=8):
         """有限、只读的 evidence-eligible parent summary（不泄漏无限历史）。"""
+        return [summary for _, summary in self._bounded_parent_summaries(limit)]
+
+    def _metric_policy(self):
+        """当前 simulation delay + quality policy（delay 未知保持 None）。"""
+        hook = getattr(self.hooks, "simulation_delay", None)
+        delay = hook() if callable(hook) else None
+        return delay, self.quality_policy
+
+    @staticmethod
+    def _optimization_priority(summary):
+        """§41：readiness → 结构 blocker → 可修 blocker → 过线距离。"""
+        context = summary.get("metric_optimization_context") or {}
+        readiness = str(context.get("readiness") or "LOW_INFORMATION")
+        return (
+            _READINESS_PRIORITY.get(readiness, len(READINESS_BANDS)),
+            len(context.get("structural_blockers") or ()),
+            len(context.get("repairable_blockers") or ()),
+            _metric_gap_distance(context),
+            summary.get("opportunity") == "NO_CLEAR_OPPORTUNITY",
+            str(summary.get("parent_id") or ""),
+        )
+
+    def _bounded_parent_summaries(self, limit):
+        """有限、只读的 (record, summary) 对；不泄漏无限历史。"""
         self.hooks.ensure_loaded()
         limit = max(1, int(limit or 8))
-        summaries = []
+        delay, quality_policy = self._metric_policy()
+        rows = []
         for experiment in reversed(self.trajectory.recent(max(limit * 8, 64))):
-            record = experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
+            record = (
+                experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
+            )
             if not isinstance(record, Mapping):
                 continue
-            if self._parent_rejections(dict(record)):
+            record = dict(record)
+            if self._parent_rejections(record):
                 continue
-            summaries.append(summarize_parent(record))
-        # Optimization-opportunity ranking: a parent with a concrete,
-        # evidence-derived blocker outranks one with no clear opportunity.
-        # This is a context-hint order, never an automatic action.
-        summaries.sort(
-            key=lambda item: item.get("opportunity") == "NO_CLEAR_OPPORTUNITY"
+            summary = summarize_parent(
+                record, delay=delay, quality_policy=quality_policy
+            )
+            rows.append((record, summary))
+        rows.sort(key=lambda row: self._optimization_priority(row[1]))
+        return rows[:limit]
+
+    def _numeric_variants_for(self, record):
+        """§30/§39：已声明的模板 slot 与 settings 有界池，只给候选不提交。"""
+        settings = record.get("settings")
+        settings = settings if isinstance(settings, Mapping) else {}
+        registry = getattr(self.alpha_factory, "registry", None)
+        template_id = record.get("template_id")
+        template = (
+            registry.get(template_id)
+            if registry is not None and template_id else None
         )
-        return summaries[:limit]
+        template_slots = [
+            {
+                "slot": slot.name,
+                "kind": slot.kind,
+                "default": slot.default,
+                "allowed_values": list(slot.allowed_values or ()),
+                "economic_role": slot.economic_role,
+            }
+            for slot in getattr(template, "numeric_slots", ()) or ()
+        ]
+        universes = self._allowed_universes()
+        settings_pools = {}
+        for variable in VALIDATION_VARIABLES:
+            if variable == "template_window":
+                continue
+            values = validation_candidate_values(
+                variable, current=settings.get(variable),
+                allowed_universes=universes,
+            )
+            settings_pools[variable] = list(values or ())
+        return {
+            "parent_id": record.get("id"),
+            "template_id": template_id,
+            "template_slots": template_slots,
+            "settings_pools": settings_pools,
+        }
+
+    def _generation_bound(self):
+        """复用唯一 ResearchYield 有界多代策略，不新建第二套规则。"""
+        report = self.gate_report()
+        funnel = ResearchYieldFunnel(
+            mechanism_key="optimizer",
+            children_done=report["child_done_count"],
+            incremental_pass=report["incremental_pass_count"],
+            incremental_available=bool(
+                report["incremental_pass_count"]
+                + report["incremental_fail_count"]
+                + report["incremental_unknown_count"]
+            ),
+        )
+        return child_generation_bound(funnel)
+
+    def optimizer_context(self, *, limit=8):
+        """§39-§42：bounded、只读的 metric-aware optimizer context。
+
+        只读取已有 trajectory 证据与配置池：不写状态、不发 POST、不生成经济机制，
+        也不会把全部 DONE 历史塞进 Agent context。
+        """
+        self.hooks.ensure_loaded()
+        limit = max(1, min(int(limit or 8), 8))
+        rows = self._bounded_parent_summaries(limit)
+        parents = []
+        blocker_counts: dict[str, int] = {}
+        readiness_counts = {band: 0 for band in READINESS_BANDS}
+        self_correlation_counts: dict[str, int] = {}
+        eligibility = []
+        variants = []
+        for record, summary in rows:
+            context = summary.get("metric_optimization_context") or {}
+            for name in context.get("blocking_checks") or ():
+                blocker_counts[name] = blocker_counts.get(name, 0) + 1
+            band = str(context.get("readiness") or "LOW_INFORMATION")
+            readiness_counts[band] = readiness_counts.get(band, 0) + 1
+            status = str(summary.get("self_correlation_status") or "UNKNOWN")
+            self_correlation_counts[status] = (
+                self_correlation_counts.get(status, 0) + 1
+            )
+            eligibility.append({
+                "parent_id": summary.get("parent_id"),
+                "eligible": bool(context.get("pre_correlation_eligible")),
+                "readiness": band,
+                "reasons": list(context.get("reasons") or ()),
+                "opportunities": list(context.get("opportunities") or ()),
+            })
+            candidate = self._numeric_variants_for(record)
+            if candidate["template_slots"] or any(
+                candidate["settings_pools"].values()
+            ):
+                variants.append(candidate)
+            parents.append(summary)
+        gate = self.gate_report()
+        return {
+            "parent_limit": limit,
+            "parent_count": len(parents),
+            "eligible_parents": parents,
+            "failure_blocker_summary": dict(sorted(blocker_counts.items())),
+            "readiness_counts": readiness_counts,
+            "self_correlation_counts": self_correlation_counts,
+            "numeric_variants_available": variants,
+            "pre_correlation_eligibility": eligibility,
+            "generation_bound": self._generation_bound(),
+            "decision_contract": {
+                "decisions": list(VALID_DECISIONS),
+                "validation_variables": list(VALIDATION_VARIABLES),
+                "opportunities": list(OPPORTUNITY_CATEGORIES),
+                "readiness_bands": list(READINESS_BANDS),
+            },
+            "ranking": (
+                "readiness_band_then_structural_blockers_then_repairable_"
+                "blockers_then_metric_distance"
+            ),
+            "blocked_reasons": gate["blocked_reasons"],
+            "gate": gate,
+        }
 
     @staticmethod
     def _optimizer_value(parent, key, default=None):
@@ -311,13 +493,19 @@ class OptimizerWorkflow:
             return parent.get(key, default)
         return getattr(parent, key, default)
 
+    def _gate_records(self, limit=128):
+        """把 trajectory 行规范化为 mapping（不假设一定是 Experiment）。"""
+        records = []
+        for row in self.trajectory.recent(limit):
+            record = row.to_dict() if hasattr(row, "to_dict") else row
+            if isinstance(record, Mapping):
+                records.append(record)
+        return records
+
     def gate_report(self, parents=None, *, children=None):
         """返回纯计数 gate：evidence eligibility 与 Agent decision 分离。"""
         if parents is None:
-            parents = [
-                experiment.to_dict()
-                for experiment in self.trajectory.recent(128)
-            ]
+            parents = self._gate_records()
         report: OptimizerGateReport = {
             "parent_count": 0,
             "done_parent_count": 0,
@@ -448,6 +636,113 @@ class OptimizerWorkflow:
         })
         return result
 
+    def _allowed_universes(self):
+        hook = getattr(self.hooks, "allowed_universes", None)
+        if not callable(hook):
+            return ()
+        values = hook()
+        if not isinstance(values, (list, tuple, set, frozenset)):
+            return ()
+        return tuple(str(value) for value in values if str(value).strip())
+
+    def _resolve_template_window(self, decision, parent):
+        """从模板显式声明的 numeric slot 解析候选表达式（不猜数字）。"""
+        registry = getattr(self.alpha_factory, "registry", None)
+        template_id = parent.get("template_id")
+        template = (
+            registry.get(template_id)
+            if registry is not None and template_id else None
+        )
+        expression = parent.get("expression")
+        if template is None or not isinstance(expression, str) or not expression.strip():
+            return None
+        for slot in getattr(template, "numeric_slots", ()) or ():
+            for value in slot.allowed_values or ():
+                if value == slot.default or not _same_value(value, decision.new_value):
+                    continue
+                try:
+                    rendered = slot.render(expression, value)
+                except (KeyError, ValueError):
+                    continue
+                if rendered == expression:
+                    continue
+                return {
+                    "slot": slot.name,
+                    "kind": slot.kind,
+                    "candidate_value": value,
+                    "parent_default_value": slot.default,
+                    "expression": rendered,
+                    "change_count": 1,
+                    "economic_role": slot.economic_role,
+                    "source_template": template.template_id,
+                    "reason": decision.reason,
+                    "template_variant_id": f"{template.template_id}@{slot.name}={value}",
+                }
+        return None
+
+    def _resolve_validation_request(self, decision, parent):
+        """Python 解析合法有界候选值；Agent 只选择"验证哪个变量"。"""
+        variable = str(getattr(decision, "validation_variable", "") or "")
+        settings = parent.get("settings")
+        settings = settings if isinstance(settings, Mapping) else {}
+        metrics = parent.get("metrics")
+        blockers = failing_check_names(metrics if isinstance(metrics, Mapping) else {})
+        allow_universe = any(
+            "SUB_UNIVERSE" in name or "SUBUNIVERSE" in name for name in blockers
+        )
+        expression = parent.get("expression")
+        numeric_variant = None
+        if variable == "template_window":
+            variant = self._resolve_template_window(decision, parent)
+            if variant is None:
+                return None, ["VALIDATION_TEMPLATE_SLOT_UNRESOLVED"]
+            expression = variant["expression"]
+            numeric_variant = dict(variant)
+            numeric_variant.pop("expression", None)
+            pool = (variant["candidate_value"],)
+        else:
+            pool = validation_candidate_values(
+                variable, current=settings.get(variable),
+                allowed_universes=self._allowed_universes(),
+            )
+            if variable == "universe" and not pool:
+                # 池不可用时仍要求真实 sub-universe 证据 + 非空字符串；
+                # Python 不发明 universe，也不做 round-robin。
+                pool = None
+        reasons = list(validation_rejections(
+            decision, parent, allowed_values=pool, allow_universe=allow_universe
+        ))
+        if variable == "universe" and not isinstance(decision.new_value, str):
+            reasons.append("VALIDATION_UNIVERSE_INVALID")
+        if reasons:
+            return None, reasons
+        new_value = decision.new_value
+        settings_override = (
+            {} if variable == "template_window" else {variable: new_value}
+        )
+        return {
+            "parent": dict(parent),
+            "variable": variable,
+            "old_value": decision.old_value,
+            "new_value": new_value,
+            "expected_effect": decision.expected_effect,
+            "falsification": decision.falsification,
+            "reason": decision.reason,
+            "expression": expression,
+            "settings_override": settings_override,
+            "numeric_variant": numeric_variant,
+            "settings_variant": (
+                numeric_variant_provenance(
+                    decision,
+                    source_template=parent.get("template_id"),
+                    slot=variable,
+                    parent_default=decision.old_value,
+                    candidate=new_value,
+                )
+                if variable != "template_window" else None
+            ),
+        }, []
+
     def _canonical_parent(self, parent_id):
         """Resolve one parent from canonical evidence; never fabricate a record."""
         target = str(parent_id or "")
@@ -470,12 +765,15 @@ class OptimizerWorkflow:
         """Validate Agent OptimizationDecisions, then reuse the one CHILD path.
 
         Python only checks the decision against canonical evidence and the
-        deterministic gates; it never authors a mechanism.  Non-CHILD decisions
-        (VALIDATE/STOP/REROUTE) never produce a child proposal.
+        deterministic gates; it never authors a mechanism.  A CHILD decision
+        reuses the one child path; a VALIDATE decision only resolves a bounded
+        single-variable candidate from the declared pools and emits one
+        ROBUSTNESS proposal.  REROUTE/STOP never produce a proposal.
         """
         self.hooks.ensure_loaded()
-        accepted = []
-        rejected = []
+        accepted: list[dict] = []
+        validation_queue: list[dict] = []
+        rejected: list[dict] = []
         for decision in decisions or ():
             if not isinstance(decision, OptimizationDecision):
                 rejected.append({"parent_id": None, "reasons": ["DECISION_INVALID"]})
@@ -487,9 +785,17 @@ class OptimizerWorkflow:
                 )
                 continue
             reasons = list(self._parent_rejections(parent))
-            if not reasons:
+            if not reasons and decision.is_validate:
+                request, validation_reasons = self._resolve_validation_request(
+                    decision, parent
+                )
+                if not validation_reasons and request is not None:
+                    validation_queue.append(request)
+                    continue
+                reasons = list(validation_reasons)
+            elif not reasons:
                 reasons = list(decision_rejections(decision, parent))
-            if not decision.is_child:
+            if not decision.is_child and not decision.is_validate:
                 rejected.append({
                     "parent_id": decision.parent_id,
                     "decision": decision.decision,
@@ -511,8 +817,26 @@ class OptimizerWorkflow:
             self.generate(accepted, max_candidates=max_candidates)
             if accepted else []
         )
+        validation_proposals = []
+        if validation_queue:
+            builder = getattr(self.alpha_factory, "validation_proposals", None)
+            if callable(builder):
+                validation_proposals = builder(
+                    validation_queue,
+                    self.operator_reference,
+                    max_candidates=max_candidates,
+                    excluded_expressions=self.hooks.terminal_expressions(),
+                )
+            else:
+                for request in validation_queue:
+                    rejected.append({
+                        "parent_id": (request.get("parent") or {}).get("id"),
+                        "decision": "VALIDATE",
+                        "reasons": ["VALIDATION_BUILDER_UNAVAILABLE"],
+                    })
+                validation_queue = []
         return {
-            "proposals": proposals,
+            "proposals": list(proposals or []) + list(validation_proposals or []),
             "accepted": [
                 {"parent_id": record.get("id"),
                  "change_type": record["optimization_decision"].get("change_type")}
@@ -524,5 +848,7 @@ class OptimizerWorkflow:
                 "accepted": len(accepted),
                 "rejected": len(rejected),
                 "child_generated": len(proposals or []),
+                "validation_requests": len(validation_queue),
+                "validation_generated": len(validation_proposals or []),
             },
         }

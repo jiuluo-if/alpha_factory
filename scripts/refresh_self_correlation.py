@@ -19,10 +19,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wqb_agent.artifacts import iter_jsonl_objects
 from wqb_agent.client import WQBClient
+from wqb_agent.config import normalize_config
 from wqb_agent.evidence import refresh_self_correlation_cache
-from wqb_agent.metrics import checks_ready_for_self_correlation_refresh
+from wqb_agent.pre_correlation import pre_self_correlation_eligibility
+from wqb_agent.state import Trajectory
 
 
 def _timestamp(value, *, end=False):
@@ -46,9 +47,48 @@ def _timestamp(value, *, end=False):
     return parsed.timestamp()
 
 
-def select_alpha_ids(rows, since=None, until=None, limit=None):
-    """Select unique real Alpha ids with all non-correlation checks passing."""
+def load_pre_correlation_policy(config_path="config.json"):
+    """只读读取 config 的 delay / quality policy / trajectory 窗口。
+
+    缺失或损坏时返回 ``(None, {}, None)``；调用方据此保持 fail-closed，
+    不会用默认阈值伪造资格。
+    """
+    try:
+        with open(config_path, encoding="utf-8-sig") as handle:
+            raw = json.load(handle)
+    except (OSError, ValueError):
+        return None, {}, None
+    try:
+        typed = normalize_config(raw)
+    except (TypeError, ValueError):
+        return None, {}, None
+    settings = getattr(typed.simulation_config, "settings", None) or {}
+    quality = getattr(typed.runtime, "quality", None) or {}
+    window = getattr(typed.runtime, "trajectory_window", None)
+    return settings.get("delay"), dict(quality), window
+
+
+def load_trajectory_rows(state_dir, *, window=None):
+    """复用 Trajectory owner 读取，合并同一 Experiment 的 settled revision。
+
+    用第二个 JSONL parser 会让手工脚本在“一个 Experiment 占多行”时与 Agent
+    选出不同集合；这里直接使用既有 owner 的合并视图。
+    """
+    path = os.path.join(state_dir, "trajectory.jsonl")
+    try:
+        limit = max(1, int(window))
+    except (TypeError, ValueError):
+        limit = 256
+    trajectory = Trajectory(path=path, max_len=limit, persist=True)
+    trajectory.load()
+    return [experiment.to_dict() for experiment in trajectory.experiments]
+
+
+def pre_correlation_selection(rows, since=None, until=None, limit=None, *,
+                              delay=None, quality_policy=None):
+    """Shared selector: same gate as the Agent, plus an auditable reason tally."""
     selected = {}
+    reason_counts = {}
     for row in rows or ():
         if not isinstance(row, dict) or row.get("status") != "DONE":
             continue
@@ -60,18 +100,41 @@ def select_alpha_ids(rows, since=None, until=None, limit=None):
             continue
         if until is not None and created_at >= until:
             continue
-        if not checks_ready_for_self_correlation_refresh(row.get("metrics")):
+        report = pre_self_correlation_eligibility(
+            row.get("metrics"),
+            delay=delay,
+            quality_policy=quality_policy,
+            health=row.get("health"),
+        )
+        if not report["eligible"]:
+            for reason in report["reasons"]:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
             continue
         selected[str(alpha_id)] = float(created_at)
     ordered = [alpha_id for alpha_id, _ in sorted(
         selected.items(), key=lambda item: (item[1], item[0])
     )]
-    return ordered if limit is None else ordered[-max(0, int(limit)):]
+    limited = ordered if limit is None else ordered[-max(0, int(limit)):]
+    return {
+        "alpha_ids": limited,
+        "eligible": len(ordered),
+        "reason_counts": reason_counts,
+    }
+
+
+def select_alpha_ids(rows, since=None, until=None, limit=None, *,
+                     delay=None, quality_policy=None):
+    """Select unique real Alpha ids that pass the shared pre-correlation gate."""
+    return pre_correlation_selection(
+        rows, since, until, limit, delay=delay, quality_policy=quality_policy
+    )["alpha_ids"]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", default=".wqb_state")
+    parser.add_argument("--config", default="config.json",
+                        help="Path to config JSON providing delay/quality policy")
     parser.add_argument("--since", default=None, help="ISO date/time, inclusive")
     parser.add_argument("--until", default=None, help="ISO date/time, exclusive")
     parser.add_argument("--limit", type=int, default=64)
@@ -82,11 +145,18 @@ def main(argv=None):
     until = _timestamp(args.until, end=True)
     if since is not None and until is not None and since >= until:
         parser.error("--since 必须早于 --until")
-    path = os.path.join(args.state_dir, "trajectory.jsonl")
-    rows = iter_jsonl_objects(path)
-    alpha_ids = select_alpha_ids(rows, since, until, args.limit)
+    delay, quality_policy, window = load_pre_correlation_policy(args.config)
+    rows = load_trajectory_rows(args.state_dir, window=window)
+    selection = pre_correlation_selection(
+        rows, since, until, args.limit, delay=delay, quality_policy=quality_policy
+    )
+    alpha_ids = selection["alpha_ids"]
     result = {
         "state_dir": args.state_dir,
+        "config": args.config,
+        "delay": delay,
+        "eligible": selection["eligible"],
+        "ineligible_reasons": selection["reason_counts"],
         "selected": len(alpha_ids),
         "alpha_ids": alpha_ids,
         "dry_run": args.dry_run,

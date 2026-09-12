@@ -417,6 +417,8 @@
 - [x] 全量质量门（`861 tests OK`、compileall 0、mypy 9 frontier Success、Ruff passed、
       coverage 79.9% ≥ 76.0、state doctor/audit/context exit 0）
 - [x] 提交（`6c0e4e6` 代码与测试、本笔文档）并按主题拆分推送，核对 `REMOTE_SHA == LOCAL_HEAD`
+- [x] 复检 P0-C：结构 blocker 优先级高于 resolved PASS（`_next_action()` 顺序修复）
+- [x] 端到端离线验收链 `TestStructuralRepairChainEndToEnd` + 复跑质量门（`862 tests OK`、coverage 79.9%）
 
 ## 约束
 

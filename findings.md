@@ -899,3 +899,17 @@
   numeric literal 显式分类（7 个 RESEARCH_SLOT、`0.001` 全为 SAFETY_CONSTANT，其余
   OPERATOR_REQUIRED_CONSTANT），`test_every_template_numeric_literal_is_explicitly_classified` 固定
   “未分类即失败、只有声明 slot 可轮换”。
+
+### P0-C 复检：结构 blocker 必须压过“历史 SELF_CORRELATION PASS”
+
+- 复现：`parent_record(..., health={"ok": False, "reasons": ["CONCENTRATED_WEIGHT=FAIL v=0.9"]})`
+  的 readiness 是 `STRUCTURAL_REPAIR_REQUIRED`，但只要 record 顶层
+  `self_correlation.status == "PASS"`，`OptimizerWorkflow.optimizer_context()` 的 `next_action`
+  仍回 `READY_TO_ADVANCE` —— Agent 会看到“结构 blocker 未修 + 可推进”。
+- 根因：`_next_action()` 把 `status == "PASS"` 排在 readiness band 之前，PASS 覆盖了未修复的
+  结构 blocker。PASS 只说明旧 expression 的相关性边界已解决，不解除当前结构 blocker。
+- 修复：`band == "STRUCTURAL_REPAIR_REQUIRED"` 分支移到 PASS 之前（`generation_allowed=False`
+  仍回 `STOP`）；FAIL 系分支保持最高优先级不变。
+- 验收：`tests/test_control_loop_repair.py::TestStructuralRepairChainEndToEnd`（离线端到端链：
+  结构 blocker → CONSIDER_CHILD → production-valid CHILD → synthetic C1 `PRE_CORRELATION_READY`
+  → SELF_CORRELATION 只 GET 一次且 FAIL → generation bound `NO_INCREMENTAL_CHILD_EVIDENCE`）。

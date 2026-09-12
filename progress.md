@@ -541,3 +541,16 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   Ruff（排除 7 个未跟踪用户分析脚本）All checks passed、coverage branch-aware
   `TOTAL 79.9%`（`fail_under=76.0`）、offline `state doctor` / `state audit` / `context --compact`
   exit 0（`WORKSPACE STATUS: SAFE`、`SUBMIT_UNKNOWN: 0`、无未完成 checkpoint）。
+
+### 2026-09-12 增补：控制链一致性复检 + 端到端离线验收
+
+- 复检发现 `_next_action()` 让 resolved `SELF_CORRELATION=PASS` 覆盖了
+  `STRUCTURAL_REPAIR_REQUIRED`，使带结构 blocker 的 parent 显示 `READY_TO_ADVANCE`；
+  已把结构 band 判断移到 PASS 之前（FAIL 系最高优先级不变）。
+- 新增 `TestStructuralRepairChainEndToEnd.test_structural_blocker_repair_chain`：单条离线链覆盖
+  Agent 视图 → CHILD proposal（`validate_proposal(require_economic_integrity=True)` 零问题）
+  → synthetic C1 准入 → correlation 只 GET 一次 → generation bound 阻塞下一代。
+- 复跑质量门：`862 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
+  coverage `TOTAL 79.9%`、offline `state doctor` / `state audit` exit 0。
+- 约束不变：REAL_SIMULATION_RUN=NO、NEW_QUOTA_CONSUMED=NO、ALPHA_SUBMISSION=NO、
+  REMOTE_COLOR_WRITE=NO；未写 `.wqb_state`；研究保持 PAUSED。

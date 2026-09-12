@@ -393,3 +393,33 @@
 ## Next Step
 
 已完成全量质量门、fresh review 与 Test Audit；待提交推送后轮询对应 CI run。
+
+# 2026-09-12 Phase VI：Autonomous Optimization Control Loop Repair
+
+## 目标
+
+修复 Phase V metric-aware optimizer 在真实控制链上的断点，使
+`blocker → Agent 决策 → CHILD/VALIDATE → evidence → SELF_CORRELATION → 下一步` 一致。
+
+## 阶段
+
+- [x] 先只读复现 P0-A/P0-B/P0-C/P0-D/P1-A/P1-B/P1-C/P1-D 并把结论写入 `findings.md`
+- [x] P0-A 结构可修 parent 不再被 health gate 杀死（且仍不可提交）
+- [x] P0-B generation bound 读取真实 CHILD history
+- [x] P0-C resolved SELF_CORRELATION 进入下一步判断且同进程不重复 GET
+- [x] P0-D research_api canonical reads
+- [x] P1-A universe VALIDATE bounded + old_value provenance
+- [x] P1-B historical SELF_CORRELATION backfill window
+- [x] P1-C targeted optimization batch arbitration
+- [x] P1-D 工厂不伪造 Agent decision（回归测试固定）
+- [x] P2 模板 numeric literal 显式分类审计
+- [x] 文档（findings/progress/task_plan、ARCHITECTURE_AGENT、RESEARCH_POLICY、prompts）
+- [x] 全量质量门（`861 tests OK`、compileall 0、mypy 9 frontier Success、Ruff passed、
+      coverage 79.9% ≥ 76.0、state doctor/audit/context exit 0）
+- [x] 提交（`6c0e4e6` 代码与测试、本笔文档）并按主题拆分推送，核对 `REMOTE_SHA == LOCAL_HEAD`
+
+## 约束
+
+- 禁止真实 Simulation / run-proposals / factory run / Alpha submission / remote color write；
+  只允许 fixtures、synthetic Experiment、offline AlphaFactory 与只读历史证据。
+- 不新增 reward engine、scheduler、trajectory/checkpoint owner、第二 inbox 或第二 Simulation path。

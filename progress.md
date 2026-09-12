@@ -511,3 +511,33 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   `REMOTE_SHA == LOCAL_HEAD`。
 - 约束确认：未运行真实 Simulation / run-proposals / factory run；未提交 Alpha；未做远端 color 写入；
   未写 `.wqb_state`；研究保持 PAUSED。
+
+## 2026-09-12 Phase VI：Autonomous Optimization Control Loop Repair（offline）
+
+- 先只读复现 8 个断点（P0-A/P0-B/P0-C/P0-D/P1-A/P1-B/P1-C/P1-D，行号见 `findings.md`），再改代码。
+- P0-A：`optimization_parent_admission()` 分离 SUBMISSION_HEALTH 与 OPTIMIZATION_REPAIR_ELIGIBILITY；
+  `CONCENTRATED_WEIGHT` / `LOW_SUB_UNIVERSE_SHARPE` parent 现在能产出 production-valid CHILD，
+  且仍不满足 pre-correlation 查询门槛。
+- P0-B：`_generation_bound()` 从 canonical trajectory 真实 CHILD 记录派生，跨 restart 正确阻塞 C2。
+- P0-C：同进程复用 `reflector.evidence_cache`（GET 只发一次），resolved PASS/FAIL 进入
+  `optimizer_context()` 的 readiness / opportunity / next_action。
+- P0-D：`Trajectory.iter_canonical_rows()` + `research_api` 三个 surface 改用 canonical 视图，
+  一个 experiment identity 只返回一条最新证据。
+- P1-A：universe VALIDATE 无 pool 时 `VALIDATION_UNIVERSE_POOL_UNAVAILABLE`；`old_value` 必须等于
+  parent 真实 settings 值。
+- P1-B：`refresh_self_correlation.py --since/--until` 使用 owner 的 bounded canonical streaming，
+  覆盖 `trajectory_window` 之外的历史且不产生重复 revision。
+- P1-C：新增 `batch_type="targeted_optimization"`（≤4 CHILD + ≤4 ROBUSTNESS），
+  `materialize_targeted_batch()` 写入唯一 `proposals.json`，`FactoryRunner` 对合法且未执行的 targeted
+  batch 报 `WAIT_AGENT_DECISION` 且不覆盖（regression 已固定）。
+- P1-D：固定“无 Agent decision → 0 optimization proposal”，不恢复自动参数 mutation。
+- P2：`template_numeric_audit()` 显式分类全部模板数字（7 RESEARCH_SLOT / 0.001 SAFETY_CONSTANT /
+  其余 OPERATOR_REQUIRED_CONSTANT）。
+- 文档同步：`docs/ARCHITECTURE_AGENT.md`、`docs/RESEARCH_POLICY.md`、`prompts/research_agent.md`
+  明确 `inspect_optimizer_parents()` / `propose_optimization()` / `materialize_targeted_batch()` 用法。
+- 约束确认：REAL_SIMULATION_RUN=NO、NEW_QUOTA_CONSUMED=NO、ALPHA_SUBMISSION=NO、
+  REMOTE_COLOR_WRITE=NO；未写 `.wqb_state`；研究保持 PAUSED。
+- 全量质量门（fresh）：`861 tests OK`、compileall exit 0、mypy 9 frontier Success、
+  Ruff（排除 7 个未跟踪用户分析脚本）All checks passed、coverage branch-aware
+  `TOTAL 79.9%`（`fail_under=76.0`）、offline `state doctor` / `state audit` / `context --compact`
+  exit 0（`WORKSPACE STATUS: SAFE`、`SUBMIT_UNKNOWN: 0`、无未完成 checkpoint）。

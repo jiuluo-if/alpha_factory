@@ -42,6 +42,16 @@ Fitness = Sharpe × sqrt(abs(Returns) / max(Turnover, 0.125))
 
 统一准入由 `wqb_agent/pre_correlation.py` 的 `pre_self_correlation_eligibility()` 实现：Agent 自动路径与 `scripts/refresh_self_correlation.py` 共用同一判定，不要在 prompt 或代码里另立门槛。
 
+具体 API（写“优化”时必须落到这些调用，不要只写抽象描述）：
+
+1. `wqb_agent.research_api.inspect_optimizer_parents(limit=8)`：读取 bounded、只读的 evidence-eligible parent 摘要（按 opportunity 排序）。
+2. `Agent.optimizer_context(limit=8)`：读取每个 parent 的 `metric_optimization_context`、`next_action`、`pre_correlation_eligibility`、`generation_bound` 与 `decision_contract`；这是决定下一步的唯一派生视图。
+3. `wqb_agent.research_api.propose_optimization(decision)`：提交一个 `OptimizationDecision`（`CHILD` / `VALIDATE` / `REROUTE` / `STOP`）；只校验并生成 proposal，不执行 Simulation、不写状态。
+4. `wqb_agent.research_api.materialize_targeted_batch([decision, ...])`：把已 authored 的 CHILD/VALIDATE 决策固化为唯一 `.wqb_state/proposals.json` 的 `targeted_optimization` 批次（≤4 CHILD + ≤4 VALIDATE，`proposal_origin=agent_optimizer`）。
+5. `python main.py run-proposals`：正常执行该批次（复用 checkpoint、预算、去重、`SUBMIT_UNKNOWN` 与恢复边界）。
+
+工厂循环在 targeted batch 有效期内会报告 `last_action=WAIT_AGENT_DECISION`、`status=TARGETED_OPTIMIZATION_PENDING`，并保持 exploration 不覆盖该 inbox；此时应完成第 3–5 步（author → materialize → run-proposals），不要手改 `proposals.json`，也不要绕过 `Agent.run_proposals()`。
+
 ## 反过拟合与自相关准入
 
 以下规则是硬约束，不是提示词建议：

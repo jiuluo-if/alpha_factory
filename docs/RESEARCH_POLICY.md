@@ -224,11 +224,23 @@ downstream) → INCONCLUSIVE fallback.
 - Every numeric/settings change is `experiment_stage="ROBUSTNESS"` and carries
   `numeric_variant` / `settings_variant` provenance plus the formal
   `optimization_decision`; it never enters CHILD discovery.
-- Known blocker: the factory batch contract requires exactly
-  `FACTORY_BATCH_SIZE = 100` proposals and `FactoryRunner` overwrites the single
-  canonical `proposals.json` inbox each round, so a 4–8 targeted optimization
-  batch cannot be materialized through the factory loop today. Recorded in
-  `findings.md` as
-  `TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT`; relaxing it
-  touches the frozen batch contract and needs its own behaviour/regression
-  tests plus explicit approval.
+- Targeted optimization batch (implemented 2026-09-12): exploration keeps the
+  exact-100 `factory_100` contract, while Agent-authored CHILD/VALIDATE work is
+  materialized as `batch_type="targeted_optimization"` in the *same* canonical
+  `proposals.json`. The envelope is bounded by the contract itself (at most 4
+  CHILD + 4 VALIDATE = 8 proposals, `agent_optimizer` origin, unique
+  expressions) and is validated before execution
+  (`MAX_TARGETED_PROPOSALS`); the previous
+  `TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT` blocker is
+  therefore closed, not relaxed: exactly one inbox, one owner, one
+  `Agent.run_proposals()` path, no second Simulation path.
+- `FactoryRunner` treats a present, valid, unexpired and not-yet-executed
+  targeted batch as the current inbox owner: it records
+  `last_action="WAIT_AGENT_DECISION"` with
+  `status=TARGETED_OPTIMIZATION_PENDING` and never overwrites it with
+  exploration 100. An invalid Agent envelope is still blocking
+  (`TARGETED_BATCH_INVALID`) so it cannot be silently dropped, and expiry
+  (`TARGETED_BATCH_TTL_SEC`) is the only way the factory reclaims the inbox
+  without human action. Execution evidence stays the canonical checkpoint of
+  the batch round, so recovery of an unfinished targeted batch runs through the
+  normal recovery path.

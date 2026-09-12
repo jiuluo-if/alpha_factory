@@ -814,3 +814,88 @@
   payload)`（`batch_type="factory_100"`、`source="ai_factory_template_adapter"`）覆盖唯一 canonical
   `proposals.json`。当前编排没有 optimization / exploration 双 batch mode 保护，也没有第二 inbox；
   定向批次按 §57 保持“记录 + 设计候选方案”，未实现。
+
+# 2026-09-12（第五阶段 Phase VI）Autonomous Optimization Control Loop Repair（PAUSED/DISARMED，未运行真实 Simulation）
+
+## 只读调查结论（先结论、后代码）
+
+- **P0-A 断点（代码级复现）**：`AlphaFactory.screen_optimization_parents()`（`wqb_agent/alpha_factory.py:1811`）
+  对 `parent["health"]["ok"] != True` 无条件 `continue`，而 `OptimizerWorkflow.generate()`
+  （`optimizer_workflow.py:613`）把它当作唯一代码初筛。Agent 侧 `metric_optimization_context` 已把
+  `CONCENTRATED_WEIGHT` / `LOW_SUB_UNIVERSE_SHARPE` 标成可修的结构 blocker
+  （`STRUCTURAL_REPAIR_REQUIRED` / `CONCENTRATION_REPAIR` / `SUB_UNIVERSE_REPAIR`），却在这里被丢掉 →
+  Agent 写出合法 CHILD 也拿不到 proposal。根因：把 SUBMISSION_HEALTH 与
+  OPTIMIZATION_REPAIR_ELIGIBILITY 混成同一条 gate。修复方向：新增纯 helper
+  `optimization_parent_admission()`，只对明确的可修结构失败放行，未知 health 失败仍 fail closed；
+  提交与 pre-correlation 查询继续要求 `health.ok == true`。
+- **P0-B 断点**：`OptimizerWorkflow._generation_bound()`（`optimizer_workflow.py:412`）读
+  `gate_report()["child_done_count"]`，但 `gate_report()` 只把它初始化为 `0` 且从不递增 →
+  `child_generation_bound()` 永远收到 `children_done=0` → 永远 `allowed=True`。修复方向：从
+  canonical trajectory 派生真实 `experiment_stage == CHILD` 的 done / incremental 计数，继续复用同一个
+  `research_yield.child_generation_bound()`。
+- **P0-C 断点**：`Agent._refresh_self_correlation_evidence()`（`agent.py:1083`）每次新建
+  `ephemeral_evidence = {}` 传给 `refresh_self_correlation_cache(cache=...)`，只用
+  `self.reflector.evidence_cache.update(...)` 回填；同进程第二次 refresh 时
+  `has_resolved_self_correlation(cache.get(id))` 仍为假 → 重复 GET。修复方向：把既有
+  `reflector.evidence_cache` 直接作为 transient evidence view 复用。
+- **P0-D 断点**：`research_api.get_experiment()` / `compare_experiments()` / `search_history()`
+  （`research_api.py:307/314/320`）使用 `Trajectory.iter_rows()`（raw 行，含 `RESEARCH_SETTLED`
+  revision），同一 Experiment 可能返回两条；`Trajectory.find_row()` 已是 canonical latest primitive
+  却未被这些 surface 使用。修复方向：由 Trajectory owner 提供 canonical merge primitive，research_api
+  只消费它、不再复制 revision 合并算法。
+- **P1-A**：`OptimizerHooks.allowed_universes` 默认未绑定，`_allowed_universes()` 返回 `()`，
+  `validation_candidate_values("universe", ...)` 因此恒为空；缺显式
+  `VALIDATION_UNIVERSE_POOL_UNAVAILABLE` reason，Agent 只能看到空池。
+- **P1-B**：`scripts/refresh_self_correlation.py::load_trajectory_rows()` 用
+  `Trajectory(max_len=window)`（真实 `trajectory_window=512`），`--since/--until` 看不到窗口外的更老
+  Experiment；脚本本身没有第二 parser，但复用了有界内存窗。
+- **P1-C**：`FactoryRunner` 在 `factory_runner.py:838` 无条件
+  `atomic_write_json_if_changed(self.proposals_path, payload)`（`batch_type="factory_100"`），会静默覆盖
+  Agent 已 materialize 的 targeted batch —— 与历史真实失败场景一致。
+- **P1-D**：`factory_runner.py:658-661` → `optimizable_signal_records()` +
+  `generate_optimized_proposals()` 最终只保留 Agent 已 author 的 `OptimizationDecision` /
+  `child_economic_hypothesis`；无人提供 decision → 0 proposals 是本轮要固定的正确行为，不恢复自动参数
+  mutation。
+
+## 实现与验证（offline，无真实 Simulation / 无 quota / 无 submission）
+
+- **P0-A**：`pre_correlation.optimization_parent_admission()` 成为唯一准入 helper
+  （`REPAIRABLE_HEALTH_FAILURES = STRUCTURAL_CHECK_BLOCKERS`），`AlphaFactory.screen_optimization_parents()`
+  改为消费它；未知 health failure 仍 fail-closed。测试
+  `test_structural_repair_parent_reaches_a_valid_child_proposal` 用真实
+  `OptimizerWorkflow → AlphaFactory → validate_proposal(require_economic_integrity=True)` 证明
+  `CONCENTRATED_WEIGHT` / `LOW_SUB_UNIVERSE_SHARPE` parent 能产出 production-valid CHILD，同时
+  `pre_self_correlation_eligibility(...)["eligible"] is False`（能修 ≠ 能提交）。
+- **P0-B**：`OptimizerWorkflow._generation_bound()` 改为从 canonical trajectory 派生真实
+  `experiment_stage == CHILD` 记录，再复用唯一 `research_yield.child_generation_bound()`。
+  `tests/test_control_loop_repair.py::TestGenerationBoundUsesRealChildHistory` 覆盖
+  `C1 DONE + incremental UNAVAILABLE → restart → allowed=False / stop_reason=NO_INCREMENTAL_CHILD_EVIDENCE`、
+  incremental PASS → 允许下一代、ROBUSTNESS 不算新一代。
+- **P0-C**：`Agent._refresh_self_correlation_evidence()` 复用 `reflector.evidence_cache`（不再每次新建空
+  dict），新增 `Agent.resolved_self_correlation(alpha_id)` 只读投影；`OptimizerWorkflow` 通过
+  `OptimizerHooks.resolved_self_correlation` 叠加 resolved PASS/FAIL。测试覆盖
+  `first refresh → GET once → FAIL`、`same-process second refresh → 仍只一次 GET`、
+  `optimizer_context()` 看到 resolved FAIL → `STRUCTURAL_REPAIR_REQUIRED` +
+  `CONSIDER_CORRELATION_REPAIR` + `SELF_CORRELATION_REPAIR`，PASS → `READY_TO_ADVANCE`。
+- **P0-D**：`Trajectory.iter_canonical_rows()`（owner 侧 bounded canonical merge）+
+  `research_api.get_experiment()`（改用 `find_row()`）/`search_history()`（改用 canonical 流）。
+  测试：early DONE + `RESEARCH_SETTLED` 后 `get_experiment` 只见 FINAL、`search_history` 只 1 行、
+  `compare_experiments` 无 missing。
+- **P1-A**：无 pool 时 `universe` VALIDATE 显式 fail-closed（`VALIDATION_UNIVERSE_POOL_UNAVAILABLE`，
+  不再允许任意字符串）；`decision.old_value` 必须等于 parent 自己 `settings` 里的真实值
+  （`VALIDATION_OLD_VALUE_MISMATCH`），provenance 的 `parent_default_value` 只取 parent 值。
+- **P1-B**：`scripts/refresh_self_correlation.py::load_trajectory_rows()` 改用 owner 的
+  `iter_canonical_rows(since=..., until=...)`，不再被 `trajectory_window` 截断。测试构造 600 个
+  canonical experiment + 最老的 settled revision，窗口外目标仍被选中且只出现一条。
+- **P1-C**：`proposal_contract.validate_targeted_batch()` / `targeted_batch_state()` +
+  `ProposalExecutionWorkflow` 执行前 fail-closed 校验 + `FactoryRunner._pending_targeted_batch()`
+  的 `WAIT_AGENT_DECISION` 仲裁 + `research_api.materialize_targeted_batch()` 写入唯一 inbox。
+  regression：`tests/test_control_loop_repair.py::TestFactoryNeverOverwritesTargetedBatch`
+  证明 pending/invalid targeted batch 不会被 exploration 100 覆盖（`proposals.json` 字节不变、
+  未 reserve、未调用 `run_suggestion_round`），过期后才重新取得 inbox。
+- **P1-D**：`TestFactoryNeverInventsAgentDecisions` 固定“无 Agent decision → 0 CHILD proposal”，
+  同一 parent 经 `generate_from_decisions([child_decision(...)])` 立即产出 1 个 proposal。
+- **P2**：`AlphaFactory.template_numeric_audit()` 对 `DEFAULT_TEMPLATES + ECONOMIC_TEMPLATES` 的 74 个
+  numeric literal 显式分类（7 个 RESEARCH_SLOT、`0.001` 全为 SAFETY_CONSTANT，其余
+  OPERATOR_REQUIRED_CONSTANT），`test_every_template_numeric_literal_is_explicitly_classified` 固定
+  “未分类即失败、只有声明 slot 可轮换”。

@@ -380,3 +380,45 @@ production preflight (`research_integrity`) would refuse.
 - `AlphaFactory.validation_proposals()` is the single ROBUSTNESS generation
   path for VALIDATE decisions: Python resolves the bounded candidate value from
   the declared pool, the Agent only chooses which variable to validate.
+
+# Targeted optimization batch arbitration (2026-09-12)
+
+- `wqb_agent/proposal_contract.py` owns both batch envelopes. Exploration keeps
+  `validate_factory_batch()` (exactly `FACTORY_BATCH_SIZE = 100`); Agent-authored
+  optimization work uses `validate_targeted_batch()` /
+  `targeted_batch_state()` with `TARGETED_BATCH_TYPE = "targeted_optimization"`,
+  at most 4 CHILD + 4 VALIDATE (`MAX_TARGETED_PROPOSALS = 8`), only
+  `proposal_origin="agent_optimizer"` and unique
+  `submission_fingerprint(expression, settings)` identities.
+- There is still exactly one inbox (`state_dir/proposals.json`), one execution
+  entry (`Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator`
+  with `CheckpointStore`), one quota owner and one `SUBMIT_UNKNOWN` contract. No
+  `optimizer_proposals.json`, sidecar inbox, second Simulation path or new state
+  owner is introduced; the targeted envelope only adds an explicit batch mode to
+  the existing one.
+- `ProposalExecutionWorkflow.run()` validates the targeted envelope fail-closed
+  (`TARGETED_BATCH_BLOCKED`, no POST) and derives the local caps from the batch
+  contract (`MAX_TARGETED_PROPOSALS`) instead of unrelated per-round exploration
+  configuration. Member-level preflight, diversity, budget, checkpoint and
+  recovery semantics are unchanged.
+- `research_api.materialize_targeted_batch()` is the Agent-facing write facade:
+  it reuses `OptimizerWorkflow.generate_from_decisions()` (the single CHILD
+  path), the canonical `Agent.next_round_no()` counter and
+  `atomic_write_json_if_changed()`. It never runs a Simulation, never writes a
+  checkpoint, refuses an out-of-contract batch (`TARGETED_BATCH_REJECTED`) and
+  writes nothing when the Agent produced no proposal
+  (`NO_TARGETED_PROPOSAL`).
+- `FactoryRunner` arbitrates the shared inbox before generating a round: a
+  present, valid, unexpired and not-yet-executed targeted batch makes the loop
+  record `WAIT_AGENT_DECISION` (`TARGETED_OPTIMIZATION_PENDING`) and sleep
+  instead of overwriting the file with `factory_100`. Execution evidence is the
+  canonical checkpoint of the envelope `round_no`, so an unfinished targeted
+  batch is recovered by the existing recovery path; an invalid Agent envelope
+  stays blocking (`TARGETED_BATCH_INVALID`) rather than being silently replaced;
+  `TARGETED_BATCH_TTL_SEC` is the only automatic release.
+- `AlphaFactory.template_numeric_audit()` classifies every numeric literal of
+  `DEFAULT_TEMPLATES + ECONOMIC_TEMPLATES` as `RESEARCH_SLOT` (declared
+  `TemplateNumericSlot` only), `SAFETY_CONSTANT` (divide epsilon) or
+  `OPERATOR_REQUIRED_CONSTANT` (fixed lookbacks and operator-semantic
+  constants); an unclassified literal fails the audit instead of becoming a
+  rotatable research parameter.

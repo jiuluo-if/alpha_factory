@@ -146,6 +146,30 @@ class TestGenerationBoundUsesRealChildHistory(unittest.TestCase):
             self.assertEqual(bound["children_generated"], 0)
             self.assertTrue(bound["allowed"])
 
+    def test_blocked_generation_turns_structural_repair_into_stop(self):
+        """generation bound 不允许时，结构修复只能 STOP，不得再提议新 CHILD。"""
+        blocked = dataclasses.replace(
+            _parent(),
+            health={"ok": False, "reasons": ["CONCENTRATED_WEIGHT=FAIL v=0.9"]},
+            metrics=synthetic_metrics(checks=[
+                {"name": "CONCENTRATED_WEIGHT", "pass": False, "result": "FAIL"},
+                {"name": "SELF_CORRELATION", "pass": None, "result": "PENDING"},
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trajectory.jsonl")
+            first = Trajectory(path=path, max_len=64, persist=True)
+            first.add(blocked)
+            first.add(_child(decision="UNAVAILABLE"))
+            context = _workflow(self._restarted(path)).optimizer_context()
+            self.assertFalse(context["generation_bound"]["allowed"])
+            summary = context["eligible_parents"][0]
+            self.assertEqual(
+                summary["metric_optimization_context"]["readiness"],
+                "STRUCTURAL_REPAIR_REQUIRED",
+            )
+            self.assertEqual(summary["next_action"], "STOP")
+
 
 class _CorrelationClient:
     def __init__(self, payload):

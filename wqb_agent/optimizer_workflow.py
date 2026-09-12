@@ -993,7 +993,9 @@ class OptimizerWorkflow:
                     validation_queue,
                     self.operator_reference,
                     max_candidates=max_candidates,
-                    excluded_expressions=self.hooks.terminal_expressions(),
+                    excluded_expressions=self._optimization_exclusions(
+                        [request.get("parent") for request in validation_queue]
+                    ),
                 )
             else:
                 for request in validation_queue:

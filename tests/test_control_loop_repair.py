@@ -66,6 +66,27 @@ def _child(*, stage="CHILD", decision=None, status="DONE", alpha_id=None):
     )
 
 
+def _parent():
+    """已结算的 P0 父代：generation bound 必须忽略它，只认真实 CHILD。"""
+    return Experiment(
+        round=1,
+        hypothesis_id="h0",
+        expression="rank(field_a)",
+        settings={"delay": 1},
+        fields_used=["field_a"],
+        datasets=["fundamental6"],
+        field_understanding={"field_a": "已核验字段"},
+        field_analysis={"field_a": {"data_type": "MATRIX"}},
+        field_source={"kind": "brain_api"},
+        field_hypothesis_basis={"field_a": {"mechanism": "质量变化"}},
+        economic_mechanism="质量变化驱动的相对定价差异",
+        status="DONE",
+        alpha_id="alpha-p0",
+        metrics=synthetic_metrics(),
+        health={"ok": True},
+    )
+
+
 def _workflow(trajectory):
     return OptimizerWorkflow(
         trajectory=trajectory,
@@ -92,6 +113,7 @@ class TestGenerationBoundUsesRealChildHistory(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "trajectory.jsonl")
             first = Trajectory(path=path, max_len=64, persist=True)
+            first.add(_parent())
             first.add(_child(decision="UNAVAILABLE"))
             bound = _workflow(self._restarted(path)).optimizer_context()[
                 "generation_bound"
@@ -699,6 +721,11 @@ class TestStructuralRepairChainEndToEnd(unittest.TestCase):
                 round=2, hypothesis_id="h-child",
                 expression=CHILD_EXPRESSION, settings={"delay": 1},
                 fields_used=["field_a"], datasets=["fundamental6"],
+                field_understanding={"field_a": "已核验字段"},
+                field_analysis={"field_a": {"data_type": "MATRIX"}},
+                field_source={"kind": "brain_api"},
+                field_hypothesis_basis={"field_a": {"mechanism": "质量变化"}},
+                economic_mechanism="质量变化驱动的相对定价差异",
                 status="DONE", alpha_id="alpha-child",
                 experiment_stage="CHILD", parent_expression=PARENT_EXPRESSION,
                 metrics=synthetic_metrics(), health={"ok": True},
@@ -724,7 +751,17 @@ class TestStructuralRepairChainEndToEnd(unittest.TestCase):
             self.assertEqual(
                 agent.resolved_self_correlation("alpha-child")["status"], "FAIL"
             )
-            # 5) generation bound 反映真实 C1 历史（无 incremental evidence）。
+            # 5) FAIL 立即进入 Agent 视图：opportunity 与 next_action 同步。
+            context = agent.optimizer_context()
+            summary = context["eligible_parents"][0]
+            self.assertEqual(summary["self_correlation_status"], "FAIL")
+            self.assertEqual(summary["next_action"], "CONSIDER_CORRELATION_REPAIR")
+            self.assertEqual(context["next_action"], "CONSIDER_CORRELATION_REPAIR")
+            self.assertIn(
+                "SELF_CORRELATION_REPAIR",
+                summary["metric_optimization_context"]["opportunities"],
+            )
+            # 6) generation bound 反映真实 C1 历史（无 incremental evidence）。
             trajectory.rows.append(child.to_dict())
             bound = flow.optimizer_context()["generation_bound"]
         self.assertEqual(bound["children_done"], 1)

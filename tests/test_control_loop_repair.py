@@ -793,5 +793,99 @@ class TestStructuralRepairChainEndToEnd(unittest.TestCase):
         self.assertEqual(bound["stop_reason"], "NO_INCREMENTAL_CHILD_EVIDENCE")
 
 
+def _write_field_cache(tmp):
+    payload = {
+        "datasets": {
+            "fundamental6": [{
+                "id": "field_a", "type": "MATRIX", "description": "已核验字段",
+                "dataset": {"id": "fundamental6"},
+            }],
+        },
+    }
+    path = os.path.join(tmp, "fields_cache.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+
+def _completed_parent():
+    """已结算、结构可修的 parent：它自己的表达式已在终态集合里。"""
+    return Experiment(
+        round=1, hypothesis_id="h-1",
+        expression=PARENT_EXPRESSION, settings={"delay": 1},
+        fields_used=["field_a"], datasets=["fundamental6"],
+        field_understanding={"field_a": "已核验字段"},
+        field_analysis={"field_a": {"semantic": "已核验字段",
+                                    "data_type": "MATRIX",
+                                    "coverage": None, "frequency": None}},
+        field_source={"kind": "brain_api", "snapshot_date": "2026-09-12"},
+        field_hypothesis_basis={"field_a": {"mechanism": "质量变化"}},
+        economic_mechanism="质量变化驱动的相对定价差异",
+        status="DONE", alpha_id="alpha-parent",
+        metrics={
+            "sharpe": 1.1, "fitness": 0.8, "turnover": 0.2,
+            "returns": 0.03, "drawdown": 0.1,
+            "checks": [
+                {"name": "CONCENTRATED_WEIGHT", "pass": False, "result": "FAIL"},
+                {"name": "SELF_CORRELATION", "pass": None, "result": "PENDING"},
+            ],
+        },
+        health={"ok": False, "reasons": ["CONCENTRATED_WEIGHT=FAIL v=0.9"]},
+    )
+
+
+class TestTargetedBatchRunsOnTheSingleExecutionPath(unittest.TestCase):
+    """P1-C：targeted batch 必须真的生成，并沿唯一 run-proposals 路径执行。"""
+
+    def test_completed_parent_is_not_excluded_by_its_own_terminal_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent, _client = make_agent(tmp, rounds=1)
+            parent = _completed_parent()
+            agent.trajectory.add(parent)
+            terminal = agent.optimizer_workflow.hooks.terminal_expressions()
+            report = agent.propose_optimization(
+                [child_decision(parent.id)], max_candidates=1
+            )
+        self.assertIn(PARENT_EXPRESSION, terminal)
+        self.assertEqual(len(report["proposals"]), 1)
+        self.assertEqual(report["decision_report"]["child_generated"], 1)
+
+    def test_targeted_batch_executes_through_the_single_simulation_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent, client = make_agent(tmp, rounds=1)
+            _write_field_cache(tmp)
+            parent = _completed_parent()
+            agent.trajectory.add(parent)
+            written = research_api.materialize_targeted_batch(
+                [child_decision(parent.id)], agent=agent, state_dir=tmp,
+            )
+            with open(os.path.join(tmp, "proposals.json"), encoding="utf-8") as handle:
+                envelope = json.load(handle)
+            agent.run_proposals()
+            proposals_files = [
+                name for name in os.listdir(tmp) if name.endswith("proposals.json")
+            ]
+
+        self.assertEqual(written["status"], "TARGETED_BATCH_WRITTEN")
+        self.assertEqual(envelope["batch_type"], TARGETED_BATCH_TYPE)
+        self.assertEqual([field["id"] for field in envelope["fields"]], ["field_a"])
+        self.assertEqual(agent.last_run_stats["accepted"], 1)
+        self.assertEqual(client.sim_calls, [CHILD_EXPRESSION])
+        self.assertEqual(proposals_files, ["proposals.json"])
+
+    def test_targeted_batch_without_field_evidence_stays_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent, client = make_agent(tmp, rounds=1)
+            parent = _completed_parent()
+            agent.trajectory.add(parent)
+            written = research_api.materialize_targeted_batch(
+                [child_decision(parent.id)], agent=agent, state_dir=tmp,
+            )
+            agent.run_proposals()
+
+        self.assertEqual(written["status"], "TARGETED_BATCH_WRITTEN")
+        self.assertEqual(client.sim_calls, [])
+        self.assertEqual(agent.last_run_stats["status"], "PREFLIGHT_BLOCKED")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -86,4 +86,19 @@ runtime 新依赖 ≤ 1，dev/perf 新依赖 ≤ 3。每个候选记录 purpose�
 
 ## 交付
 
-先跑受影响测试，再执行根 `AGENTS.md` 的质量门（compileall、unittest、ruff、frontier mypy、coverage、offline doctor/audit）。提交与推送必须得到用户明确授权，使用仓库规定的提交前缀与中文内容；推送后必须确认 `REMOTE_SHA == LOCAL_HEAD`。
+默认是 incremental validation，不是 full regression sweep：
+
+```text
+先审 diff
+→ 只跑直接受影响 behavior 的 test method（一般 1–5 个）
+→ 只对 changed Python files 跑 py_compile / ruff
+→ 只有改了 typed frontier 才跑对应 mypy
+→ 提交
+```
+
+- 本地禁止为了“保险”重跑全量：`python -m unittest discover -s tests`、全量 coverage（`coverage run -m unittest discover -s tests`）与任何 `pytest` 调用都只在用户单独明确授权时运行；本阶段的约束是 `NO_FULL_TEST_SUITE` / `NO_FULL_COVERAGE` / `NO_FULL_PYTEST`。
+- 每个改动只跑“直接受影响行为 + 一个最近邻 regression”；先跑最小集合，失败再向外扩大一层（progressive validation），不要自动扩大成全量。
+- 语法检查只 `python -m py_compile <changed-files>`，不要 compile 整个 tests tree；Ruff 只跑 changed Python files；未触碰 typed frontier 时明确记录 `MYPY = NOT_REQUIRED`。
+- 全量质量门由仓库已有的 CI（push 后自动运行）承担，本地维护 Agent 不再重复跑一次。
+- 提交前检查 `git diff --check`、`git status --short`、`git diff --stat`，确认无 `.wqb_state`、raw audit/benchmark 导出、本地路径与凭据。
+- commit 与 push 必须得到用户明确授权，使用仓库规定的提交前缀与中文内容；推送后确认 `REMOTE_SHA == LOCAL_HEAD`。

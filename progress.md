@@ -622,3 +622,32 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 验收：compileall、ruff、mypy 9 frontier、offline doctor/audit/context exit 0、`scripts/check_repo_privacy.py`
   findings=0、`pytest -q` 888 passed 58.94 s、`pytest -q -n auto --dist=loadfile` 888 passed 44.89 s；
   `.wqb_state` 运行前后 75 文件 0 差异。
+
+### 2026-09-12 Phase VIII：Incremental Fast Lane / Research API Boundary / Micro Performance（PAUSED/DISARMED，未运行真实 Simulation）
+
+- 本阶段约束（用户显式）：`NO_FULL_TEST_SUITE` / `NO_FULL_COVERAGE` / `NO_FULL_PYTEST`；本地只跑
+  targeted（每个改动 1–5 个 test method，失败才扩一层），全量质量门交给 push 触发的 CI。
+- P0 Inner Agent 边界：`wqb_agent/research_api.py` 新增 `inspect_optimizer_context()`（最薄 facade，
+  `runtime.optimizer_context(limit=min(limit, 8))`）并同步 `__all__`；`prompts/research_agent.md` 的
+  optimizer API 统一为 `inspect_optimizer_parents/context` + `propose_optimization` +
+  `materialize_targeted_batch`，不再引用 Agent 实例、模块 owner、`main.py`、`scripts/`、`.wqb_state/`。
+- P0 外层增量验证：`prompts/maintenance_agent.md` 交付段改为「先审 diff → 只跑受影响 method（1–5）→
+  只对 changed files 跑 `py_compile`/`ruff` → 仅 typed frontier 才 mypy」；未触碰 frontier 记录
+  `MYPY = NOT_REQUIRED`；本地禁止全量 unittest / coverage / pytest。
+- P1 privacy：`scripts/check_repo_privacy.py` 删除 `MAX_SCAN_BYTES = 4 MB` 盲区，改为「前 4 KB NUL
+  probe + tracked 文本逐行流式扫描」；`OSError` → `UNREADABLE_TRACKED_FILE` fail-closed；
+  输出键 `skipped` → `skipped_binary`；4 条新测试（模块 13 OK）。
+- P1 慢测试：`test_factory_exploration_is_seeded_and_marked_as_signal_discovery` 三处 `target=100` → `8`
+  （exact-100 由 `test_factory_generates_a_full_batch_from_mechanism_templates` 保留）：45.407 s →
+  2.093 s（21.7x）；未改 production，未拆测试文件。
+- P1 微性能：`literal_line_matcher()`（单 token 保持 `str`，批量编译 alternation）+ `iter_rows` 预筛
+  （转义行 fail-closed）；`contains_ids` 复用该原语 → 50k 行 121.210 → 43.329 ms（-64.3%）。
+  候选 B（`find_completed_expressions` 预筛）实测 1534 → 1669 ms 更慢且会漏行 → 回退并报
+  `NO_JUSTIFIED_PRODUCTION_PERF_CHANGE`。
+- targeted 验证：`tests.test_trajectory_batch_reads`（16）、`tests.test_research_api`（8）、
+  `tests.test_optimizer_workflow`（13）、`tests.test_repo_privacy`（13）、`tests.test_state` +
+  `test_historical_parent_handoff` + `test_settled_evidence_durability` + `test_agent_context`（35）、
+  两个 factory method（2.093 s / 0.847 s）；`py_compile` 与 `ruff` 只跑 changed files。
+- 未触碰：真实 Simulation、Alpha submission、remote color write、factory run、`.wqb_state`、
+  durability、`SUBMIT_UNKNOWN` exactly-once、checkpoint、reward/optimizer 语义；未新增依赖；
+  7 个未跟踪用户分析脚本保持未跟踪。

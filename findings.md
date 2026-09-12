@@ -1022,3 +1022,69 @@
   （两个文件名保留为拆分后的主文件），因此本阶段没有 production 代码改动。
 - 未触碰：production 语义、Simulation owner、checkpoint、trajectory、reward/optimizer、`SUBMIT_UNKNOWN`、
   durability；本轮 diff 只有 `tests/` 与 docs。
+
+## 2026-09-12 Phase VIII：内层 API 边界、隐私大文件扫描与微性能（只跑 targeted）
+
+### 本阶段约束
+
+- 用户显式要求 `NO_FULL_TEST_SUITE` / `NO_FULL_COVERAGE` / `NO_FULL_PYTEST`：本地不跑
+  `unittest discover`、`coverage run -m unittest discover`、`pytest`；只跑受影响 method（1–5 个），
+  失败才向外扩一层；全量质量门交给 push 触发的 CI（既有远端机制）。
+
+### 内层研究 Agent 只依赖 research_api
+
+- `wqb_agent/research_api.py` 新增最薄 facade
+  `inspect_optimizer_context(*, agent/client/config/state_dir, limit=8)` →
+  `runtime.optimizer_context(limit=min(limit, 8))`；不复制 optimizer gate / ranking /
+  generation bound / pre-correlation policy，不写状态、不跑 Simulation；`__all__` 同步导出。
+- `prompts/research_agent.md`：optimizer API 统一为 `inspect_optimizer_parents()` /
+  `inspect_optimizer_context()` / `propose_optimization()` / `materialize_targeted_batch()`；
+  删除 `Agent.*`、`main.py`、`scripts/`、`.wqb_state/`、模块 owner 与 CLI 细节
+  （`rg "Agent\.|main\.py|scripts/|\.wqb_state/"` 在 prompt 内 0 命中）。
+- 证据：`python -m unittest tests.test_research_api` 8 OK；`tests.test_optimizer_workflow` 13 OK。
+
+### 隐私扫描：移除 >4 MB 盲区
+
+- `scripts/check_repo_privacy.py`：删除 `MAX_SCAN_BYTES = 4 MB` 与「大文件 → skipped、exit 0」；
+  改为「前 4 KB NUL probe → binary 跳过（`skipped_binary`）；tracked 文本逐行流式扫描」；
+  `OSError`（不可读 tracked 文本）→ 新 finding `UNREADABLE_TRACKED_FILE`，fail-closed（exit 1）。
+- tracked tree 事实：212 个 tracked 文件全为文本、无 >4 MB 文件、无 NUL 二进制；新增 4 条测试
+  （5 MB 含本机路径 → finding 且有行号、5 MB 干净文本 → clean、5 MB 二进制 → `skipped_binary`、
+  不可读 → fail-closed）。
+- 证据：`python -m unittest tests.test_repo_privacy` 13 OK。
+
+### 慢测试收敛（只改测试）
+
+- `tests/test_factory_batch_contract.py::TestFactoryBatchContract::test_factory_exploration_is_seeded_and_marked_as_signal_discovery`
+  三处 `target=100` → `target=8`：该测试只验证 same-seed determinism / different-seed order /
+  `research_role` / `experiment_stage` / `research_layer` / `exploration_objective`，exact-100 已由
+  `test_factory_generates_a_full_batch_from_mechanism_templates` 独立覆盖。
+- 实测：45.407 s → 2.093 s（21.7x）；另一个 exact-100 契约 method 0.847 s。未改 production。
+
+### 微性能：Trajectory 预筛（accepted / rejected）
+
+- 微基准（50k 行 synthetic，平均行 1827 B，只读行 104 ms）：`json.loads` ≈ +7.4 µs/行；
+  每行 32 次 Python `in` ≈ +6 µs/行；一个编译后的 `re` alternation ≈ +1 µs/行；
+  对整行做 `_SPACE_RE.sub(..., line)`（canonical 归一）≈ +36 µs/行。
+- ACCEPTED：新增 `literal_line_matcher()`（单 token 保持 `str`，批量编译成一个 alternation），
+  `iter_rows` 预筛在解码前跳过不可能命中的行，带 JSON 转义的行仍全量解码（fail-closed）；
+  `contains_ids` 复用同一原语。50k 行 `trajectory_contains_ids` 121.210 → 43.329 ms（-64.3%），
+  10k 23.894 → 7.780 ms，1k 2.377 → 1.405 ms。
+- 等价性证据：临时 offline 探针（引号/反斜杠/非 ASCII/控制字符 identity、空白与大小写差异表达式、
+  含 JSON 转义的原始行、5000 行文件）证明 before == after；固化为
+  `tests/test_trajectory_batch_reads.py` 5 条新测试（模块 16 tests OK）。
+- REJECTED：`find_completed_expressions` 预筛。`canonical_expression` 会去空白+小写，用 canonical
+  token 直接匹配原始行会漏行；改用整行 canonical 归一后成本反超收益（50k 行 1534 → 1669 ms，且
+  该 workload 大多数行本就命中目标表达式，解码与 `Experiment.from_dict` 无法避免）→ 回退并报
+  `NO_JUSTIFIED_PRODUCTION_PERF_CHANGE`（不制造 perf commit）。
+- 未引入新库（`NEW_RUNTIME_DEPENDENCY = 0` / `NEW_PERF_DEPENDENCY = 0`）；未改 durability、
+  Simulation owner、checkpoint、`SUBMIT_UNKNOWN` exactly-once、reward/optimizer 语义。
+
+### 验证范围
+
+- targeted：`tests.test_trajectory_batch_reads`（16）、`tests.test_research_api`（8）、
+  `tests.test_optimizer_workflow`（13）、`tests.test_repo_privacy`（13）、`tests.test_state` +
+  `tests.test_historical_parent_handoff` + `tests.test_settled_evidence_durability` +
+  `tests.test_agent_context`（35）、两个 factory method；changed files 的 `py_compile` 与 `ruff`。
+- 本地未跑全量 unittest / coverage / pytest（本阶段约束）；真实 Simulation、Alpha submission、
+  remote color write、factory run 均未运行；`.wqb_state` 未写入。

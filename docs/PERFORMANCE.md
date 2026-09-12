@@ -1,7 +1,8 @@
-# 本地性能记录（Phase VII）
+# 本地性能记录（Phase VII / Phase VIII）
 
 本文件记录 2026-09-12 Phase VII 建立的 offline benchmark harness、实测 baseline/after 数字、profiling 证据与依赖评估结论。
 它只描述本地 JSON/JSONL 与 canonical merge 成本，不是 BRAIN/平台延迟报告：所有 workload 都在临时目录上用 synthetic 数据生成，不接触网络。
+第 6 节补充 Phase VIII 的 Trajectory identity 预筛 A/B（accepted / rejected）。
 
 ## 1. Harness
 
@@ -95,8 +96,37 @@ python -m pytest -q -n auto --dist=loadfile
 - CI authoritative lane 仍是 `python -m unittest discover -s tests`（未替换、未并行化）。
 - 慢测试（测试拆分后复测，`python -m pytest -q --durations=12`）：`tests/test_factory_batch_contract.py::TestFactoryBatchContract::test_factory_exploration_is_seeded_and_marked_as_signal_discovery` 39.53 s，其次 `tests/test_factory_provenance_persistence.py::TestFactoryProvenancePersistence::test_factory_batch_prefers_cross_dataset_companions_and_reports_stats` 5.03 s、`tests/test_control_loop_repair.py::TestHistoricalCorrelationBackfill::test_selection_reaches_beyond_the_in_memory_window` 3.69 s。
 - 拆分后复测：`python -m unittest discover -s tests` = 888 tests OK / 63.2 s；`pytest -q` = 888 passed（43 subtests）/ 58.94 s；`pytest -q -n auto --dist=loadfile` = 888 passed / 44.89 s；coverage branch-aware 80.1%（未变）。
+- Phase VIII 复测：上述 39.53 s 的 seed determinism 测试三处 `target=100` 收敛为 `8`（exact-100 契约由
+  `test_factory_generates_a_full_batch_from_mechanism_templates` 保留）：45.407 s → 2.093 s（21.7x）；
+  本地只复测这两个 method（progressive validation），不跑全量。
 
-## 6. 未改变
+## 6. Phase VIII（2026-09-12）：Trajectory identity 预筛 A/B
+
+环境与 §1 相同（Python 3.11.9 / Windows / synthetic / 临时目录 / `--repeat 5` / 1k、10k、50k 行；
+该 synthetic 平均行 1827 B）。新增 workload `trajectory_contains_ids`（32 ids）。
+
+| workload | rows | before | after | 结论 |
+|---|---|---|---|---|
+| `trajectory_contains_ids`（32 ids） | 1000 | 2.377 | 1.405 | ACCEPTED |
+| `trajectory_contains_ids`（32 ids） | 10000 | 23.894 | 7.780 | ACCEPTED |
+| `trajectory_contains_ids`（32 ids） | 50000 | 121.210 | 43.329 | ACCEPTED（-64.3%） |
+
+- 改动：`literal_line_matcher()`（单 token 保持 `str`，批量编译成一个 `re` alternation）+
+  `iter_rows` 预筛在 `json.loads` 之前跳过不可能命中的行；`contains_ids` 复用同一原语。
+- 语义约束：预筛只跳过「不可能命中」的行，不改变任何 yield 结果。matcher 只接受已通过
+  `json_literal_prefilter()` 的 token（含引号/反斜杠/控制字符/非 ASCII 的 identity 退回全量解码）；
+  带 JSON 转义的行始终解码，因为解码值与原始文本可能不同（fail-closed）。
+- 微观证据（同样 50k 行）：只读行 104 ms；`json.loads` ≈ +7.4 µs/行；每行 32 次 Python `in` ≈ +6 µs/行；
+  一个编译后的 `re` alternation ≈ +1 µs/行；对整行做 `_SPACE_RE.sub` ≈ +36 µs/行。
+- 等价性：临时 offline 探针（引号/反斜杠/非 ASCII/控制字符 identity、空白与大小写差异表达式、
+  含 JSON 转义的原始行、5000 行文件）before == after；固化为
+  `tests/test_trajectory_batch_reads.py` 的 5 条新测试。
+- REJECTED 候选（`find_completed_expressions` 预筛）：canonical token 直接匹配原始行会漏行；改用整行
+  canonical 归一后 50k 行 1534 → 1669 ms 反而更慢（该 workload 大多数行本就命中目标表达式，`json.loads`
+  与 `Experiment.from_dict` 无法避免）→ 回退，`NO_JUSTIFIED_PRODUCTION_PERF_CHANGE`，不提交 perf commit。
+- 未引入新依赖（`NEW_RUNTIME_DEPENDENCY = 0` / `NEW_PERF_DEPENDENCY = 0`）。
+
+## 7. 未改变
 
 - durability contract：未删除任何 `flush()` / `fsync()` / `os.replace()`；
 - Simulation owner、checkpoint、`SUBMIT_UNKNOWN` exactly-once、trajectory schema、reward/optimizer 语义均未改动。

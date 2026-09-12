@@ -19,7 +19,11 @@ from .artifacts import iter_jsonl_objects
 from .behavior import extract_behavior_series
 from .config import normalize_config
 from .daily_cache import DailyResearchCache
-from .evidence import overlay_cached_checks, refresh_self_correlation_cache
+from .evidence import (
+    has_resolved_self_correlation,
+    overlay_cached_checks,
+    refresh_self_correlation_cache,
+)
 from .expression import canonical_expression, submission_fingerprint
 from .heartbeat import HeartbeatSink
 from .identity import candidate_identity
@@ -267,6 +271,7 @@ class Agent:
                 simulation_delay=lambda: (
                     self.simulation_settings or {}
                 ).get("delay"),
+                resolved_self_correlation=self.resolved_self_correlation,
             ),
         )
 
@@ -1051,6 +1056,27 @@ class Agent:
             "classification": classify_alpha_color(experiment),
         }])
 
+    def resolved_self_correlation(self, alpha_id):
+        """只读返回同进程 evidence cache 中已解析的 SELF_CORRELATION。
+
+        ``None`` 表示尚未结算；跨进程仍然可以重新 GET，因为该 side-car 是
+        re-fetchable 的 transient evidence，而不是 canonical trajectory。
+        """
+        cache = self.reflector.evidence_cache
+        entry = cache.get(str(alpha_id)) if isinstance(cache, dict) else None
+        if not has_resolved_self_correlation(entry):
+            return None
+        for check in (entry or {}).get("checks") or ():
+            if str(check.get("name") or "").upper() != "SELF_CORRELATION":
+                continue
+            result = str(check.get("result") or "").upper()
+            if result in {"PASS", "FAIL"}:
+                return {"status": result, "check": dict(check)}
+        passed = (entry or {}).get("passed")
+        if isinstance(passed, bool):
+            return {"status": "PASS" if passed else "FAIL", "check": {}}
+        return None
+
     def _settled_self_correlation(self, exp):
         """Return the SELF_CORRELATION evidence for a DONE experiment, with the
         asynchronously-settled platform check (SELF_CORRELATION is PENDING at
@@ -1080,16 +1106,22 @@ class Agent:
         # session; leave their synthetic metrics untouched.
         if not alpha_ids or not hasattr(self.client, "_session"):
             return
-        ephemeral_evidence = {}
+        # P0-C：把既有 evidence side-car 直接作为 transient、可重新获取的
+        # evidence view 复用。每次新建空 dict 会让同进程第二次 refresh 看不到
+        # 已解析结果，从而重复 GET；canonical trajectory 与 Simulation 事实
+        # 仍不被这条缓存改写。
+        cache = self.reflector.evidence_cache
+        if not isinstance(cache, dict):
+            cache = {}
+            self.reflector.evidence_cache = cache
         refreshed = refresh_self_correlation_cache(
             self.client, self.state_dir, alpha_ids,
             correlation_limit=(self.quality_policy or {}).get(
                 "max_self_correlation", 0.5
             ),
             persist=False,
-            cache=ephemeral_evidence,
+            cache=cache,
         )
-        self.reflector.evidence_cache.update(ephemeral_evidence)
         print(f"[EVIDENCE] SELF_CORRELATION refreshed {refreshed}/{len(alpha_ids)}")
 
     def _pre_correlation_candidates(self, experiments=None):

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,7 +32,12 @@ from .artifacts import atomic_write_json_if_changed
 from .config import normalize_config
 from .expression import analyze_expression
 from .optimization_decision import OptimizationDecision
-from .proposal_contract import _operator_reference
+from .proposal_contract import (
+    TARGETED_BATCH_TTL_SEC,
+    TARGETED_BATCH_TYPE,
+    _operator_reference,
+    validate_targeted_batch,
+)
 from .state import Trajectory
 
 
@@ -305,10 +311,14 @@ def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None
 
 
 def get_experiment(experiment_id, *, state_dir=".wqb_state"):
-    for row in Trajectory(path=os.path.join(state_dir, "trajectory.jsonl")).iter_rows():
-        if str(row.get("id")) == str(experiment_id) or str(row.get("proposal_id")) == str(experiment_id):
-            return row
-    return None
+    """Return the latest canonical Agent-facing record for one experiment.
+
+    ``Trajectory.find_row()`` is the owner-side revision merge primitive, so an
+    early DONE snapshot is never surfaced over later ``RESEARCH_SETTLED``
+    evidence and this surface does not re-implement revision merging.
+    """
+    trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
+    return trajectory.find_row(experiment_id)
 
 
 def compare_experiments(ids: Sequence[str], *, state_dir=".wqb_state") -> dict[str, Any]:
@@ -320,7 +330,8 @@ def compare_experiments(ids: Sequence[str], *, state_dir=".wqb_state") -> dict[s
 def search_history(query, *, state_dir=".wqb_state", limit=20):
     needle = str(query or "").casefold()
     matches = []
-    for row in Trajectory(path=os.path.join(state_dir, "trajectory.jsonl")).iter_rows():
+    trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
+    for row in trajectory.iter_canonical_rows():
         haystack = " ".join(str(row.get(key, "")) for key in ("id", "proposal_id", "hypothesis_id", "expression", "rationale", "status")).casefold()
         if not needle or needle in haystack:
             matches.append(row)
@@ -368,9 +379,67 @@ def propose_optimization(decision, *, agent=None, client=None, config=None,
     return runtime.propose_optimization([decision], max_candidates=max_candidates)
 
 
+def materialize_targeted_batch(decisions, *, agent=None, client=None,
+                               config=None, state_dir=None, max_candidates=4,
+                               ttl_sec=TARGETED_BATCH_TTL_SEC):
+    """Write Agent-authored CHILD/VALIDATE decisions into the one inbox.
+
+    The optimizer already validated the decisions; this only freezes the
+    resulting bounded batch into the canonical ``proposals.json`` so it is not
+    silently replaced by a factory exploration batch.  It reuses
+    ``OptimizerWorkflow`` (the single CHILD path), the canonical round counter
+    and the existing atomic writer: no second inbox, no second Simulation path,
+    and no Simulation/checkpoint write happens here.
+    """
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    authored = [
+        OptimizationDecision.from_mapping(item) if isinstance(item, Mapping) else item
+        for item in (decisions or ())
+    ]
+    report = runtime.propose_optimization(authored, max_candidates=max_candidates)
+    proposals = list(report.get("proposals") or [])
+    if not proposals:
+        return {**report, "written": False, "status": "NO_TARGETED_PROPOSAL"}
+    ok, errors = validate_targeted_batch(proposals)
+    if not ok:
+        return {
+            **report, "written": False,
+            "status": "TARGETED_BATCH_REJECTED", "errors": list(errors),
+        }
+    directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
+    path = os.path.join(directory, "proposals.json")
+    now = time.time()
+    envelope = {
+        "batch_type": TARGETED_BATCH_TYPE,
+        "source": "agent_optimizer",
+        "round_no": runtime.next_round_no(),
+        "created_at": now,
+        "expires_at": now + max(0.0, float(ttl_sec)),
+        "hypothesis": {
+            "id": f"h-targeted-r{int(now)}",
+            "statement": "Agent authored optimization decisions",
+            "tags": ["agent_optimizer", "targeted_optimization"],
+            "datasets": [],
+        },
+        "proposals": proposals,
+    }
+    os.makedirs(directory, exist_ok=True)
+    atomic_write_json_if_changed(path, envelope)
+    return {
+        **report,
+        "written": True,
+        "status": "TARGETED_BATCH_WRITTEN",
+        "path": path,
+        "round_no": envelope["round_no"],
+        "expires_at": envelope["expires_at"],
+        "proposal_count": len(proposals),
+    }
+
+
 __all__ = [
     "ExperimentSpec", "inspect_state", "discover_fields",
     "get_operator_reference", "run_experiment", "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "propose_optimization",
+    "materialize_targeted_batch",
 ]

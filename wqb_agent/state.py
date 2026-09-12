@@ -423,6 +423,40 @@ class Trajectory:
             latest = row
         return latest
 
+    def iter_canonical_rows(self, *, since=None, until=None):
+        """Stream the latest valid canonical row per experiment identity.
+
+        ``iter_rows`` intentionally yields the append-only revisions (an early
+        DONE row plus later ``RESEARCH_SETTLED`` revisions), so a raw consumer
+        can see one Experiment twice.  This bounded streaming merge keeps only
+        the most recent legal revision per identity and is the single place
+        agent-facing reads resolve "one experiment -> one canonical record".
+        Optional ``since``/``until`` epoch bounds filter on ``created_at``
+        *before* merging, so a bounded time window still reaches rows that the
+        in-memory ``max_len`` window no longer holds.
+        """
+        if not self.persist or not self.path or not os.path.exists(self.path):
+            return
+        merged = {}
+        for row in self.iter_rows() or ():
+            row_id = row.get("id")
+            if not row_id:
+                continue
+            if since is not None or until is not None:
+                created_at = row.get("created_at")
+                if not isinstance(created_at, (int, float)):
+                    continue
+                if since is not None and created_at < since:
+                    continue
+                if until is not None and created_at >= until:
+                    continue
+            reference = merged.get(row_id)
+            if reference is not None and not same_execution_identity(reference, row):
+                continue
+            merged[row_id] = row
+        for row in merged.values():
+            yield row
+
     def find_completed_expressions(self, expressions):
         """Resolve several old parents with one streaming history pass.
 

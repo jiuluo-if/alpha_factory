@@ -17,6 +17,7 @@ from .optimization_decision import (
     OptimizationDecision,
     decision_rejections,
     numeric_variant_provenance,
+    parent_setting_value,
     summarize_parent,
     validation_candidate_values,
     validation_rejections,
@@ -38,6 +39,9 @@ class OptimizerHooks:
     allowed_universes: Callable[[], tuple] | None = None
     # 当前 Simulation delay：pre-correlation 门槛按 0/1 分开，未知即 fail-closed。
     simulation_delay: Callable[[], Any] | None = None
+    # 同进程已解析的 SELF_CORRELATION（transient、可重新获取、只读）。跨进程
+    # 仍可重新 GET；这条 hook 只避免同进程重复 GET，不写 canonical trajectory。
+    resolved_self_correlation: Callable[[str], Any] | None = None
 
 
 class OptimizerGateReport(TypedDict):
@@ -67,6 +71,46 @@ class OptimizerGateReport(TypedDict):
 # Optimization readiness band 的确定性优先级（§41/§42）：先 readiness，再可修
 # blocker，最后才是过线距离；绝不退化成 ORDER BY sharpe DESC。
 _READINESS_PRIORITY = {band: index for index, band in enumerate(READINESS_BANDS)}
+
+# 已结算的相关性结果会改变下一步：FAIL 需要新的经济结构，PASS 可以推进。
+_CORRELATION_FAIL_STATES = frozenset({"FAIL", "FAILED", "BLOCK", "HIGHER"})
+
+_NEXT_ACTION_BY_READINESS = {
+    "PRE_CORRELATION_READY": "CHECK_SELF_CORRELATION",
+    "STRUCTURAL_REPAIR_REQUIRED": "CONSIDER_CHILD",
+    "NUMERIC_VALIDATION_CANDIDATE": "CONSIDER_VALIDATE",
+    "ONE_REPAIR_AWAY": "CONSIDER_VALIDATE",
+    "LOW_INFORMATION": "REROUTE_OR_STOP",
+    "STOP": "STOP",
+}
+
+# 公开的取值集合：Agent 只需消费 hint，最终仍由 Agent author 决策。
+NEXT_ACTIONS = (
+    "CHECK_SELF_CORRELATION",
+    "CONSIDER_CHILD",
+    "CONSIDER_VALIDATE",
+    "CONSIDER_CORRELATION_REPAIR",
+    "READY_TO_ADVANCE",
+    "REROUTE_OR_STOP",
+    "STOP",
+)
+
+
+def _next_action(readiness, *, self_correlation_status="UNKNOWN",
+                 generation_allowed=True):
+    """纯 derived 下一步 hint（不是 Python 自动研究决策）。"""
+    status = str(self_correlation_status or "UNKNOWN").upper()
+    band = str(readiness or "")
+    if status in _CORRELATION_FAIL_STATES:
+        return "CONSIDER_CORRELATION_REPAIR"
+    if status == "PASS":
+        # 已结算 PASS 后不得再要求重复查询；相关性边界已解决，可以推进。
+        return "READY_TO_ADVANCE"
+    if band == "PRE_CORRELATION_READY":
+        return "CHECK_SELF_CORRELATION"
+    if not generation_allowed and band == "STRUCTURAL_REPAIR_REQUIRED":
+        return "STOP"
+    return _NEXT_ACTION_BY_READINESS.get(band, "REROUTE_OR_STOP")
 
 
 def _metric_gap_distance(context):
@@ -365,12 +409,31 @@ class OptimizerWorkflow:
             record = dict(record)
             if self._parent_rejections(record):
                 continue
+            record = self._overlay_resolved_correlation(record)
             summary = summarize_parent(
                 record, delay=delay, quality_policy=quality_policy
             )
             rows.append((record, summary))
         rows.sort(key=lambda row: self._optimization_priority(row[1]))
         return rows[:limit]
+
+    def _overlay_resolved_correlation(self, record):
+        """只读叠加同进程已结算的 SELF_CORRELATION（不写 trajectory）。"""
+        hook = getattr(self.hooks, "resolved_self_correlation", None)
+        if not callable(hook):
+            return record
+        alpha_id = record.get("alpha_id")
+        if not alpha_id:
+            return record
+        evidence = hook(str(alpha_id))
+        if not isinstance(evidence, Mapping):
+            return record
+        status = str(evidence.get("status") or "").upper()
+        if status not in {"PASS", "FAIL"}:
+            return record
+        merged = dict(record)
+        merged["self_correlation"] = dict(evidence)
+        return merged
 
     def _numeric_variants_for(self, record):
         """§30/§39：已声明的模板 slot 与 settings 有界池，只给候选不提交。"""
@@ -410,8 +473,14 @@ class OptimizerWorkflow:
         }
 
     def _generation_bound(self):
-        """复用唯一 ResearchYield 有界多代策略，不新建第二套规则。"""
-        report = self.gate_report()
+        """复用唯一 ResearchYield 有界多代策略，不新建第二套规则。
+
+        父本 gate 不携带 children，所以多代边界必须从 canonical trajectory 的
+        真实 CHILD 证据派生（``experiment_stage == "CHILD"``）；ROBUSTNESS /
+        VALIDATE 不是新一代 CHILD，不能用来解锁 C2。
+        """
+        children = self._trajectory_child_records()
+        report = self.gate_report([], children=children)
         funnel = ResearchYieldFunnel(
             mechanism_key="optimizer",
             children_done=report["child_done_count"],
@@ -422,7 +491,45 @@ class OptimizerWorkflow:
                 + report["incremental_unknown_count"]
             ),
         )
-        return child_generation_bound(funnel)
+        bound = child_generation_bound(funnel)
+        bound.update({
+            "children_generated": len(children),
+            "children_done": report["child_done_count"],
+            "incremental_pass": report["incremental_pass_count"],
+            "incremental_fail": report["incremental_fail_count"],
+            "incremental_unknown": report["incremental_unknown_count"],
+        })
+        return bound
+
+    @staticmethod
+    def _is_child_generation_record(record):
+        """只把明确的 ``experiment_stage == CHILD`` 视为新一代。"""
+        if not isinstance(record, Mapping):
+            return False
+        return str(record.get("experiment_stage") or "").upper() == "CHILD"
+
+    def _canonical_trajectory_rows(self):
+        """canonical trajectory 视图：同一 Experiment 只取最新合法 revision。"""
+        iterate = getattr(self.trajectory, "iter_canonical_rows", None)
+        if callable(iterate):
+            return [row for row in iterate() if isinstance(row, Mapping)]
+        recent = getattr(self.trajectory, "recent", None)
+        if not callable(recent):
+            return []
+        limit = getattr(self.trajectory, "max_len", 256) or 256
+        merged = {}
+        for row in recent(limit * 4) or ():
+            record = row.to_dict() if hasattr(row, "to_dict") else row
+            if isinstance(record, Mapping) and record.get("id"):
+                merged[record["id"]] = record
+        return list(merged.values())
+
+    def _trajectory_child_records(self):
+        """canonical trajectory 中真实的 CHILD 记录（fail-closed 识别）。"""
+        return [
+            row for row in self._canonical_trajectory_rows()
+            if self._is_child_generation_record(row)
+        ]
 
     def optimizer_context(self, *, limit=8):
         """§39-§42：bounded、只读的 metric-aware optimizer context。
@@ -439,8 +546,30 @@ class OptimizerWorkflow:
         self_correlation_counts: dict[str, int] = {}
         eligibility = []
         variants = []
+        generation_bound = self._generation_bound()
         for record, summary in rows:
-            context = summary.get("metric_optimization_context") or {}
+            correlation = str(
+                summary.get("self_correlation_status") or "UNKNOWN"
+            ).upper()
+            context = dict(summary.get("metric_optimization_context") or {})
+            if correlation in _CORRELATION_FAIL_STATES:
+                # 已结算 FAIL 既不是“等待查询”，也不是参数验证问题：它需要新的
+                # 经济结构（或换路），所以不得继续显示 PRE_CORRELATION_READY。
+                context["readiness"] = "STRUCTURAL_REPAIR_REQUIRED"
+                context["pre_correlation_eligible"] = False
+                opportunities = list(context.get("opportunities") or ())
+                if "SELF_CORRELATION_REPAIR" not in opportunities:
+                    opportunities.insert(0, "SELF_CORRELATION_REPAIR")
+                context["opportunities"] = opportunities
+            summary = dict(
+                summary,
+                metric_optimization_context=context,
+                next_action=_next_action(
+                    context.get("readiness"),
+                    self_correlation_status=correlation,
+                    generation_allowed=bool(generation_bound.get("allowed", True)),
+                ),
+            )
             for name in context.get("blocking_checks") or ():
                 blocker_counts[name] = blocker_counts.get(name, 0) + 1
             band = str(context.get("readiness") or "LOW_INFORMATION")
@@ -455,6 +584,7 @@ class OptimizerWorkflow:
                 "readiness": band,
                 "reasons": list(context.get("reasons") or ()),
                 "opportunities": list(context.get("opportunities") or ()),
+                "next_action": summary.get("next_action"),
             })
             candidate = self._numeric_variants_for(record)
             if candidate["template_slots"] or any(
@@ -472,12 +602,20 @@ class OptimizerWorkflow:
             "self_correlation_counts": self_correlation_counts,
             "numeric_variants_available": variants,
             "pre_correlation_eligibility": eligibility,
-            "generation_bound": self._generation_bound(),
+            "generation_bound": generation_bound,
+            "next_action": (
+                parents[0]["next_action"] if parents
+                else _next_action(
+                    None,
+                    generation_allowed=bool(generation_bound.get("allowed", True)),
+                )
+            ),
             "decision_contract": {
                 "decisions": list(VALID_DECISIONS),
                 "validation_variables": list(VALIDATION_VARIABLES),
                 "opportunities": list(OPPORTUNITY_CATEGORIES),
                 "readiness_bands": list(READINESS_BANDS),
+                "next_actions": list(NEXT_ACTIONS),
             },
             "ranking": (
                 "readiness_band_then_structural_blockers_then_repairable_"
@@ -706,9 +844,9 @@ class OptimizerWorkflow:
                 allowed_universes=self._allowed_universes(),
             )
             if variable == "universe" and not pool:
-                # 池不可用时仍要求真实 sub-universe 证据 + 非空字符串；
+                # 没有经过配置/授权解析的 universe 池时不允许自由字符串：
                 # Python 不发明 universe，也不做 round-robin。
-                pool = None
+                return None, ["VALIDATION_UNIVERSE_POOL_UNAVAILABLE"]
         reasons = list(validation_rejections(
             decision, parent, allowed_values=pool, allow_universe=allow_universe
         ))
@@ -717,13 +855,18 @@ class OptimizerWorkflow:
         if reasons:
             return None, reasons
         new_value = decision.new_value
+        verified_old_value = (
+            (numeric_variant or {}).get("parent_default_value")
+            if variable == "template_window"
+            else parent_setting_value(parent, variable)
+        )
         settings_override = (
             {} if variable == "template_window" else {variable: new_value}
         )
         return {
             "parent": dict(parent),
             "variable": variable,
-            "old_value": decision.old_value,
+            "old_value": verified_old_value,
             "new_value": new_value,
             "expected_effect": decision.expected_effect,
             "falsification": decision.falsification,
@@ -736,7 +879,7 @@ class OptimizerWorkflow:
                     decision,
                     source_template=parent.get("template_id"),
                     slot=variable,
-                    parent_default=decision.old_value,
+                    parent_default=verified_old_value,
                     candidate=new_value,
                 )
                 if variable != "template_window" else None

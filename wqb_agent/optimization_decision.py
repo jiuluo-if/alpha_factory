@@ -32,6 +32,9 @@ VALIDATE_DECISION = "VALIDATE"
 # VALIDATE 只允许单变量、有界、平台已授权的研究变量；window / decay /
 # truncation / universe 的变化不是新经济机制，只能进 ROBUSTNESS。
 VALIDATION_VARIABLES = ("template_window", "decay", "truncation", "universe")
+# settings 型单变量验证：parent 的真实当前值只能来自它自己的 settings，
+# Agent 自报的 old_value 不是 provenance 来源。
+SETTINGS_VALIDATION_VARIABLES = ("decay", "truncation", "universe")
 VALIDATE_REQUIRED_TEXT_FIELDS = (
     "parent_id",
     "validation_variable",
@@ -309,6 +312,20 @@ def _values_equal(left, right):
     return left_number == right_number
 
 
+def parent_setting_value(parent, variable):
+    """parent 记录的真实当前取值；无法确认时返回 ``None``（不猜、不造）。"""
+    record = parent.to_dict() if hasattr(parent, "to_dict") else parent
+    if not isinstance(record, Mapping):
+        return None
+    settings = record.get("settings")
+    if not isinstance(settings, Mapping):
+        return None
+    name = _text(variable)
+    if not name or name not in settings:
+        return None
+    return settings.get(name)
+
+
 def validation_candidate_values(variable, *, current=None, allowed_universes=()):
     """Python 给出的合法有界候选值；绝不生成笛卡尔积或参数全扫描。
 
@@ -375,6 +392,11 @@ def validation_rejections(decision, parent, *, allowed_values=None,
         reasons.append("VALIDATION_MULTIPLE_VARIABLES")
     if variable == "universe" and not allow_universe:
         reasons.append("VALIDATION_UNIVERSE_NOT_JUSTIFIED")
+    if variable in SETTINGS_VALIDATION_VARIABLES:
+        current = parent_setting_value(record, variable)
+        if current is not None and not _values_equal(decision.old_value, current):
+            # provenance 只承认 parent 自己记录的真实取值，不相信 Agent 自报。
+            reasons.append("VALIDATION_OLD_VALUE_MISMATCH")
     if allowed_values is not None and variable and not reasons:
         if not any(_values_equal(new_value, value) for value in allowed_values):
             reasons.append("VALIDATION_NEW_VALUE_OUT_OF_POOL")

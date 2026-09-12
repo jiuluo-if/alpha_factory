@@ -323,3 +323,138 @@ def metric_optimization_context(metrics, *, delay, quality_policy=None,
         and fitness_gap is not None and fitness_gap <= 0
     )
     return context
+
+
+# P0-A：``SUBMISSION_HEALTH`` 与 ``OPTIMIZATION_REPAIR_ELIGIBILITY`` 是两条
+# 不同的 gate。提交与 SELF_CORRELATION 查询继续要求 ``health.ok is True``；
+# 优化修复路径额外承认一类**明确且可修**的结构性 health 失败，因为这类 parent
+# 的研究价值恰好是让 Agent author 一个结构修复 CHILD。未知原因、缺失指标、
+# 极低 signal、非法 turnover 与字段证据不全仍然 fail closed。
+REPAIRABLE_HEALTH_FAILURES = STRUCTURAL_CHECK_BLOCKERS
+
+DEFAULT_OPTIMIZATION_MIN_SHARPE = 0.9
+DEFAULT_OPTIMIZATION_MIN_FITNESS = 0.6
+
+
+def _repairable_health_failures(health):
+    """解析 health 失败原因；无法确认全部可修时返回 ``None``。"""
+    if not isinstance(health, dict):
+        return None
+    reasons = health.get("reasons")
+    if not isinstance(reasons, (list, tuple)) or not reasons:
+        return None
+    failures = []
+    for reason in reasons:
+        text = str(reason or "")
+        for name in REPAIRABLE_HEALTH_FAILURES:
+            if text.startswith(name):
+                failures.append(name)
+                break
+        else:
+            return None
+    return failures
+
+
+def optimization_parent_admission(parent, *, min_sharpe=None, min_fitness=None,
+                                  min_turnover=None, max_turnover=None,
+                                  quality_policy=None,
+                                  require_economic_mechanism=False):
+    """优化修复路径的父本准入（比提交 gate 更宽，但仍然 fail-closed）。
+
+    ``admitted`` 表示这个 DONE parent 可否进入
+    ``AlphaFactory.screen_optimization_parents()`` / CHILD 修复路径；
+    ``repairable_health_failures`` 列出被承认的可修结构失败；
+    ``submission_health_ok`` 保持 ``health.ok is True`` 的提交语义，
+    所以“能修”永远不等于“能提交”。
+    """
+    policy = quality_policy if isinstance(quality_policy, dict) else {}
+
+    def result(admitted, reasons, *, failures=(), submission_health_ok=None):
+        return {
+            "admitted": bool(admitted),
+            "reasons": list(reasons),
+            "repairable_health_failures": list(failures),
+            "structural_repair_required": bool(failures),
+            "submission_health_ok": submission_health_ok,
+        }
+
+    record = parent if isinstance(parent, dict) else getattr(
+        parent, "to_dict", lambda: None
+    )()
+    if not isinstance(record, dict):
+        return result(False, ["INVALID_PARENT"])
+    if str(record.get("status") or "").upper() != "DONE":
+        return result(False, ["PARENT_NOT_DONE"])
+
+    reasons = []
+    expression = record.get("expression")
+    if not isinstance(expression, str) or not expression.strip():
+        reasons.append("PARENT_EXPRESSION_MISSING")
+    metrics = record.get("metrics")
+    if not isinstance(metrics, dict) or not metrics:
+        return result(False, reasons + ["PARENT_METRICS_MISSING"])
+    sharpe = num(metrics.get("sharpe"))
+    fitness = num(metrics.get("fitness"))
+    if sharpe is None or fitness is None:
+        return result(False, reasons + ["PARENT_METRICS_INVALID"])
+
+    required_sharpe = num(min_sharpe)
+    if required_sharpe is None:
+        required_sharpe = _policy_number(
+            policy, "promising_sharpe", DEFAULT_OPTIMIZATION_MIN_SHARPE
+        )
+    required_fitness = num(min_fitness)
+    if required_fitness is None:
+        required_fitness = _policy_number(
+            policy, "promising_fitness", DEFAULT_OPTIMIZATION_MIN_FITNESS
+        )
+    if not (sharpe >= required_sharpe or fitness >= required_fitness):
+        reasons.append("PARENT_SIGNAL_BELOW_THRESHOLD")
+
+    minimum_turnover, maximum_turnover = turnover_bounds(policy)
+    explicit_min = num(min_turnover)
+    explicit_max = num(max_turnover)
+    if explicit_min is not None:
+        minimum_turnover = explicit_min
+    if explicit_max is not None:
+        maximum_turnover = explicit_max
+    turnover = num(metrics.get("turnover"))
+    if (turnover is None
+            or not minimum_turnover <= turnover <= maximum_turnover):
+        reasons.append("PARENT_TURNOVER_OUT_OF_RANGE")
+
+    health = record.get("health")
+    submission_health_ok = None
+    failures = []
+    if isinstance(health, dict):
+        ok = health.get("ok")
+        if ok is True:
+            submission_health_ok = True
+        elif ok is False:
+            submission_health_ok = False
+            failures = _repairable_health_failures(health) or []
+            if not failures:
+                reasons.append("PARENT_HEALTH_FAILURE_NOT_REPAIRABLE")
+        else:
+            reasons.append("PARENT_HEALTH_UNKNOWN")
+    elif health is not None:
+        reasons.append("PARENT_HEALTH_UNKNOWN")
+
+    for key in ("fields_used", "datasets", "field_understanding",
+                "field_analysis", "field_source", "field_hypothesis_basis"):
+        if not record.get(key):
+            reasons.append("PARENT_FIELD_EVIDENCE_MISSING")
+            break
+    if require_economic_mechanism:
+        # 生产链路里这一前提由 ``OptimizerWorkflow._parent_rejections()`` 的
+        # ``PARENT_HYPOTHESIS_MISSING`` 更早保证；代码初筛保持原语义，不重复发明。
+        if (not record.get("hypothesis_id")
+                or not isinstance(record.get("economic_mechanism"), str)
+                or not record["economic_mechanism"].strip()):
+            reasons.append("PARENT_HYPOTHESIS_MISSING")
+
+    return result(
+        not reasons, reasons,
+        failures=failures,
+        submission_health_ok=submission_health_ok,
+    )

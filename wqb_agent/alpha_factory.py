@@ -9,7 +9,6 @@ keeps the skeleton visible to the later proposal and diversity gates.
 import hashlib
 import itertools
 import json
-import math
 import random
 import re
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from .diversity import (
     semantic_mechanism_key_from_traits,
 )
 from .expression import analyze_expression, canonical_expression
+from .pre_correlation import optimization_parent_admission
 from .proposal_contract import CHILD_CHANGE_TYPES, FACTORY_BATCH_SIZE
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 
@@ -804,6 +804,107 @@ def _derive_field_semantic_traits(profile):
             "measurement": measurement_hits,
             "frequency": frequency,
         },
+    }
+
+
+# 模板中未被声明为 slot 的固定数字必须在这里显式分类；新增模板数字若没有分类
+# 会让 ``template_numeric_audit()`` 失败，避免它悄悄变成可轮换的研究参数。
+TEMPLATE_FIXED_NUMERICS = {
+    "0.001": (
+        "SAFETY_CONSTANT",
+        "divide epsilon；轮换只改变数值稳定性，不表达经济机制",
+    ),
+    "0.2": (
+        "OPERATOR_REQUIRED_CONSTANT",
+        "trade_when 触发下界，属于固定骨架的算子语义参数",
+    ),
+    "0.8": (
+        "OPERATOR_REQUIRED_CONSTANT",
+        "trade_when 触发上界，属于固定骨架的算子语义参数",
+    ),
+    "1": (
+        "OPERATOR_REQUIRED_CONSTANT",
+        "group 位置参数或单位偏移等算子语义常量",
+    ),
+    "5": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
+    "10": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
+    "20": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
+    "60": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
+}
+
+
+def template_numeric_audit(templates=None):
+    """显式审计模板里的每个固定数字，只允许 RESEARCH_SLOT 轮换。
+
+    使用模块自己的 numeric token 规则（与渲染共用，不写第二套 regex）：出现
+    在已声明 slot 上的 token 记为 RESEARCH_SLOT，其余必须命中
+    ``TEMPLATE_FIXED_NUMERICS`` 分类，否则进入 ``problems``。这样
+    divide epsilon 之类的 safety constant 不会被误当作研究参数轮换，新增模板
+    数字也不会绕过审计。
+    """
+    source = (
+        DEFAULT_TEMPLATES + ECONOMIC_TEMPLATES
+        if templates is None else tuple(templates)
+    )
+    rows = []
+    problems = []
+    for template in source:
+        declared = {}
+        for slot in template.numeric_slots:
+            declared[(str(slot.token or slot.default), int(slot.occurrence))] = slot
+        seen = {}
+        for match in _NUMBER_TOKEN_RE.finditer(template.expression):
+            token = match.group(1)
+            index = seen.get(token, 0)
+            seen[token] = index + 1
+            slot = declared.pop((token, index), None)
+            if slot is not None:
+                allowed = tuple(slot.allowed_values or ())
+                if not allowed:
+                    problems.append(
+                        f"{template.template_id}: slot {slot.name} 缺 allowed_values"
+                    )
+                rows.append({
+                    "template_id": template.template_id,
+                    "token": token,
+                    "occurrence": index,
+                    "class": "RESEARCH_SLOT",
+                    "name": slot.name,
+                    "allowed_values": allowed,
+                })
+                continue
+            entry = TEMPLATE_FIXED_NUMERICS.get(token)
+            if entry is None:
+                problems.append(
+                    f"{template.template_id}: 未分类 numeric literal {token}#{index}"
+                )
+                rows.append({
+                    "template_id": template.template_id,
+                    "token": token,
+                    "occurrence": index,
+                    "class": "UNCLASSIFIED",
+                    "name": None,
+                    "allowed_values": (),
+                })
+                continue
+            rows.append({
+                "template_id": template.template_id,
+                "token": token,
+                "occurrence": index,
+                "class": entry[0],
+                "name": None,
+                "allowed_values": (),
+                "role": entry[1],
+            })
+        for slot in declared.values():
+            problems.append(
+                f"{template.template_id}: slot {slot.name} 未出现在表达式中"
+            )
+    return {
+        "ok": not problems,
+        "problems": problems,
+        "rows": rows,
+        "rotatable": [row for row in rows if row["class"] == "RESEARCH_SLOT"],
     }
 
 
@@ -1795,29 +1896,13 @@ class AlphaFactory:
             identity = canonical_expression(expression)
             if not identity or identity in seen or identity in excluded:
                 continue
-            metrics = parent.get("metrics")
-            if not isinstance(metrics, dict):
-                continue
-            try:
-                sharpe = float(metrics.get("sharpe"))
-                fitness = float(metrics.get("fitness"))
-                turnover = float(metrics.get("turnover"))
-            except (TypeError, ValueError):
-                continue
-            if not all(math.isfinite(value) for value in (sharpe, fitness, turnover)):
-                continue
-            if not ((sharpe >= min_sharpe or fitness >= min_fitness)
-                    and min_turnover <= turnover <= max_turnover):
-                continue
-            if isinstance(parent.get("health"), dict) and not parent["health"].get("ok"):
-                continue
-            if not parent.get("fields_used") or not parent.get("datasets"):
-                continue
-            required_metadata = (
-                "field_understanding", "field_analysis", "field_source",
-                "field_hypothesis_basis",
+            admission = optimization_parent_admission(
+                parent, min_sharpe=min_sharpe, min_fitness=min_fitness,
+                min_turnover=min_turnover, max_turnover=max_turnover,
             )
-            if any(not parent.get(key) for key in required_metadata):
+            # 只有明确、有限的可修结构 health 失败可以进入优化修复路径；未知
+            # health 失败、缺失指标、极低 signal 与非法 turnover 仍 fail closed。
+            if not admission["admitted"]:
                 continue
             seen.add(identity)
             screened.append(parent)

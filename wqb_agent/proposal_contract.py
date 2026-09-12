@@ -41,6 +41,15 @@ RESEARCH_ROLES = {"EXPLORE", "EXPLOIT", "VALIDATION"}
 MAX_PROPOSALS_PER_ROUND = 18
 MAX_CONFIGURED_PROPOSALS_PER_ROUND = 100
 FACTORY_BATCH_SIZE = 100
+# Agent authored 的 targeted optimization batch：复用同一个 proposals.json，
+# 但边界是 ≤4 CHILD + ≤4 ROBUSTNESS VALIDATE，绝不扩张成第二个 inbox。
+TARGETED_BATCH_TYPE = "targeted_optimization"
+MAX_TARGETED_CHILDREN = 4
+MAX_TARGETED_VALIDATIONS = 4
+MAX_TARGETED_PROPOSALS = MAX_TARGETED_CHILDREN + MAX_TARGETED_VALIDATIONS
+# 有效期只用于“工厂何时可以重新取得 inbox”的确定性仲裁：到期前 factory 不得
+# 用 exploration 100 覆盖一个合法且尚未执行的 Agent batch。
+TARGETED_BATCH_TTL_SEC = 6 * 3600
 EXPERIMENT_STAGES = {"BASELINE", "CHILD", "ROBUSTNESS"}
 CHILD_CHANGE_TYPES = {
     "field_swap", "window_change", "operator_variant", "smoothing",
@@ -131,6 +140,125 @@ def validate_factory_batch(proposals, target=FACTORY_BATCH_SIZE,
     if require_cross_dataset_pairs and cross_dataset_pairs < 1:
         errors.append("工厂批次至少包含 1 个跨 dataset 多字段题案")
     return not errors, errors
+
+
+def validate_targeted_batch(proposals, *, target=None):
+    """Validate the Agent-authored ``targeted_optimization`` batch envelope.
+
+    The targeted batch reuses the single ``proposals.json`` inbox, so its
+    contract has to be explicit: only ``agent_optimizer`` CHILD/ROBUSTNESS
+    entries, at most 4 CHILD + 4 VALIDATE, unique expressions.  It is checked
+    before execution exactly like the factory envelope, so an invalid targeted
+    batch never reaches the Simulator.
+    """
+    errors = []
+    if not isinstance(proposals, list):
+        return False, ["targeted batch proposals 必须是 list"]
+    if not proposals:
+        errors.append("targeted batch 不能为空")
+    if target is not None:
+        try:
+            expected = int(target)
+        except (TypeError, ValueError):
+            expected = None
+        if expected is not None and len(proposals) != expected:
+            errors.append(
+                f"targeted batch 必须恰好包含 {expected} 个题案，实际 {len(proposals)}"
+            )
+    children = 0
+    validations = 0
+    identities = set()
+    for index, proposal in enumerate(proposals):
+        if not isinstance(proposal, dict):
+            errors.append(f"第 {index + 1} 个题案不是对象")
+            continue
+        expression = str(proposal.get("expression") or "").strip()
+        if not expression:
+            errors.append(f"第 {index + 1} 个题案缺 expression")
+            continue
+        origin = str(proposal.get("proposal_origin") or "").strip().lower()
+        if origin != "agent_optimizer":
+            errors.append(f"第 {index + 1} 个题案来源必须是 agent_optimizer")
+        stage = str(proposal.get("experiment_stage") or "").strip().upper()
+        if stage == "CHILD":
+            children += 1
+        elif stage == "ROBUSTNESS":
+            validations += 1
+        else:
+            errors.append(
+                f"第 {index + 1} 个题案 experiment_stage 必须是 CHILD/ROBUSTNESS"
+            )
+        settings = proposal.get("settings")
+        settings = settings if isinstance(settings, dict) else {}
+        identity = submission_fingerprint(expression, settings)
+        if identity in identities:
+            errors.append(f"第 {index + 1} 个题案与批次内其他题案重复")
+        identities.add(identity)
+    if children > MAX_TARGETED_CHILDREN:
+        errors.append(
+            f"targeted batch 至多 {MAX_TARGETED_CHILDREN} 个 CHILD，实际 {children}"
+        )
+    if validations > MAX_TARGETED_VALIDATIONS:
+        errors.append(
+            "targeted batch 至多 "
+            f"{MAX_TARGETED_VALIDATIONS} 个 VALIDATE，实际 {validations}"
+        )
+    return not errors, errors
+
+
+def targeted_batch_state(payload, *, now=None, ttl_sec=TARGETED_BATCH_TTL_SEC):
+    """Return the deterministic arbitration state of the canonical inbox.
+
+    ``blocking`` is what the factory must honour: a present, not-yet-expired
+    Agent-authored batch owns the single proposals inbox, so exploration must
+    not silently overwrite it.  An invalid targeted envelope stays blocking on
+    purpose -- discarding it would be the same silent loss this contract exists
+    to prevent -- and is reported instead as ``TARGETED_BATCH_INVALID``.
+    """
+    state = {
+        "present": False,
+        "valid": False,
+        "expired": False,
+        "blocking": False,
+        "status": "NOT_TARGETED_BATCH",
+        "errors": [],
+        "proposal_count": 0,
+        "created_at": None,
+        "expires_at": None,
+    }
+    if not isinstance(payload, dict):
+        return state
+    if str(payload.get("batch_type") or "").strip() != TARGETED_BATCH_TYPE:
+        return state
+    proposals = payload.get("proposals")
+    proposals = proposals if isinstance(proposals, list) else []
+    valid, errors = validate_targeted_batch(proposals)
+    created_at = payload.get("created_at")
+    expires_at = payload.get("expires_at")
+    state.update({
+        "present": True,
+        "valid": valid,
+        "errors": list(errors),
+        "proposal_count": len(proposals),
+        "created_at": created_at,
+        "expires_at": expires_at,
+    })
+    current = now if isinstance(now, (int, float)) and not isinstance(now, bool) else None
+    if current is not None:
+        if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+            state["expired"] = float(current) >= float(expires_at)
+        elif isinstance(created_at, (int, float)) and not isinstance(created_at, bool):
+            try:
+                window = max(0.0, float(ttl_sec))
+            except (TypeError, ValueError):
+                window = float(TARGETED_BATCH_TTL_SEC)
+            state["expired"] = float(current) >= float(created_at) + window
+    state["blocking"] = not state["expired"]
+    state["status"] = (
+        "TARGETED_BATCH_EXPIRED" if state["expired"]
+        else ("TARGETED_OPTIMIZATION_PENDING" if valid else "TARGETED_BATCH_INVALID")
+    )
+    return state
 
 
 def factory_batch_stats(proposals, feasibility=None, budget=None):

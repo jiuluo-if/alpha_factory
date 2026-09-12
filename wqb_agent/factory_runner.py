@@ -26,6 +26,7 @@ from .expression import canonical_expression
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
     factory_batch_stats,
+    targeted_batch_state,
     validate_factory_batch,
 )
 from .schema import CHECKPOINT_VERSION, CREATED_BY_VERSION
@@ -441,6 +442,23 @@ class AIFactoryRunner:
                         )
                     }
                     self._save_session(session)
+            pending_targeted = self._pending_targeted_batch()
+            if pending_targeted is not None:
+                # Agent authored 的 targeted batch 是当前唯一 canonical inbox
+                # owner：factory 只等待，不覆盖、不消耗 quota，也不另开第二条
+                # 执行路径。Agent 用 `python main.py run-proposals` 执行后，本
+                # 循环会看到该轮 canonical checkpoint 并按其恢复未完成部分。
+                session["last_action"] = "WAIT_AGENT_DECISION"
+                session["last_result"] = {
+                    "round_no": pending_targeted.get("round_no"),
+                    "proposals": pending_targeted["proposal_count"],
+                    "status": pending_targeted["status"],
+                    "errors": list(pending_targeted["errors"])[:5],
+                    "expires_at": pending_targeted.get("expires_at"),
+                }
+                self._save_session(session)
+                self._bounded_sleep(idle, session["deadline"])
+                continue
             if session.get("last_action") == "PROPOSALS_WRITE_ERROR":
                 # The new payload is not durable and the old canonical inbox
                 # may belong to another round; do not generate a replacement
@@ -943,6 +961,33 @@ class AIFactoryRunner:
             return int(value) if value is not None else None
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return None
+
+    def _pending_targeted_batch(self):
+        """Detect a legal, current, not-yet-executed Agent targeted batch.
+
+        A ``targeted_optimization`` envelope owns the single canonical inbox
+        until it is executed or expires, so exploration must never silently
+        overwrite it.  Execution evidence is the canonical checkpoint of the
+        batch round (the same owner as every other execution boundary), which
+        keeps recovery of an unfinished targeted batch on the normal
+        ``Agent.run_proposals`` path instead of a second Simulation path.
+        """
+        try:
+            with open(self.proposals_path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        state = targeted_batch_state(payload, now=self._clock())
+        if not state["blocking"]:
+            return None
+        round_no = payload.get("round_no")
+        if isinstance(round_no, int) and not isinstance(round_no, bool) and round_no > 0:
+            checkpoint = self._load_checkpoint_payload(round_no)
+            if isinstance(checkpoint, dict) and checkpoint.get("complete"):
+                return None
+        return {**state, "round_no": payload.get("round_no")}
 
     def _orphaned_canonical_proposals(self, session):
         """Find a factory inbox left between reservation and checkpoint creation."""

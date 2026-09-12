@@ -11,7 +11,12 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from wqb_agent.alpha_factory import AlphaFactory
+from wqb_agent.alpha_factory import (
+    DEFAULT_TEMPLATES,
+    ECONOMIC_TEMPLATES,
+    AlphaFactory,
+    template_numeric_audit,
+)
 from wqb_agent.diversity import semantic_mechanism_key
 from wqb_agent.optimization_decision import (
     CHILD_REQUIRED_TEXT_FIELDS,
@@ -29,7 +34,11 @@ from wqb_agent.optimizer_workflow import (
     optimization_eligibility_map,
     optimizer_conversions,
 )
-from wqb_agent.pre_correlation import READINESS_BANDS
+from wqb_agent.pre_correlation import (
+    READINESS_BANDS,
+    optimization_parent_admission,
+    pre_self_correlation_eligibility,
+)
 from wqb_agent.proposal_contract import validate_proposal
 from wqb_agent.research_yield import build_research_yield
 
@@ -683,6 +692,76 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertTrue(ok)
 
+    def test_structural_repair_parent_reaches_a_valid_child_proposal(self):
+        """P0-A：可修结构 health 失败不得被代码初筛杀死。"""
+        field_profile = {
+            "id": "field_a", "dataset": "fundamental6", "type": "MATRIX",
+            "description": "已核验字段", "semantic_status": "KNOWN",
+        }
+        for check in ("CONCENTRATED_WEIGHT", "LOW_SUB_UNIVERSE_SHARPE"):
+            health = {"ok": False, "reasons": [f"{check}=FAIL v=0.9"]}
+            parent = parent_record(
+                "p-repair",
+                health=health,
+                metrics={
+                    "sharpe": 1.1, "fitness": 0.8, "turnover": 0.2,
+                    "checks": [
+                        {"name": check, "pass": False, "result": "FAIL"},
+                        {"name": "SELF_CORRELATION", "pass": None,
+                         "result": "PENDING"},
+                    ],
+                },
+                field_analysis={"field_a": {
+                    "semantic": "已核验字段", "coverage": None,
+                    "frequency": None, "data_type": "MATRIX",
+                }},
+            )
+            admission = optimization_parent_admission(parent)
+            self.assertTrue(admission["admitted"], check)
+            self.assertEqual(admission["repairable_health_failures"], [check])
+            self.assertFalse(admission["submission_health_ok"])
+            flow = workflow(
+                FakeTrajectory([parent]), factory=AlphaFactory(),
+                operators=["rank", "group_neutralize"],
+            )
+            result = flow.generate_from_decisions(
+                [child_decision("p-repair")], max_candidates=1
+            )
+            self.assertEqual(len(result["proposals"]), 1, check)
+            ok, problems = validate_proposal(
+                result["proposals"][0],
+                discovered_fields=[field_profile],
+                strict_experiment=True,
+                operator_reference={"operators": ["rank", "group_neutralize"],
+                                    "sha256": "sha"},
+                require_economic_integrity=True,
+            )
+            self.assertEqual(problems, [], check)
+            self.assertTrue(ok)
+            # 能修 ≠ 能提交：同一 parent 仍不满足 SELF_CORRELATION 查询门槛。
+            self.assertFalse(pre_self_correlation_eligibility(
+                parent["metrics"], delay=1, quality_policy={}, health=health,
+            )["eligible"])
+
+    def test_unknown_health_failure_stays_fail_closed(self):
+        unknown = parent_record(
+            "p-unknown",
+            health={"ok": False, "reasons": ["SOME_NEW_FAILURE=FAIL"]},
+        )
+        admission = optimization_parent_admission(unknown)
+        self.assertFalse(admission["admitted"])
+        self.assertIn(
+            "PARENT_HEALTH_FAILURE_NOT_REPAIRABLE", admission["reasons"]
+        )
+        undecided = parent_record("p-undecided", health={"ok": None})
+        self.assertIn(
+            "PARENT_HEALTH_UNKNOWN",
+            optimization_parent_admission(undecided)["reasons"],
+        )
+        self.assertEqual(
+            AlphaFactory().screen_optimization_parents([unknown, undecided]), []
+        )
+
     def test_decay_and_truncation_in_one_validate_decision_is_rejected(self):
         parent = parent_record("p1")
         flow = workflow(FakeTrajectory([parent]), factory=RecordingFactory())
@@ -737,6 +816,28 @@ class TestAgentDecisionToProposal(unittest.TestCase):
             template.render_numeric_variant("epsilon", 0.002)
         with self.assertRaises(ValueError):
             template.render_numeric_variant("short_window", 17)
+
+    def test_every_template_numeric_literal_is_explicitly_classified(self):
+        """P2：固定数字必须显式分类，只有 RESEARCH_SLOT 可轮换。"""
+        audit = template_numeric_audit()
+        self.assertEqual(audit["problems"], [])
+        self.assertTrue(audit["ok"])
+        declared = {
+            (template.template_id, slot.name)
+            for template in DEFAULT_TEMPLATES + ECONOMIC_TEMPLATES
+            for slot in template.numeric_slots
+        }
+        rotatable = {
+            (row["template_id"], row["name"]) for row in audit["rotatable"]
+        }
+        self.assertEqual(rotatable, declared)
+        for row in audit["rotatable"]:
+            self.assertTrue(row["allowed_values"], row)
+            self.assertNotEqual(row["token"], "0.001")
+        epsilon_classes = {
+            row["class"] for row in audit["rows"] if row["token"] == "0.001"
+        }
+        self.assertEqual(epsilon_classes, {"SAFETY_CONSTANT"})
 
 
 class TestOptimizerMetricContext(unittest.TestCase):

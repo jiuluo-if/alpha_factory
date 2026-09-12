@@ -68,11 +68,13 @@ def load_pre_correlation_policy(config_path="config.json"):
     return settings.get("delay"), dict(quality), window
 
 
-def load_trajectory_rows(state_dir, *, window=None):
-    """复用 Trajectory owner 读取，合并同一 Experiment 的 settled revision。
+def load_trajectory_rows(state_dir, *, window=None, since=None, until=None):
+    """复用 Trajectory owner 的 canonical merge，不被内存窗口截断。
 
     用第二个 JSONL parser 会让手工脚本在“一个 Experiment 占多行”时与 Agent
-    选出不同集合；这里直接使用既有 owner 的合并视图。
+    选出不同集合；``max_len`` 只是内存 recent window，历史 backfill 必须走
+    owner 的 canonical history streaming，才能既保持 settled revision 合并
+    语义，也覆盖 ``trajectory_window`` 之外的老 Experiment。
     """
     path = os.path.join(state_dir, "trajectory.jsonl")
     try:
@@ -80,8 +82,10 @@ def load_trajectory_rows(state_dir, *, window=None):
     except (TypeError, ValueError):
         limit = 256
     trajectory = Trajectory(path=path, max_len=limit, persist=True)
-    trajectory.load()
-    return [experiment.to_dict() for experiment in trajectory.experiments]
+    return [
+        dict(row)
+        for row in trajectory.iter_canonical_rows(since=since, until=until)
+    ]
 
 
 def pre_correlation_selection(rows, since=None, until=None, limit=None, *,
@@ -146,7 +150,9 @@ def main(argv=None):
     if since is not None and until is not None and since >= until:
         parser.error("--since 必须早于 --until")
     delay, quality_policy, window = load_pre_correlation_policy(args.config)
-    rows = load_trajectory_rows(args.state_dir, window=window)
+    rows = load_trajectory_rows(
+        args.state_dir, window=window, since=since, until=until
+    )
     selection = pre_correlation_selection(
         rows, since, until, args.limit, delay=delay, quality_policy=quality_policy
     )
@@ -155,6 +161,7 @@ def main(argv=None):
         "state_dir": args.state_dir,
         "config": args.config,
         "delay": delay,
+        "trajectory_window": window,
         "eligible": selection["eligible"],
         "ineligible_reasons": selection["reason_counts"],
         "selected": len(alpha_ids),

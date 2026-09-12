@@ -21,11 +21,14 @@ from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
+    MAX_TARGETED_PROPOSALS,
     RESEARCH_ROLES,
+    TARGETED_BATCH_TYPE,
     proposal_budget_cap,
     proposal_priority,
     validate_factory_batch,
     validate_proposal,
+    validate_targeted_batch,
     validate_vector_inputs,
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
@@ -269,6 +272,20 @@ class ProposalExecutionWorkflow:
                 print("[FACTORY BATCH BLOCKED] 整批不满足 100 题案契约：")
                 for problem in batch_errors:
                     print(f"  - {problem}")
+                return None
+        targeted_batch = payload.get("batch_type") == TARGETED_BATCH_TYPE
+        if targeted_batch:
+            batch_ok, batch_errors = validate_targeted_batch(proposal_list)
+            if not batch_ok:
+                print("[TARGETED BATCH BLOCKED] 不满足 targeted optimization 契约：")
+                for problem in batch_errors:
+                    print(f"  - {problem}")
+                self.last_run_stats = {
+                    "accepted": 0,
+                    "rejected": len(batch_errors),
+                    "skipped": 0,
+                    "status": "TARGETED_BATCH_BLOCKED",
+                }
                 return None
 
         hypothesis = payload.get("hypothesis")
@@ -553,6 +570,10 @@ class ProposalExecutionWorkflow:
 
         if factory_batch:
             allocation_cap = ctx.factory_batch_size
+        elif targeted_batch:
+            # targeted batch 的边界由批契约本身决定（≤4 CHILD + 4 VALIDATE），
+            # 不受无关的 per-round exploration 配置影响。
+            allocation_cap = MAX_TARGETED_PROPOSALS
         else:
             try:
                 allocation_cap = int(
@@ -562,8 +583,15 @@ class ProposalExecutionWorkflow:
                 )
             except (TypeError, ValueError):
                 allocation_cap = ctx.candidates_per_round
-        candidates_cap = ctx.factory_batch_size if factory_batch else ctx.candidates_per_round
-        hard_cap = ctx.factory_batch_size if factory_batch else ctx.max_proposals_per_round
+        if factory_batch:
+            candidates_cap = ctx.factory_batch_size
+            hard_cap = ctx.factory_batch_size
+        elif targeted_batch:
+            candidates_cap = MAX_TARGETED_PROPOSALS
+            hard_cap = MAX_TARGETED_PROPOSALS
+        else:
+            candidates_cap = ctx.candidates_per_round
+            hard_cap = ctx.max_proposals_per_round
         budget_cap = proposal_budget_cap(candidates_cap, allocation_cap, hard_cap=hard_cap)
         budget_rejected = diverse[budget_cap:]
         fresh = diverse[:budget_cap]

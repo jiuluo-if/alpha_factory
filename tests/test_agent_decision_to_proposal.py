@@ -245,8 +245,8 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         }
         parent = parent_record(
             "p-window",
-            expression="-rank(ts_zscore(field_a, 20))",
-            template_id="reversal_zscore_20",
+            expression="-rank(ts_zscore(field_a, 5))",
+            template_id="toy_control_zscore",
             field_analysis={"field_a": {
                 "semantic": "已核验字段", "coverage": None,
                 "frequency": None, "data_type": "MATRIX",
@@ -256,11 +256,11 @@ class TestAgentDecisionToProposal(unittest.TestCase):
             FakeTrajectory([parent]), factory=AlphaFactory(),
             operators=["rank", "ts_zscore", "group_neutralize"],
         )
-        shifted = "-rank(ts_zscore(field_a, 60))"
+        shifted = "-rank(ts_zscore(field_a, 22))"
         result = flow.generate_from_decisions([
             validate_decision(
                 "p-window", validation_variable="template_window",
-                old_value=20, new_value=60,
+                old_value=5, new_value=22,
             )
         ], max_candidates=2)
         self.assertEqual(len(result["proposals"]), 1)
@@ -268,7 +268,7 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         self.assertEqual(proposal["expression"], shifted)
         self.assertEqual(proposal["change_type"], "window_change")
         self.assertEqual(proposal["experiment_stage"], "ROBUSTNESS")
-        self.assertEqual(proposal["numeric_variant"]["slot"], "short_window")
+        self.assertEqual(proposal["numeric_variant"]["slot"], "horizon")
         self.assertEqual(proposal["numeric_variant"]["change_count"], 1)
         # 同样的窗口变化若声明为 CHILD，必须被参数化检查拒绝。
         self.assertIn(
@@ -374,15 +374,15 @@ class TestAgentDecisionToProposal(unittest.TestCase):
 
     def test_numeric_slots_declare_research_numbers_not_safety_constants(self):
         factory = AlphaFactory()
-        template = factory.registry.get("reversal_vol_adjusted")
+        template = factory.registry.get("toy_scale_surprise")
         self.assertEqual(
-            template.research_slot_names, ("delta_window", "vol_window")
+            template.research_slot_names, ("fast_horizon", "slow_horizon")
         )
         variants = template.numeric_variants(max_variants=3)
         self.assertEqual(len(variants), 3)
         for variant in variants:
             self.assertEqual(variant["change_count"], 1)
-            self.assertEqual(variant["source_template"], "reversal_vol_adjusted")
+            self.assertEqual(variant["source_template"], "toy_scale_surprise")
             # 未声明的 divide epsilon 0.001 永远保持字面量。
             self.assertIn("0.001", variant["expression"])
             self.assertNotEqual(variant["expression"], template.expression)
@@ -390,11 +390,11 @@ class TestAgentDecisionToProposal(unittest.TestCase):
             (variant["slot"], str(variant["candidate_value"]))
             for variant in variants
         }
-        self.assertNotIn(("delta_window", "5"), changed)
-        self.assertNotIn(("vol_window", "20"), changed)
+        self.assertNotIn(("fast_horizon", "5"), changed)
+        self.assertNotIn(("slow_horizon", "20"), changed)
 
     def test_numeric_variants_never_form_a_cartesian_product(self):
-        template = AlphaFactory().registry.get("quality_smooth_change")
+        template = AlphaFactory().registry.get("toy_confirmation")
         variants = template.numeric_variants(max_variants=8)
         self.assertEqual(len(variants), 4)
         for variant in variants:
@@ -407,12 +407,12 @@ class TestAgentDecisionToProposal(unittest.TestCase):
             self.assertNotEqual(variant["expression"], template.expression)
 
     def test_undeclared_numeric_slot_cannot_be_rendered(self):
-        template = AlphaFactory().registry.get("reversal_zscore_20")
+        template = AlphaFactory().registry.get("toy_control_rank")
         self.assertIsNone(template.numeric_slot("epsilon"))
         with self.assertRaises(KeyError):
             template.render_numeric_variant("epsilon", 0.002)
-        with self.assertRaises(ValueError):
-            template.render_numeric_variant("short_window", 17)
+        with self.assertRaises(KeyError):
+            template.render_numeric_variant("horizon", 17)
 
     def test_every_template_numeric_literal_is_explicitly_classified(self):
         """P2：固定数字必须显式分类，只有 RESEARCH_SLOT 可轮换。"""

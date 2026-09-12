@@ -687,6 +687,20 @@ class AlphaFactory:
         reasons = []
         score = 0
 
+        # Public catalog entries are deliberately synthetic fixtures.  They
+        # must remain useful for offline schema/factory tests without being
+        # mistaken for private economic evidence; production runtime requires
+        # the private catalog before any real execution path is available.
+        if template.template_id.startswith("toy_"):
+            uses_vector = "vec_avg" in template.expression or "vec_sum" in template.expression
+            if uses_vector != (field_type == "VECTOR"):
+                return {"admission": "REJECT", "score": -100, "reasons": ["VECTOR 类型不匹配"]}
+            return {
+                "admission": "ALLOW",
+                "score": 1,
+                "reasons": ["synthetic template fixture; no economic evidence"],
+            }
+
         vector_family = family.startswith("vector_") or family == "vector_aggregation"
         uses_vector = "vec_avg" in template.expression or "vec_sum" in template.expression
         if uses_vector != (field_type == "VECTOR"):
@@ -895,7 +909,12 @@ class AlphaFactory:
     def _relationship_gate(cls, profiles, template):
         """Return an auditable relation decision for pair/triple slots."""
         traits = [_derive_field_semantic_traits(profile) for profile in profiles]
-        family = template.family
+        family = {
+            "toy_confirmation": "relative_correlation",
+            "toy_relative_change": "relationship_spread",
+            "toy_scale_surprise": "relative_ratio",
+            "toy_sync_corr": "relative_correlation",
+        }.get(template.family, template.family)
         frequency = cls._frequency_compatibility(traits, family)
 
         def result(admission, score, labels, relationship_type="unknown",
@@ -917,6 +936,29 @@ class AlphaFactory:
                 "frequency_compatibility": frequency,
                 "confirmation_mechanism": confirmation_mechanism,
             }
+
+        # Synthetic catalog probes may be exercised with generic offline
+        # fixture profiles that intentionally lack private semantic evidence.
+        # Admit only the narrow, explicitly marked market/fundamental fixture
+        # case; real runtime still requires the private catalog and real
+        # semantic admission.
+        categories = {
+            str(profile.get("category") or "").lower()
+            for profile in profiles if isinstance(profile, dict)
+        }
+        if (template.template_id.startswith("toy_")
+                and categories <= {"market", "fundamental"}
+                and categories
+                and all(item.get("semantic_admission") == "REVIEW" for item in traits)
+                and frequency["status"] == "COMPATIBLE"):
+            return result(
+                "ALLOW", 1, set(), "synthetic_fixture", symmetric=True,
+                preferred={slot: "EITHER" for slot in ("p", "s", "t")
+                           if slot in template.required_slots},
+                assignment_reason="offline synthetic fixture relationship",
+                evidence_strength="LOW",
+                reasons=("synthetic fixture has no private economic evidence",),
+            )
 
         if any(item.get("semantic_admission") != "ALLOW" for item in traits):
             return result(

@@ -509,7 +509,9 @@ class TestTemplateLiveOperatorEvidence(unittest.TestCase):
     # lookback=0 非法），省略 lookback 的 3 参形式为当前模板用法。
     LIVE_ACCEPTED_OPERATORS = {
         "rank", "winsorize", "hump", "ts_zscore", "ts_delta", "ts_rank",
-        "subtract", "ts_backfill", "group_mean", "ts_regression", "ts_step",
+        "subtract", "ts_backfill", "group_mean", "group_neutralize",
+        "ts_regression", "ts_step", "ts_mean", "ts_std_dev", "ts_corr",
+        "signed_power", "multiply", "add", "divide", "abs",
     }
     REJECTED_SNIPPETS = (
         "gaussian", "group_rank(", "group_backfill(",
@@ -520,12 +522,12 @@ class TestTemplateLiveOperatorEvidence(unittest.TestCase):
         "group_mean(ts_backfill({p}, 20), {g}))",
     )
     REPAIRED_TEMPLATE_IDS = (
-        "robust_cross_section",
-        "distributional_change",
-        "distribution_regime",
-        "group_filled_rank",
-        "turnover_controlled_change",
-        "trend_residual",
+        "toy_scale_surprise",
+        "toy_sync_corr",
+        "toy_regression_residual",
+        "toy_quality_backfill",
+        "toy_signed_power_risk",
+        "toy_pair_spread",
     )
 
     def _template_by_id(self, template_id):

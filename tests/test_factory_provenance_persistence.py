@@ -159,17 +159,17 @@ class TestFactoryProvenancePersistence(unittest.TestCase):
             for index in range(30)
         ]
         proposals = AlphaFactory().generate_factory_batch(
-            {"id": "factory", "datasets": datasets}, fields, reference, target=100
+            {"id": "factory", "datasets": datasets}, fields, reference, target=50
         )
         stats = factory_batch_stats(proposals)
         ok, errors = validate_factory_batch(
-            proposals, target=100, min_datasets=3,
+            proposals, target=50, min_datasets=3,
             require_cross_dataset_pairs=True,
         )
         self.assertTrue(ok, errors)
         self.assertGreater(stats["dual_or_multi_field_count"], 0)
         self.assertGreater(stats["cross_dataset_pair_count"], 0)
-        self.assertIn("generic_pair_spread_change", stats["template_counts"])
+        self.assertIn("toy_pair_spread", stats["template_counts"])
 
     def test_agent_runtime_persists_trajectory_evidence_but_not_result_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -306,7 +306,7 @@ class TestOptimizerMetricContext(unittest.TestCase):
 
     def test_declared_numeric_slots_and_settings_pools_are_bounded(self):
         row = parent_record(
-            "p-numeric", template_id="reversal_zscore_20",
+            "p-numeric", template_id="toy_confirmation",
             settings={"delay": 1, "decay": 4, "truncation": 0.08},
             metrics=self.eligible_metrics(),
         )
@@ -317,10 +317,10 @@ class TestOptimizerMetricContext(unittest.TestCase):
         variants = context["numeric_variants_available"]
         self.assertEqual(len(variants), 1)
         entry = variants[0]
-        self.assertEqual(entry["template_id"], "reversal_zscore_20")
+        self.assertEqual(entry["template_id"], "toy_confirmation")
         self.assertEqual(
             [(slot["slot"], slot["default"]) for slot in entry["template_slots"]],
-            [("short_window", 20)],
+            [("horizon", 5)],
         )
         self.assertEqual(entry["settings_pools"]["decay"], [3, 5])
         self.assertEqual(entry["settings_pools"]["truncation"], [0.06, 0.1])

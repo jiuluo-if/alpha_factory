@@ -99,8 +99,9 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         fields = [
             {"id": f"field_{index}", "description": "已核验经济字段", "type": "MATRIX",
-             "semantic_status": "KNOWN", "dataset": "fundamental6"}
-            for index in range(10)
+             "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
+             "dataset": "fundamental6"}
+            for index in range(30)
         ]
         proposals = AlphaFactory().generate_factory_batch(
             {"id": "factory", "datasets": ["fundamental6"]},
@@ -123,8 +124,8 @@ class TestFactoryBatchContract(unittest.TestCase):
         fields = [
             {
                 "id": f"field_{index}", "description": f"verified field {index}",
-                "type": "MATRIX", "semantic_status": "KNOWN",
-                "dataset": "fundamental6",
+                "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
+                "category": "market", "dataset": "fundamental6",
             }
             for index in range(30)
         ]
@@ -187,8 +188,9 @@ class TestFactoryBatchContract(unittest.TestCase):
         )
         fields = [
             {"id": f"field_{index}", "description": "已核验经济字段", "type": "MATRIX",
-             "semantic_status": "KNOWN", "dataset": "fundamental6"}
-            for index in range(10)
+             "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
+             "dataset": "fundamental6"}
+            for index in range(30)
         ]
         proposals = AlphaFactory().generate_factory_batch(
             {"id": "factory", "datasets": ["fundamental6"]},

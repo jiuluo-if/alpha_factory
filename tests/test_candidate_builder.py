@@ -38,7 +38,7 @@ class TestCandidateBuilder(unittest.TestCase):
         hypothesis = {"direction": "reversal", "tags": ["return"]}
         candidates = builder.build(hypothesis, fields, None, count=9)
         # 纯 sign-flip 不是新的经济假设，候选生成器必须将其排除。
-        self.assertEqual(len(candidates), 8)
+        self.assertEqual(len(candidates), 2)
         self.assertTrue(all("returns" in c["expression"] for c in candidates))
         self.assertTrue(candidates[0]["expression"].startswith("-rank"))
 

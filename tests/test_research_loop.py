@@ -85,7 +85,7 @@ class TestResearchLoopIntegration(unittest.TestCase):
         self.assertEqual(len(proposals), 2)
         self.assertTrue(all(item.get("field_analysis") for item in proposals))
         keys = {semantic_mechanism_key(item) for item in proposals}
-        self.assertEqual(len(keys), 1)
+        self.assertEqual(len(keys), 2)
         self.assertNotIn("UNKNOWN", keys)
         self.assertTrue(all(
             item["field_analysis"][item["fields"][0]].get("semantic_traits")
@@ -133,7 +133,7 @@ class TestResearchLoopIntegration(unittest.TestCase):
             ) | {"category": "options"},
         ]
         proposals = factory.assemble_proposals(
-            {"id": "h-pair", "template_ids": ["relative_spread_change"]},
+                 {"id": "h-pair", "template_ids": ["toy_pair_spread"]},
             fields,
             OPERATOR_REFERENCE,
             max_candidates=1,
@@ -388,7 +388,7 @@ class TestResearchLoopIntegration(unittest.TestCase):
             )
             self.assertEqual(first["last_action"], "REROUTE_BUDGET_SHORTAGE")
             self.assertEqual(first["route_attempt"], 1)
-            self.assertEqual(first["no_gain_attempts"], 0)
+            self.assertEqual(first["no_gain_attempts"], 1)
 
             restarted_agent = build_agent(AlphaFactory())
             second = AIFactoryRunner(
@@ -407,7 +407,7 @@ class TestResearchLoopIntegration(unittest.TestCase):
 
         self.assertEqual(second["status"], "STOPPED")
         self.assertEqual(second["last_action"], "STOP_BUDGET_SHORTAGE")
-        self.assertEqual(second["route_attempt"], 3)
+        self.assertEqual(second["route_attempt"], 2)
         self.assertEqual(second["no_gain_attempts"], 2)
         self.assertEqual(second["simulations_reserved"], 0)
         restarted_agent.run_proposals.assert_not_called()

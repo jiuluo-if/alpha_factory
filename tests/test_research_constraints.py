@@ -176,10 +176,13 @@ class TestResearchConstraints(unittest.TestCase):
             os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
         )
         proposals = AlphaFactory().assemble_proposals(
-            {"id": "h", "datasets": ["fundamental6"], "template_mode": "economic"},
+            {"id": "h", "datasets": ["fundamental6"], "template_ids": ["toy_pair_spread"]},
             [{"id": "cashflow_op", "description": "经营现金流",
-              "type": "MATRIX", "semantic_status": "KNOWN",
-              "dataset": "fundamental6"}],
+              "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
+              "category": "fundamental", "dataset": "fundamental6"},
+             {"id": "cashflow_fin", "description": "融资现金流",
+              "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
+              "category": "fundamental", "dataset": "fundamental6"}],
             reference,
             max_candidates=1,
         )

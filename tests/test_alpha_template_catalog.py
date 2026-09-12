@@ -35,9 +35,10 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         )
         self.assertEqual(
             [item.template_id for item in registry.select({"tags": ["relationship"]})],
-            ["toy_confirmation", "toy_dispersion_rank", "toy_quality_backfill",
-             "toy_regression_residual", "toy_relative_change", "toy_scale_surprise",
-             "toy_signed_power_risk", "toy_sync_corr"],
+            ["toy_confirmation", "toy_dispersion_rank", "toy_pair_spread",
+             "toy_quality_backfill", "toy_regression_residual", "toy_relative_change",
+             "toy_scale_surprise", "toy_signed_power_risk", "toy_sync_corr",
+             "toy_triple_confirmation"],
         )
         self.assertEqual(
             [item.template_id for item in registry.select({"tags": ["momentum"]})],

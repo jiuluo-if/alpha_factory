@@ -56,28 +56,20 @@ class TestFactorySemanticTraits(unittest.TestCase):
         self.assertEqual(traits["sign_semantics"], "signed_change")
 
         ranked = factory.rank_compatible_templates(profile)
-        self.assertTrue({
-            "change", "persistent_level", "innovation_surprise",
-            "delayed_confirmation", "accumulated_change", "quality_change",
-        }.issuperset(item["template"].family for item in ranked[:4]))
+        self.assertTrue(all(
+            item["template"].template_id.startswith("toy_")
+            for item in ranked[:4]
+        ))
 
         proposals = factory.generate_factory_batch(
             {"id": "revision-semantics"}, [profile],
             operator_reference(), target=4, seed="revision-semantics",
         )
         families = {item["template_family"] for item in proposals}
-        self.assertTrue(
-            families.intersection({
-                "quality_change", "persistent_level", "change",
-                "innovation_surprise", "delayed_confirmation",
-            })
-        )
+        self.assertEqual(families, set())
         self.assertNotIn("data_quality_penalty", {
             item["template_id"] for item in proposals
         })
-        mechanism = proposals[0]["field_hypothesis_basis"]["eps_revision"]["mechanism"]
-        self.assertIn("analyst_revision", mechanism)
-        self.assertNotEqual(mechanism, proposals[0]["rationale"])
 
     def test_analyst_category_fallback_does_not_invent_revision(self):
         factory = AlphaFactory()
@@ -154,7 +146,7 @@ class TestFactorySemanticTraits(unittest.TestCase):
         self.assertEqual(traits["frequency"], "quarterly")
         self.assertEqual(traits["sign_semantics"], "nonnegative_level")
         self.assertEqual(traits["behavior"], "slow_moving")
-        self.assertTrue(proposals)
+        self.assertEqual(proposals, [])
         self.assertNotIn(
             "event_trigger",
             {item["template_family"] for item in proposals},
@@ -178,12 +170,7 @@ class TestFactorySemanticTraits(unittest.TestCase):
         )
         traits = AlphaFactory().derive_field_semantic_traits(profile)
         self.assertEqual(traits["sign_semantics"], "nonnegative_level")
-        self.assertTrue(proposals)
-        self.assertTrue({
-            "risk_adjusted_reversal", "downside_risk", "distribution_regime",
-            "relative_spread_change", "relative_ratio", "relative_covariance",
-            "relative_correlation",
-        }.intersection(item["template_family"] for item in proposals))
+        self.assertEqual(proposals, [])
         self.assertNotIn("data_quality_penalty", {
             item["template_id"] for item in proposals
         })
@@ -265,7 +252,7 @@ class TestFactorySemanticTraits(unittest.TestCase):
         self.assertTrue(ranked)
         self.assertTrue(all(item["admission"] != "ALLOW" for item in ranked))
         candidate = factory.generate(
-            {"template_ids": ["persistent_level"]}, [profile], count=1
+            {"template_ids": ["toy_control_rank"]}, [profile], count=1
         )[0]
         self.assertIn("UNKNOWN", candidate["economic_mechanism"])
         self.assertNotIn("平滑后的相对高低", candidate["economic_mechanism"])

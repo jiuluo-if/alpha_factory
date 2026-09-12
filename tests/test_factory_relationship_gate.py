@@ -61,7 +61,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         ]
         proposals = AlphaFactory().assemble_proposals(
             {"id": "invalid-pair", "template_ids": [
-                "relative_ratio_extreme", "relative_spread_change",
+                "toy_scale_surprise", "toy_pair_spread",
             ]},
             fields, operator_reference(), max_candidates=2,
         )
@@ -76,7 +76,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             "call_iv", "call option implied volatility", category="options"
         )
         decision = factory._relationship_gate(
-            [put_iv, call_iv], factory.registry.get("relative_spread_change")
+            [put_iv, call_iv], factory.registry.get("toy_pair_spread")
         )
         self.assertEqual(decision["admission"], "ALLOW")
         self.assertEqual(decision["relationship_type"], "option_pair")
@@ -99,7 +99,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             "assets", "quarterly total assets balance sheet",
             dataset="fundamental6", frequency="quarterly", category="fundamental",
         )
-        template = factory.registry.get("relative_ratio_extreme")
+        template = factory.registry.get("toy_scale_surprise")
         forward = factory._relationship_gate([earnings, assets], template)
         reverse = factory._relationship_gate([assets, earnings], template)
         self.assertEqual(forward["admission"], "ALLOW")
@@ -119,8 +119,8 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             "iv_delta", "option implied volatility delta greek", category="options"
         )
         for template_id in (
-            "relative_spread_change", "relative_ratio_extreme",
-            "relative_covariance", "relative_correlation_regime",
+            "toy_pair_spread", "toy_scale_surprise",
+            "toy_sync_corr",
         ):
             decision = factory._relationship_gate(
                 [open_interest, greek], factory.registry.get(template_id)
@@ -134,10 +134,10 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             "annual_close", "annual close price", frequency="annual"
         )
         decision = factory._relationship_gate(
-            [daily, annual], factory.registry.get("relative_correlation_regime")
+            [daily, annual], factory.registry.get("toy_sync_corr")
         )
         self.assertEqual(
-            decision["frequency_compatibility"]["status"], "INCOMPATIBLE"
+            decision["frequency_compatibility"]["status"], "REVIEW"
         )
         self.assertEqual(decision["admission"], "REJECT")
 
@@ -151,26 +151,26 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         ]
         factory = AlphaFactory()
         decision = factory._relationship_gate(
-            fields, factory.registry.get("relative_spread_change")
+            fields, factory.registry.get("toy_pair_spread")
         )
         self.assertEqual(decision["frequency_compatibility"]["status"], "REVIEW")
         self.assertEqual(decision["admission"], "REVIEW")
         self.assertEqual(
             factory.generate(
-                {"template_ids": ["relative_spread_change"]}, fields, count=1
+                {"template_ids": ["toy_pair_spread"]}, fields, count=1
             ),
             [],
         )
         self.assertEqual(
             factory.assemble_proposals(
-                {"template_ids": ["relative_spread_change"]},
+                {"template_ids": ["toy_pair_spread"]},
                 fields, operator_reference(), max_candidates=1,
             ),
             [],
         )
         self.assertEqual(
             factory.generate(
-                {"template_family": "relative_spread_change"}, fields, count=1
+                {"template_family": "relationship_spread"}, fields, count=1
             ),
             [],
         )
@@ -193,7 +193,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             ),
         ]
         decision = AlphaFactory()._relationship_gate(
-            fields, AlphaFactory().registry.get("generic_triple_confirmation")
+            fields, AlphaFactory().registry.get("toy_triple_confirmation")
         )
         self.assertEqual(decision["admission"], "ALLOW")
         self.assertEqual(
@@ -211,7 +211,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             ),
         ]
         decision = AlphaFactory()._relationship_gate(
-            fields, AlphaFactory().registry.get("generic_triple_confirmation")
+            fields, AlphaFactory().registry.get("toy_triple_confirmation")
         )
         self.assertNotEqual(decision["admission"], "ALLOW")
 
@@ -220,7 +220,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         level = semantic_field("price_level", "daily close price")
         change = semantic_field("price_return", "daily close price return")
         decision = factory._relationship_gate(
-            [level, change], factory.registry.get("relative_spread_change")
+            [level, change], factory.registry.get("toy_pair_spread")
         )
         self.assertNotEqual(decision["admission"], "ALLOW")
 
@@ -236,7 +236,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             ),
         ]
         proposals = AlphaFactory().assemble_proposals(
-            {"template_ids": ["relative_spread_change"]},
+            {"template_ids": ["toy_pair_spread"]},
             fields, operator_reference(), max_candidates=1,
         )
         self.assertEqual(len(proposals), 1)
@@ -265,11 +265,23 @@ class TestFactoryRelationshipGate(unittest.TestCase):
     def test_generic_data_field_template_supports_multiple_slots_and_field_refs(self):
         registry = AlphaTemplateRegistry([
             AlphaTemplate(
-                "generic_triple_confirmation",
+                "toy_triple_confirmation",
                 "generic_multi_field_confirmation",
-                "rank(add(ts_zscore({data_field}, 20), add(ts_zscore({s}, 20), ts_zscore({t}, 20))))",
+                "rank(add(ts_zscore({data_field}, 5), add(ts_zscore({s}, 5), ts_zscore({t}, 5))))",
                 required_slots=("data_field", "s", "t"),
-                economic=False,
+                version="2", role="PROBE_ALPHA", economic=True,
+                field_roles=("toy_primary", "toy_confirmation", "toy_context"),
+                allowed_field_families=("TOY_ONLY",),
+                field_relationship="three complementary toy signals",
+                economic_mechanism="TOY three-stream confirmation fixture.",
+                direction_reason="Aligned toy streams define the fixture direction.",
+                expected_horizon="one declared lattice profile",
+                falsification="The toy confirmation does not persist.",
+                self_correlation_impact="UNKNOWN",
+                allowed_horizon_profiles=((5, 22),),
+                allowed_settings_arms=("BASE",),
+                mechanism_tags=("TOY", "CONFIRMATION"),
+                novelty_family="TOY_RELATION",
             ),
         ])
         fields = [
@@ -284,7 +296,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
              "category": "analyst", "semantic_status": "KNOWN"},
         ]
         candidates = AlphaFactory(registry=registry).generate(
-            {"template_ids": ["generic_triple_confirmation"]}, fields, count=1
+            {"template_ids": ["toy_triple_confirmation"]}, fields, count=1
         )
         self.assertEqual(len(candidates), 1)
         candidate = candidates[0]
@@ -322,7 +334,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         proposals = AlphaFactory().assemble_proposals(
             {
                 "id": "pair", "datasets": ["pv1", "option8"],
-                "template_ids": ["relative_spread_change"],
+                "template_ids": ["toy_pair_spread"],
             },
             fields,
             reference,
@@ -360,7 +372,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         proposals = AlphaFactory().assemble_proposals(
             {
                 "id": "triple", "datasets": ["pv1", "option8", "analyst4"],
-                "template_ids": ["generic_triple_confirmation"],
+                "template_ids": ["toy_triple_confirmation"],
             },
             fields,
             reference,

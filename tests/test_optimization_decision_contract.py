@@ -217,8 +217,8 @@ class TestNumericVariantIdentityAndDedupe(unittest.TestCase):
     @staticmethod
     def window_parent():
         return parent_record(
-            "p-window", expression="-rank(ts_zscore(field_a, 20))",
-            template_id="reversal_zscore_20",
+            "p-window", expression="-rank(ts_zscore(field_a, 5))",
+            template_id="toy_control_zscore",
         )
 
     @staticmethod
@@ -226,7 +226,7 @@ class TestNumericVariantIdentityAndDedupe(unittest.TestCase):
         return {
             "parent": TestNumericVariantIdentityAndDedupe.window_parent(),
             "variable": "template_window",
-            "old_value": 20,
+            "old_value": 5,
             "new_value": value,
             "expected_effect": "检验短期反转窗口是否稳定",
             "falsification": "窗口变化后 Sharpe 反向恶化则稳定性假设不成立",
@@ -234,9 +234,9 @@ class TestNumericVariantIdentityAndDedupe(unittest.TestCase):
             "expression": expression,
             "settings_override": {},
             "numeric_variant": {
-                "source_template": "reversal_zscore_20",
-                "slot": "short_window",
-                "parent_default_value": 20,
+                "source_template": "toy_control_zscore",
+                "slot": "horizon",
+                "parent_default_value": 5,
                 "candidate_value": value,
                 "change_count": 1,
                 "reason": "检验短期反转窗口稳定性",
@@ -244,7 +244,7 @@ class TestNumericVariantIdentityAndDedupe(unittest.TestCase):
         }
 
     def test_variant_keeps_the_parent_semantic_mechanism_family(self):
-        template = AlphaFactory().registry.get("reversal_zscore_20")
+        template = AlphaFactory().registry.get("toy_confirmation")
         variants = template.numeric_variants(max_variants=3)
         self.assertTrue(variants)
         parent_proposal = {
@@ -272,36 +272,36 @@ class TestNumericVariantIdentityAndDedupe(unittest.TestCase):
 
     def test_validation_proposals_dedupe_identical_expressions(self):
         factory = AlphaFactory()
-        template = factory.registry.get("reversal_zscore_20")
+        template = factory.registry.get("toy_confirmation")
         request = self.window_request(
-            60,
-            expression=template.numeric_slot("short_window").render(
-                "-rank(ts_zscore(field_a, 20))", 60
+            22,
+            expression=template.numeric_slot("horizon").render(
+                "rank(add(ts_zscore(field_a, 5), ts_zscore(field_b, 5)))", 22
             ),
         )
         proposals = factory.validation_proposals(
             [dict(request), dict(request)],
-            {"operators": ["rank", "ts_zscore"], "sha256": "sha"},
+            {"operators": ["rank", "ts_zscore", "add"], "sha256": "sha"},
             max_candidates=4,
         )
         self.assertEqual(len(proposals), 1)
-        self.assertEqual(proposals[0]["expression"], "-rank(ts_zscore(field_a, 60))")
+        self.assertEqual(proposals[0]["expression"], "rank(add(ts_zscore(field_a, 22), ts_zscore(field_b, 5)))")
 
     def test_validation_proposals_are_role_capped_and_bounded(self):
         factory = AlphaFactory()
-        template = factory.registry.get("reversal_zscore_20")
+        template = factory.registry.get("toy_confirmation")
         requests = [
             self.window_request(
                 value,
-                expression=template.numeric_slot("short_window").render(
-                    "-rank(ts_zscore(field_a, 20))", value
+                expression=template.numeric_slot("horizon").render(
+                    "rank(add(ts_zscore(field_a, 5), ts_zscore(field_b, 5)))", value
                 ),
             )
-            for value in (5, 60)
+            for value in (22, 66)
         ]
         proposals = factory.validation_proposals(
             requests,
-            {"operators": ["rank", "ts_zscore"], "sha256": "sha"},
+            {"operators": ["rank", "ts_zscore", "add"], "sha256": "sha"},
             max_candidates=1,
         )
         self.assertEqual(len(proposals), 1)

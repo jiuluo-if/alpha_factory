@@ -454,3 +454,11 @@
 - [x] 质量门（unittest 876、compileall、ruff、mypy 9 frontier、coverage 80.1%、offline doctor/audit、
   privacy findings=0）+ 推送并核对 `REMOTE_SHA == LOCAL_HEAD`（`111b5fe`、`08778ee`、`3741d71`、
   `6c89bfa`、`5da9565`、`dc598a0` + 本收尾文档提交）
+- [x] 第二轮按 contract 拆分其余过长域：`test_optimization_decision.py`（1094/46）、`test_proposal_safety.py`
+  （986/28）、`test_discovery.py`（982/43）、`test_control_loop_repair.py`（908/23）、`test_runtime_safety.py`
+  （745/58）→ 13 个文件 + `tests/helpers.py`/`tests/optimizer_helpers.py`/`tests/control_loop_helpers.py`；
+  AST 比对拆前/拆后 `test_*` 名称集合完全相等，最大测试文件 447 行，全量仍 888 tests
+- [x] 第二轮质量门：unittest 888 tests OK（63.2 s）、compileall、ruff（排除 7 个未跟踪用户脚本）、
+  mypy 9 frontier、coverage branch-aware 80.1%、offline doctor/audit/context exit 0、privacy findings=0、
+  `pytest -q` 888 passed 58.94 s、`pytest -q -n auto --dist=loadfile` 888 passed 44.89 s；
+  `.wqb_state` 75 文件运行前后 0 差异（未运行真实 Simulation）

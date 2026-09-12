@@ -93,7 +93,8 @@ python -m pytest -q -n auto --dist=loadfile
 ```
 
 - CI authoritative lane 仍是 `python -m unittest discover -s tests`（未替换、未并行化）。
-- 慢测试（`pytest --durations=30`）：`tests/test_factory_batch_contract.py::TestFactoryBatchContract::test_factory_exploration_is_seeded_and_marked_as_signal_discovery` 约 38.65 s（单个），其次 `tests/test_factory_provenance_persistence.py::TestFactoryProvenancePersistence::test_factory_batch_prefers_cross_dataset_companions_and_reports_stats` 约 5.14 s。
+- 慢测试（测试拆分后复测，`python -m pytest -q --durations=12`）：`tests/test_factory_batch_contract.py::TestFactoryBatchContract::test_factory_exploration_is_seeded_and_marked_as_signal_discovery` 39.53 s，其次 `tests/test_factory_provenance_persistence.py::TestFactoryProvenancePersistence::test_factory_batch_prefers_cross_dataset_companions_and_reports_stats` 5.03 s、`tests/test_control_loop_repair.py::TestHistoricalCorrelationBackfill::test_selection_reaches_beyond_the_in_memory_window` 3.69 s。
+- 拆分后复测：`python -m unittest discover -s tests` = 888 tests OK / 63.2 s；`pytest -q` = 888 passed（43 subtests）/ 58.94 s；`pytest -q -n auto --dist=loadfile` = 888 passed / 44.89 s；coverage branch-aware 80.1%（未变）。
 
 ## 6. 未改变
 

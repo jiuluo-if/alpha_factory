@@ -409,7 +409,7 @@ production preflight (`research_integrity`) would refuse.
   writes nothing when the Agent produced no proposal
   (`NO_TARGETED_PROPOSAL`).
 - Two execution-side breakpoints were found and fixed on 2026-09-12 (locked by
-  `tests/test_control_loop_repair.py::TestTargetedBatchRunsOnTheSingleExecutionPath`):
+  `tests/test_structural_repair_chain.py::TestTargetedBatchRunsOnTheSingleExecutionPath`):
   `OptimizerWorkflow._optimization_exclusions()` subtracts the optimized parent's
   own expression from the terminal set, so a DONE parent is no longer discarded
   by `screen_optimization_parents()` as already terminal on both the CHILD and

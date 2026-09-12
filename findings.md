@@ -1003,3 +1003,22 @@
   msgspec 默认拒绝。
 - 未触碰：真实 Simulation、Alpha submission、remote color write、`.wqb_state`、durability
   （`flush`/`fsync`/`os.replace`）、`SUBMIT_UNKNOWN` exactly-once、checkpoint、reward/optimizer 语义。
+
+### 测试瘦身（第二轮：其余 5 个过长域）
+
+- 拆分依据是 contract/behavior：optimization decision（contract / funnel / decision→proposal）、proposal
+  safety（schema 与证据契约 / 执行安全）、discovery（catalog / selection / field semantics / candidate
+  builder）、control loop repair（correlation 与 generation bound / targeted batch / structural chain）、
+  runtime safety（config 边界 / audit 与 lifecycle / settlement 证据）。
+- 等价性证据：AST 比对每个被拆文件的 `test_*` 名称集合与拆前完全相等；全量 `unittest discover` 拆前拆后
+  都是 888 tests OK；`pytest -q` 两次（串行与 `-n auto --dist=loadfile`）均 888 passed；coverage
+  branch-aware 80.1% 不变；最大测试文件 447 行。
+- helper 收敛：`FakeClient`/`make_agent`/`TmpStateMixin`/`BASE_CONFIG`/`FAKE_FIELDS`/`_fake_metrics` 统一进
+  `tests/helpers.py`；optimizer 与 control-loop 的 fake 分别进 `tests/optimizer_helpers.py` 与
+  `tests/control_loop_helpers.py`。fixture 只构造 synthetic evidence，未复制真实研究数据。
+- 交叉引用：`docs/ARCHITECTURE_AGENT.md` 的 targeted batch 执行断点测试引用改为
+  `tests/test_structural_repair_chain.py::TestTargetedBatchRunsOnTheSingleExecutionPath`；
+  `wqb_agent/preflight.py` 的 `tests/test_proposal_safety.py`、`tests/test_runtime_safety.py` 路由仍有效
+  （两个文件名保留为拆分后的主文件），因此本阶段没有 production 代码改动。
+- 未触碰：production 语义、Simulation owner、checkpoint、trajectory、reward/optimizer、`SUBMIT_UNKNOWN`、
+  durability；本轮 diff 只有 `tests/` 与 docs。

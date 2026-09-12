@@ -30,3 +30,25 @@ Markdown relative links -> BROKEN_MARKDOWN_LINKS=[]
 ```
 
 本报告不记录 `.wqb_state/` 的实时实验结果；该目录仍是 live research state，必须按现有恢复和对账规则处理。
+
+## 2026-09-12 Phase VII：其余过长测试域按 contract 拆分
+
+| 拆分前 | 行数 / 测试 | 拆分后 | 行数 / 测试 |
+|---|---|---|---|
+| `tests/test_optimization_decision.py` | 1094 / 46 | `test_optimization_decision_contract.py`、`test_optimizer_funnel.py`、`test_agent_decision_to_proposal.py` + `tests/optimizer_helpers.py` | 310/17、328/12、438/17 |
+| `tests/test_proposal_safety.py` | 986 / 28 | `test_proposal_safety.py`（执行安全）、`test_proposal_contract.py`（schema 与证据契约） | 425/13、447/15 |
+| `tests/test_discovery.py` | 982 / 43 | `test_discovery.py`（catalog）、`test_discovery_selection.py`、`test_discovery_semantics.py`、`test_candidate_builder.py` | 353/17、339/11、158/8、111/7 |
+| `tests/test_control_loop_repair.py` | 908 / 23 | `test_control_loop_repair.py`（correlation 与 generation bound）、`test_targeted_batch_contract.py`、`test_structural_repair_chain.py` + `tests/control_loop_helpers.py` | 331/11、232/7、241/5 |
+| `tests/test_runtime_safety.py` | 745 / 58 | `test_runtime_safety.py`（audit 与 lifecycle）、`test_runtime_config_boundary.py`、`test_runtime_settlement.py` | 447/34、287/20、70/4 |
+
+- 拆分标准是 contract/behavior，不是行数；每个测试方法的方法名、断言与 imports 原样保留。
+- 稳定 synthetic builder 收敛到 `tests/helpers.py` 与领域 `*_helpers.py`，不再把 helper 复制到多个测试文件；未新建测试框架。
+- 行为等价：拆前拆后全量 `python -m unittest discover -s tests` 都是 888 tests OK；coverage branch-aware 80.1% 不变；最大测试文件 447 行。
+- 拆分 commit 不含任何 production 代码改动。
+
+```text
+python -m unittest discover -s tests -> Ran 888 tests ... OK
+python -m pytest -q -> 888 passed, 43 subtests passed
+python -m pytest -q -n auto --dist=loadfile -> 888 passed
+coverage report -> TOTAL 80.1%
+```

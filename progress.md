@@ -605,3 +605,20 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 依赖决策：orjson REJECT（卸载）、py-spy / pytest+xdist dev-only ADOPT、msgspec 拒绝；
   `pyproject.toml` 新增 `perf` extra，runtime `dependencies` 仍只有 `requests>=2.28`。
 - 未运行真实 Simulation、未写 `.wqb_state`、未改 durability contract；推送后核对 `REMOTE_SHA == LOCAL_HEAD`。
+
+### 2026-09-12 Phase VII 第二轮：按 contract 拆分其余过长测试域（PAUSED/DISARMED，未运行真实 Simulation）
+
+- 拆分：`test_optimization_decision.py`（1094 行/46 tests）→ `test_optimization_decision_contract.py`、
+  `test_optimizer_funnel.py`、`test_agent_decision_to_proposal.py` + `tests/optimizer_helpers.py`；
+  `test_proposal_safety.py`（986/28）→ `test_proposal_safety.py`、`test_proposal_contract.py`；
+  `test_discovery.py`（982/43）→ `test_discovery.py`、`test_discovery_selection.py`、
+  `test_discovery_semantics.py`、`test_candidate_builder.py`；`test_control_loop_repair.py`（908/23）→
+  `test_control_loop_repair.py`、`test_targeted_batch_contract.py`、`test_structural_repair_chain.py` +
+  `tests/control_loop_helpers.py`；`test_runtime_safety.py`（745/58）→ `test_runtime_safety.py`、
+  `test_runtime_config_boundary.py`、`test_runtime_settlement.py`。
+- 稳定 synthetic builder 收敛到 `tests/helpers.py`，不再在多个测试文件重复；未新建测试框架，未改 production 代码。
+- 等价性：拆前拆后全量 `python -m unittest discover -s tests` 均 888 tests OK；AST 比对每个被拆文件的
+  `test_*` 名称集合相等；coverage branch-aware 80.1% 不变；最大测试文件 447 行。
+- 验收：compileall、ruff、mypy 9 frontier、offline doctor/audit/context exit 0、`scripts/check_repo_privacy.py`
+  findings=0、`pytest -q` 888 passed 58.94 s、`pytest -q -n auto --dist=loadfile` 888 passed 44.89 s；
+  `.wqb_state` 运行前后 75 文件 0 差异。

@@ -244,3 +244,9 @@ downstream) → INCONCLUSIVE fallback.
   without human action. Execution evidence stays the canonical checkpoint of
   the batch round, so recovery of an unfinished targeted batch runs through the
   normal recovery path.
+- The CHILD and VALIDATE generation paths read the terminal-expression hook only
+  to exclude *new* proposals: the optimized parent's own expression is exempted
+  (`OptimizerWorkflow._optimization_exclusions()`), and the targeted envelope
+  carries the real discovery field profiles read from the Agent field cache, so
+  an Agent-authored batch passes the production preflight instead of being
+  blocked for missing field profiles.

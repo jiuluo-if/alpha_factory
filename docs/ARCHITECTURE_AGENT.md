@@ -408,6 +408,15 @@ production preflight (`research_integrity`) would refuse.
   checkpoint, refuses an out-of-contract batch (`TARGETED_BATCH_REJECTED`) and
   writes nothing when the Agent produced no proposal
   (`NO_TARGETED_PROPOSAL`).
+- Two execution-side breakpoints were found and fixed on 2026-09-12 (locked by
+  `tests/test_control_loop_repair.py::TestTargetedBatchRunsOnTheSingleExecutionPath`):
+  `OptimizerWorkflow._optimization_exclusions()` subtracts the optimized parent's
+  own expression from the terminal set, so a DONE parent is no longer discarded
+  by `screen_optimization_parents()` as already terminal on both the CHILD and
+  the VALIDATE generation path; and `research_api._targeted_field_profiles()`
+  fills the envelope `fields` from the Agent's read-only field cache so the
+  production preflight accepts the batch. A missing cache leaves the profile out
+  and preflight stays fail-closed instead of fabricating field metadata.
 - `FactoryRunner` arbitrates the shared inbox before generating a round: a
   present, valid, unexpired and not-yet-executed targeted batch makes the loop
   record `WAIT_AGENT_DECISION` (`TARGETED_OPTIMIZATION_PENDING`) and sleep

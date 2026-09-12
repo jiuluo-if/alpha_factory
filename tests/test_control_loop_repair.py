@@ -886,6 +886,22 @@ class TestTargetedBatchRunsOnTheSingleExecutionPath(unittest.TestCase):
         self.assertEqual(client.sim_calls, [])
         self.assertEqual(agent.last_run_stats["status"], "PREFLIGHT_BLOCKED")
 
+    def test_completed_parent_validate_decision_still_emits_robustness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent, _client = make_agent(tmp, rounds=1)
+            parent = _completed_parent()
+            parent.settings = {"delay": 1, "decay": 4,
+                               "truncation": 0.08, "universe": "TOP3000"}
+            agent.trajectory.add(parent)
+            report = agent.propose_optimization(
+                [validate_decision(parent.id)], max_candidates=2
+            )
+        self.assertEqual(report["decision_report"]["validation_generated"], 1)
+        proposal = report["proposals"][0]
+        self.assertEqual(proposal["experiment_stage"], "ROBUSTNESS")
+        self.assertEqual(proposal["changed_variable"], "decay")
+        self.assertEqual(proposal["settings"], {"decay": 5})
+
 
 if __name__ == "__main__":
     unittest.main()

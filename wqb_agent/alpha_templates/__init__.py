@@ -1,6 +1,12 @@
 """Standalone, read-only Alpha template catalog and registry."""
 
-from .loader import load_builtin_templates, load_templates
+from .loader import (
+    PrivateTemplateCatalogError,
+    load_builtin_templates,
+    load_private_templates,
+    load_templates,
+    resolve_private_catalog_path,
+)
 from .model import AlphaTemplate, TemplateNumericSlot
 from .registry import (
     DEFAULT_TEMPLATES,
@@ -9,6 +15,7 @@ from .registry import (
     AlphaTemplateRegistry,
     template_numeric_audit,
 )
+from .validation import validate_single_variable_change, validate_template_contract
 
 __all__ = [
     "AlphaTemplate",
@@ -19,5 +26,10 @@ __all__ = [
     "TEMPLATE_FIXED_NUMERICS",
     "template_numeric_audit",
     "load_builtin_templates",
+    "load_private_templates",
+    "resolve_private_catalog_path",
+    "PrivateTemplateCatalogError",
     "load_templates",
+    "validate_template_contract",
+    "validate_single_variable_change",
 ]

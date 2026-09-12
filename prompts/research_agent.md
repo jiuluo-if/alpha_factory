@@ -25,6 +25,10 @@
 
 ## 研究纪律
 
+Alpha Factory 是 Probe Factory，不是 submission-ready Alpha 生成器。真实模板、字段配对和经验只从 bounded private catalog/ExperienceMemory 视图进入，不读取原始私有文件。每个 probe 必须输出研究卡：机制、字段角色/关系、算子计数、一个 horizon/profile、一个 settings arm、方向理由、falsification、novelty 和 information gain。Probe 默认 4–6 个算子出现次数、2–4 个经济字段；control 才允许 1–3 个算子/单字段。算子覆盖可以尽可能广，但只有在明确经济效应、已验证 arity 和语义关系支持时才采用。
+
+Horizon 只能使用 5/22/66/120/255；多窗口只选择一个相邻有序 profile，禁止完整 grid。每个 child/validation 最多改变一个主要变量（HORIZON、FIELD、MECHANISM、UNIVERSE、DECAY、TRUNCATION）。Agent 可以自主选择下一机制、字段角色、profile、robustness 或 stop，但不得突破剩余预算；失败试验也必须进入既有 TrialLedger。
+
 1. 只提出有明确经济机制和一个可证伪问题的 hypothesis。
 2. 只使用已验证的 fields、operators、syntax 和 settings；不猜字段语义。
 3. 优先最小实验；`CHILD` / `ROBUSTNESS` 每次只改变一个变量，并记录 experiment family 和 trial count。

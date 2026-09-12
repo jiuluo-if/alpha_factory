@@ -1,14 +1,22 @@
-"""Fail-closed TOML loading for the built-in template resource."""
+"""Fail-closed loading for synthetic package examples and private catalogs."""
 
 import importlib.resources as resources
 import io
+import os
 import tomllib
+from pathlib import Path
 
-from .model import FIXED_NUMERICS, NUMBER_TOKEN_RE, AlphaTemplate, TemplateNumericSlot
+from .model import (
+    FIXED_NUMERICS,
+    HORIZON_LATTICE,
+    NUMBER_TOKEN_RE,
+    AlphaTemplate,
+    TemplateNumericSlot,
+)
 
 _KINDS = {"baseline", "economic"}
 _DIRECTIONS = {"long", "reversal"}
-_SLOTS = {"p", "s", "t", "data_field"}
+_SLOTS = {"p", "s", "t", "g", "data_field"}
 _GROUPS = {"default", "factory_default", "reversal", "relationship", "momentum", "candidate_scratch", "economic", "vector"}
 _REQUIRED = (
     "id", "version", "kind", "family", "expression", "required_slots",
@@ -16,6 +24,12 @@ _REQUIRED = (
     "expected_horizon", "falsification", "self_correlation_impact",
     "selection_groups",
 )
+
+
+class PrivateTemplateCatalogError(FileNotFoundError):
+    """Raised when a private catalog is not explicitly available."""
+
+    code = "PRIVATE_TEMPLATE_CATALOG_MISSING"
 
 
 def _text(value, name):
@@ -33,9 +47,12 @@ def _slot(raw, template_id):
         raise ValueError(f"{template_id}: slot {name} missing allowed_values")
     token = raw.get("token")
     token = str(token) if token is not None else str(raw.get("default"))
+    kind = _text(raw.get("kind", "window"), "numeric slot kind")
+    if kind == "RESEARCH_HORIZON" and any(value not in HORIZON_LATTICE for value in allowed):
+        raise ValueError(f"{template_id}: horizon slot must use the lattice")
     return TemplateNumericSlot(
         name=name,
-        kind=_text(raw.get("kind", "window"), "numeric slot kind"),
+        kind=kind,
         default=raw.get("default"),
         allowed_values=tuple(allowed),
         economic_role=_text(raw.get("economic_role"), "economic_role"),
@@ -44,7 +61,7 @@ def _slot(raw, template_id):
     )
 
 
-def _parse(document):
+def _parse(document, *, strict_schema=False):
     if not isinstance(document, dict) or not isinstance(document.get("templates"), list):
         raise ValueError("catalog must contain [[templates]] entries")
     templates = []
@@ -52,7 +69,13 @@ def _parse(document):
     for raw in document["templates"]:
         if not isinstance(raw, dict):
             raise ValueError("template entry must be a table")
-        missing = [key for key in _REQUIRED if key not in raw]
+        required = _REQUIRED
+        if strict_schema:
+            required = (*required, "role", "field_roles", "allowed_field_families",
+                        "field_relationship", "direction_reason",
+                        "allowed_horizon_profiles", "allowed_settings_arms",
+                        "mechanism_tags", "novelty_family")
+        missing = [key for key in required if key not in raw]
         if missing:
             raise ValueError(f"template missing required keys: {', '.join(missing)}")
         template_id = _text(raw["id"], "id")
@@ -77,6 +100,18 @@ def _parse(document):
         numeric_slots = tuple(_slot(item, template_id) for item in raw.get("numeric_slots", []))
         if len({slot.name for slot in numeric_slots}) != len(numeric_slots):
             raise ValueError(f"{template_id}: duplicate numeric slot name")
+        horizon_profiles = tuple(
+            tuple(int(value) for value in profile)
+            for profile in raw.get("allowed_horizon_profiles", [])
+        )
+        lattice_index = {value: index for index, value in enumerate(HORIZON_LATTICE)}
+        if any(
+            any(value not in lattice_index for value in profile)
+            or tuple(sorted(profile)) != profile
+            or any(lattice_index[b] != lattice_index[a] + 1 for a, b in zip(profile, profile[1:]))
+            for profile in horizon_profiles
+        ) or len(set(horizon_profiles)) != len(horizon_profiles):
+            raise ValueError(f"{template_id}: invalid horizon profile")
         templates.append(AlphaTemplate(
             template_id=template_id,
             version=_text(raw["version"], "version"),
@@ -95,8 +130,30 @@ def _parse(document):
             selection_groups=tuple(groups),
             selection_order=raw.get("selection_order", 1000),
             numeric_slots=numeric_slots,
+            role=raw.get("role"),
+            field_roles=tuple(raw.get("field_roles", [])),
+            fixed_field_bindings=tuple(raw.get("fixed_field_bindings", [])),
+            allowed_field_families=tuple(raw.get("allowed_field_families", [])),
+            field_relationship=_text(raw.get("field_relationship", "synthetic example"), "field_relationship"),
+            direction_reason=_text(raw.get("direction_reason", raw["economic_mechanism"]), "direction_reason"),
+            allowed_horizon_profiles=horizon_profiles,
+            allowed_settings_arms=tuple(raw.get("allowed_settings_arms", ["BASE"])),
+            mechanism_tags=tuple(raw.get("mechanism_tags", raw.get("tags", []))),
+            novelty_family=_text(raw.get("novelty_family", raw["family"]), "novelty_family"),
         ))
     result = tuple(templates)
+    if strict_schema:
+        for template in result:
+            if template.role == "CONTROL_ALPHA":
+                valid = 1 <= template.operator_count <= 3 and len(template.required_slots) == 1
+            elif template.role == "PROBE_ALPHA":
+                valid = 4 <= template.operator_count <= 6 and 2 <= len(template.required_slots) <= 4
+            else:
+                valid = False
+            if not valid:
+                raise ValueError(f"{template.template_id}: invalid role complexity/field gate")
+            if not template.economic_mechanism.strip() or not template.falsification.strip():
+                raise ValueError(f"{template.template_id}: economic mechanism and falsification required")
     for template in result:
         declared = {
             (str(slot.token or slot.default), int(slot.occurrence)): slot
@@ -138,3 +195,27 @@ def load_builtin_templates():
     )
     with resource.open("rb") as handle:
         return _parse(tomllib.load(handle))
+
+
+def resolve_private_catalog_path(explicit=None, *, environ=None, home=None):
+    """Resolve only explicit absolute paths; never search the repository."""
+    environ = os.environ if environ is None else environ
+    candidate = explicit or environ.get("WQB_ALPHA_TEMPLATE_CATALOG")
+    if candidate is None:
+        base = Path.home() if home is None else Path(home)
+        candidate = base / ".wqb_alpha_factory" / "private" / "alpha_templates.toml"
+    path = Path(candidate).expanduser()
+    if not path.is_absolute():
+        raise ValueError("private template catalog path must be absolute")
+    if not path.is_file():
+        raise PrivateTemplateCatalogError(
+            f"{PrivateTemplateCatalogError.code}: {path}"
+        )
+    return path
+
+
+def load_private_templates(source=None, *, environ=None, home=None):
+    """Load the local private catalog and fail closed when it is absent."""
+    path = resolve_private_catalog_path(source, environ=environ, home=home)
+    with path.open("rb") as handle:
+        return _parse(tomllib.load(handle), strict_schema=True)

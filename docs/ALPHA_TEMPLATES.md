@@ -1,24 +1,31 @@
 # Alpha templates
 
-`wqb_agent.alpha_templates` 是模板模型、内置 catalog、resource loader、registry 和 numeric audit 的唯一 owner。`alpha_factory.py` 只消费 registry；`candidate.py` 的 from-scratch 生成也复用同一套模板 binding path。
+`wqb_agent.alpha_templates` 是模板模型、loader、registry、numeric audit 和
+operator coverage 的唯一 owner。tracked `catalog/builtin.toml` 仅含明确的
+TOY/SYNTHETIC/NON-RESEARCH 示例，绝不是 production fallback。
 
-## 新增模板
+## Private catalog
 
-1. 编辑 `wqb_agent/alpha_templates/catalog/builtin.toml`，新增一个 `[[templates]]`。
-2. 声明唯一 `id`、`version`、`kind`（`baseline` 或 `economic`）、`family`、`expression` 和 `required_slots`。
-3. 声明显式 `economic_mechanism`、`direction`、`direction_transform`、`expected_horizon`、`falsification` 与 `self_correlation_impact`。
-4. 把模板加入适用的 `selection_groups`；group membership 属于 catalog metadata，不在 Python 中维护 template ID 集合。
-5. 只有表达式中真正允许研究轮换的 numeric literal 才声明 `numeric_slots`，并提供 `allowed_values`。安全常量和算子必需常量保持固定，不声明为 slot。
+真实模板、私有字段、固定字段配对、表达式、经验和研究证据只允许存在
+gitignored local catalog。加载顺序是显式绝对路径、
+`WQB_ALPHA_TEMPLATE_CATALOG`、`~/.wqb_alpha_factory/private/alpha_templates.toml`；
+缺失返回 `PRIVATE_TEMPLATE_CATALOG_MISSING`，不搜索 cwd/父目录，也不回退公开 catalog。
 
-## 修改与验证
+## Generation contract
 
-loader 通过 `importlib.resources` 读取 TOML，兼容 source checkout、editable install 和 wheel。它会拒绝重复 ID、缺字段、非法 kind/slot/group/direction、重复 slot name、slot token/occurrence 不存在、缺 allowed values 和未分类 numeric literal；不会静默跳过、自动修复或回退默认模板。
+私有 `PROBE_ALPHA` 必须声明经济机制、字段角色/关系、方向及理由、falsification、
+expected horizon、self-correlation impact、novelty family 和 settings arms，并使用
+4–6 个算子出现次数、2–4 个经济字段。`CONTROL_ALPHA` 才可使用 1–3 个算子和单字段，
+且不因 control 结果直接成为 submission candidate。
 
-模板 fingerprint 只描述 structural identity（family、expression、required slots、stage path），不包含 rationale、日期或文档叙事。平台 operator 语法仍由 [`reference/OPERATORS_CHEATSHEET.md`](reference/OPERATORS_CHEATSHEET.md) 维护。
+研究窗口只使用 `5, 22, 66, 120, 255`。多窗口只选一个有序相邻 profile，不做笛卡尔积；
+Universe、Decay、Truncation arm 每次只改变一个主要变量。算子覆盖应在算子已验证且有
+明确经济效应时尽可能广泛，但不能为了覆盖率无意义叠加复杂度。
 
-```powershell
-python -m unittest tests.test_alpha_template_catalog
-python -m unittest tests.test_candidate_builder tests.test_factory_boundaries
-python -m py_compile wqb_agent/alpha_templates/model.py wqb_agent/alpha_templates/loader.py wqb_agent/alpha_templates/registry.py wqb_agent/alpha_factory.py wqb_agent/candidate.py
-python -m ruff check wqb_agent/alpha_templates wqb_agent/alpha_factory.py wqb_agent/candidate.py
-```
+## Schema and validation
+
+loader 使用 `importlib.resources`/`tomllib`，对重复 ID、缺字段、非法 slot/group/direction、
+非 lattice horizon、未声明数字、无效 slot 和缺失经济语义 fail-closed。fingerprint 分离
+structural、mechanism、instantiation 三类身份；窗口变化不是新经济 Alpha。
+
+新增模板规则详见同目录 [`AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md)。

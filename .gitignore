@@ -27,6 +27,8 @@ config.local.json
 settings.local.*
 local.*
 *.local.json
+/.wqb_alpha_factory/private/
+alpha_templates.private.toml
 
 # Canonical research state and runtime evidence
 .wqb_state/

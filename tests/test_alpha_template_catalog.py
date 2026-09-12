@@ -15,42 +15,42 @@ from wqb_agent.candidate import CandidateBuilder
 class TestAlphaTemplateCatalog(unittest.TestCase):
     def test_builtin_catalog_loads_from_package_resource(self):
         registry = AlphaTemplateRegistry()
-        self.assertGreaterEqual(len(registry.catalog()), 30)
+        self.assertGreaterEqual(len(registry.catalog()), 5)
         self.assertEqual(len({row["template_id"] for row in registry.catalog()}), len(registry.catalog()))
 
     def test_direction_is_explicit_metadata(self):
-        template = AlphaTemplateRegistry().get("reversal_zscore_20")
-        self.assertEqual(template.direction, "reversal")
-        self.assertEqual(template.catalog_entry()["direction"], "reversal")
+        template = AlphaTemplateRegistry().get("toy_confirmation")
+        self.assertEqual(template.direction, "long")
+        self.assertEqual(template.catalog_entry()["direction"], "long")
 
     def test_selection_uses_catalog_groups_and_fails_closed(self):
         registry = AlphaTemplateRegistry()
         self.assertEqual(
             [item.template_id for item in registry.select({})],
-            ["group_neutralized_rank", "rank_level", "zscore_level"],
+            ["toy_control_rank", "toy_control_zscore"],
         )
         self.assertEqual(
             [item.template_id for item in registry.select({"direction": "reversal"})],
-            ["change_delta_5", "rank_level", "reversal_zscore_20"],
+            [],
         )
         self.assertEqual(
             [item.template_id for item in registry.select({"tags": ["relationship"]})],
-            ["rank_level", "spread_rank", "zscore_level"],
+            ["toy_confirmation", "toy_relative_change", "toy_scale_surprise"],
         )
         self.assertEqual(
             [item.template_id for item in registry.select({"tags": ["momentum"]})],
-            ["change_delta_5", "momentum_mean_20", "rank_level"],
+            [],
         )
         self.assertEqual(
-            [item.template_id for item in registry.select({"template_ids": ["rank_level"]})],
-            ["rank_level"],
+            [item.template_id for item in registry.select({"template_ids": ["toy_control_rank"]})],
+            ["toy_control_rank"],
         )
         self.assertEqual(registry.select({"template_ids": ["missing"]}), [])
         self.assertEqual(registry.select({"template_family": "missing"}), [])
 
     def test_numeric_audit_rejects_unclassified_literal(self):
         registry = AlphaTemplateRegistry()
-        broken = registry.get("rank_level").__class__(
+        broken = registry.get("toy_control_rank").__class__(
             template_id="broken",
             version="1",
             kind="baseline",
@@ -99,9 +99,9 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
 
     def test_from_scratch_comes_from_registry_and_has_provenance(self):
         candidates = CandidateBuilder().build(
-            {"direction": "long"}, [{"id": "returns"}], None, count=8
+            {"direction": "long"}, [{"id": "returns"}], None, count=2
         )
-        self.assertEqual(len(candidates), 8)
+        self.assertEqual(len(candidates), 2)
         self.assertTrue(all(item.get("template_id") for item in candidates))
         self.assertTrue(all(item.get("template_fingerprint") for item in candidates))
         self.assertTrue(all(item.get("template_catalog_source") for item in candidates))

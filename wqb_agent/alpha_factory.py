@@ -317,9 +317,13 @@ def _derive_field_semantic_traits(profile):
 class AlphaFactory:
     """Instantiate templates into non-submitting candidate records."""
 
-    def __init__(self, neutralization="SUBINDUSTRY", registry=None):
+    def __init__(self, neutralization="SUBINDUSTRY", registry=None,
+                 catalog_path=None, require_private=False):
         self.neutralization = str(neutralization or "SUBINDUSTRY").lower()
-        self.registry = registry or AlphaTemplateRegistry()
+        self.registry = registry or (
+            AlphaTemplateRegistry.from_private(catalog_path)
+            if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
+        )
         self.last_feasibility = None
         self.last_budget_audit = {}
 
@@ -555,10 +559,10 @@ class AlphaFactory:
                 continue
             seen.add(identity)
             ref = dict(ref_input)
-            ref.setdefault("catalog_id", f"builtin:{template.template_id}")
+            ref.setdefault("catalog_id", f"private:{template.template_id}")
             ref.setdefault("skeleton_fingerprint", template.fingerprint)
             ref.setdefault("lifecycle", "runnable")
-            ref.setdefault("source", "newwqb_builtin")
+            ref.setdefault("source", "private_or_synthetic_catalog")
             ref.setdefault("slot_name", "p")
             slot_values = {"p": primary, "data_field": primary,
                            "g": self.neutralization}
@@ -607,7 +611,16 @@ class AlphaFactory:
                     "template_id": template.template_id,
                     "template_version": template.version,
                     "template_fingerprint": template.fingerprint,
-                    "template_catalog_source": "wqb_agent.alpha_templates.catalog/builtin.toml",
+                    "template_structural_fingerprint": template.structural_fingerprint,
+                    "template_mechanism_fingerprint": template.mechanism_fingerprint,
+                    "template_role": template.role,
+                    "template_operator_count": template.operator_count,
+                    "template_field_roles": list(template.field_roles),
+                    "template_field_relationship": template.field_relationship,
+                    "template_novelty_family": template.novelty_family,
+                    "template_allowed_settings_arms": list(template.allowed_settings_arms),
+                    "template_allowed_horizon_profiles": [list(profile) for profile in template.allowed_horizon_profiles],
+                    "template_catalog_source": "private_or_synthetic_catalog",
                     "template_family": template.family,
                     "template_stage_path": template.stage_path,
                     "template_bindings": dict(slot_values),
@@ -637,6 +650,10 @@ class AlphaFactory:
 
     def catalog(self):
         return self.registry.catalog()
+
+    def operator_coverage(self, available=None):
+        """Expose registry coverage without inventing operator usage."""
+        return self.registry.operator_coverage(available)
 
     @staticmethod
     def _profile_dataset(profile):
@@ -1804,7 +1821,13 @@ class AlphaFactory:
                             "template_stage_path", "template_ref", "template_slots",
                             "relationship_audit", "factory_version",
                             "template_version", "template_fingerprint",
-                            "template_catalog_source", "template_bindings")
+                            "template_catalog_source", "template_bindings",
+                            "template_structural_fingerprint",
+                            "template_mechanism_fingerprint", "template_role",
+                            "template_operator_count", "template_field_roles",
+                            "template_field_relationship", "template_novelty_family",
+                            "template_allowed_settings_arms",
+                            "template_allowed_horizon_profiles")
             })
             proposal["proposal_origin"] = "factory"
             assembled.append(proposal)

@@ -10,9 +10,13 @@ from .research_guard import is_direction_only_change, overfit_expression_reason
 # Bounded, knowledge-backed single-step changes only. No random operator
 # stacking, no arbitrary "special window" hunting.
 class CandidateBuilder:
-    def __init__(self, neutralization="SUBINDUSTRY"):
+    def __init__(self, neutralization="SUBINDUSTRY", catalog_path=None,
+                 require_private=False):
         self.neutralization = neutralization.lower()
-        self.factory = AlphaFactory(neutralization=neutralization)
+        self.factory = AlphaFactory(
+            neutralization=neutralization, catalog_path=catalog_path,
+            require_private=require_private,
+        )
 
     def build(self, hypothesis, fields, current_best, count=6):
         if AlphaFactory.requested(hypothesis) and not current_best:

@@ -23,7 +23,9 @@
 
 `credentials.py` 是 local-only credential resolver，不依赖 Client、requests、Agent、Simulator、proposal execution 或 state。它只接受完整来源：显式 Client pair、WQB 环境变量、显式绝对路径 `WQB_CREDENTIALS_ENV_FILE`、home credentials file；partial、malformed、unreadable source 必须 fail-closed，不得从 cwd/父目录/package 自动发现 `.env` 或跨源拼接。`client.py` 继续拥有认证协议和 retry/Session 机制，只消费 resolver 结果。
 
-`alpha_templates/` 是 Alpha template model、TOML catalog、resource loader、registry 与 numeric audit 的唯一 owner。新增模板只编辑 `alpha_templates/catalog/builtin.toml`，声明稳定 metadata、字段 slots、selection groups 和 numeric slots；不要在 `alpha_factory.py` 或 `candidate.py` 增加第二份 skeleton。loader 使用 `importlib.resources`/`tomllib`，缺字段、重复 ID、非法 group/direction、未声明数字或无效 slot 必须 fail-closed。`alpha_factory.py` 仅通过 registry 消费模板并保留旧 import 的 compatibility re-export；`CandidateBuilder` 的 from-scratch path 必须复用该 binding path。
+`alpha_templates/` 是 Alpha template model、私有 catalog loader、registry 与 numeric/operator audit 的唯一 owner；其局部生成规则见 `wqb_agent/alpha_templates/AGENTS.md`。tracked `builtin.toml` 只能是 TOY/SYNTHETIC/NON-RESEARCH 示例，真实模板、私有字段、固定配对、表达式和经验只能在 gitignored private catalog/ExperienceMemory 中。私有 catalog 只能由显式绝对路径、`WQB_ALPHA_TEMPLATE_CATALOG` 或用户 home private 默认路径加载，缺失必须 `PRIVATE_TEMPLATE_CATALOG_MISSING`，严禁回退 public catalog。
+
+探针模板必须有明确经济机制、字段关系、方向理由、horizon、falsification、self-correlation impact 与 novelty；默认 4–6 个算子出现次数、2–4 个经济字段，只有 control 可用 1–3 个算子/单字段。horizon 仅使用 5/22/66/120/255；多窗口只能使用相邻有序 profile，禁止笛卡尔积。算子覆盖应在经济效应明确且 operator 已验证时尽可能广泛，但不得为覆盖率无意义叠加算子。配置 arm 每次只改一个主要变量。
 
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 

@@ -76,7 +76,9 @@ def build_runtime_components(client, config):
         os.path.join(state_dir, "trial_ledger.jsonl"), persist=False
     )
     builder = CandidateBuilder(
-        neutralization=config.simulation_config.settings["neutralization"]
+        neutralization=config.simulation_config.settings["neutralization"],
+        catalog_path=config.runtime.alpha_template_catalog,
+        require_private=True,
     )
     discovery = FieldDiscovery(
         client,

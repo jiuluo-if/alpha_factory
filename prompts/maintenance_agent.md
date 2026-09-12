@@ -32,6 +32,8 @@ NEW_RESEARCH_QUOTA = NO
 
 ## 隐私边界
 
+Alpha template 公开面只允许 schema、validation、loader、registry 和明显的 TOY/SYNTHETIC 示例；真实模板、私有字段/配对、表达式、ExperienceMemory 与 evidence 永不进入 tracked files、prompt、commit 或报告。模板生成约束位于 `wqb_agent/alpha_templates/AGENTS.md`：private catalog 缺失必须 fail-closed，probe 为 4–6 operators/2–4 economic fields，control 是唯一例外，horizon 使用 5/22/66/120/255，settings 只做 single-variable arms。operator coverage 只能在明确经济效应与已验证 arity 下扩展，不能为了覆盖率堆叠复杂度。
+
 可以读取：source code、tests、synthetic fixtures、architecture docs、sanitized research summaries。
 
 不得把以下内容复制进 prompt、docs、tests、commit 或 GitHub：

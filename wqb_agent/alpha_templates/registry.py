@@ -1,7 +1,8 @@
 """Catalog-backed template registry and numeric audit."""
 
-from .loader import load_builtin_templates
+from .loader import load_builtin_templates, load_private_templates
 from .model import FIXED_NUMERICS, NUMBER_TOKEN_RE, AlphaTemplate
+from .validation import validate_template_contract
 
 TEMPLATE_FIXED_NUMERICS = FIXED_NUMERICS
 
@@ -47,9 +48,15 @@ def template_numeric_audit(templates=None):
 class AlphaTemplateRegistry:
     """Immutable-by-default view over the validated catalog."""
 
-    def __init__(self, templates=None):
+    def __init__(self, templates=None, *, private_catalog=None):
         self._templates = {}
-        source = load_builtin_templates() if templates is None else tuple(templates)
+        if templates is not None and private_catalog is not None:
+            raise ValueError("choose templates or private_catalog, not both")
+        source = (
+            load_private_templates(private_catalog)
+            if private_catalog is not None
+            else load_builtin_templates() if templates is None else tuple(templates)
+        )
         for template in source:
             self.register(template)
         audit = template_numeric_audit(tuple(self._templates.values()))
@@ -61,9 +68,30 @@ class AlphaTemplateRegistry:
             raise TypeError("template must be AlphaTemplate")
         if template.template_id in self._templates:
             raise ValueError(f"duplicate template_id: {template.template_id}")
-        if template.kind == "economic" and not 3 <= template.operator_count <= 8:
-            raise ValueError(f"economic template {template.template_id} operator count invalid")
+        contract = validate_template_contract(template)
+        if not contract["ok"]:
+            raise ValueError(f"template {template.template_id} contract: " + ", ".join(contract["errors"]))
         self._templates[template.template_id] = template
+
+    @classmethod
+    def from_private(cls, path=None):
+        """Build the production registry without a public-catalog fallback."""
+        return cls(private_catalog=path)
+
+    def operator_coverage(self, available=None):
+        """Report broad operator use among semantically eligible templates."""
+        used = {name.lower() for template in self._templates.values()
+                if template.role == "PROBE_ALPHA"
+                for name in template.operator_names}
+        available_set = None if available is None else {
+            str(name).lower() for name in available
+        }
+        return {
+            "used": sorted(used),
+            "available": sorted(available_set) if available_set is not None else None,
+            "uncovered": sorted(available_set - used) if available_set is not None else [],
+            "policy": "cover operators when an explicit economic mechanism supports them; never add operators for coverage alone",
+        }
 
     def get(self, template_id):
         return self._templates.get(template_id)

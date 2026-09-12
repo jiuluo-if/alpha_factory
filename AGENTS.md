@@ -146,6 +146,13 @@ python main.py run-proposals
 
 ## 修改与验证
 
+### Alpha Probe Factory V1 constraints
+
+- The tracked repository is a public engineering surface: real research templates, private field IDs/pairings, expressions, priors, ExperienceMemory, trajectory, and research evidence are local-only and must never be committed, documented, or printed in reports.
+- `wqb_agent.alpha_templates` is the only template owner. Public package data is synthetic only. Production/private loading is explicit-path → `WQB_ALPHA_TEMPLATE_CATALOG` → user-home private catalog and fails closed with `PRIVATE_TEMPLATE_CATALOG_MISSING`; it never searches cwd/parents or falls back to public templates.
+- Probe templates require explicit mechanism, field relationship, direction reason, falsification, expected horizon, self-correlation impact, novelty, 4–6 operator occurrences, and 2–4 economic fields. Controls may use 1–3 operators and one field. Operator coverage should be broad only where each operator has a justified economic effect and verified arity; coverage alone never justifies complexity.
+- Horizon lattice is 5/22/66/120/255. One experiment selects one horizon/profile; multi-window profiles are adjacent and ordered, never a Cartesian grid. Settings arms are single-variable (`Universe`, `Decay`, or `Truncation`). Factory role is diverse probe generation, not direct submission-ready Alpha production; promotion is successive and failed trials remain accounted for in the existing TrialLedger/ExperienceMemory.
+
 优先删除重复概念，合并而不是新增第二套 state、proposal contract、evaluation、facade 或 manager/orchestrator。研究策略不要硬编码成机制。
 
 本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion，普通本地修改默认不跑 whole suite。

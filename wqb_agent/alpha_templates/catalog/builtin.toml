@@ -1,819 +1,164 @@
-# Read-only built-in Alpha template catalog.
-
+# PUBLIC SYNTHETIC CATALOG ONLY. These toy examples are never a fallback for
+# the local private research catalog and contain no research field IDs.
 
 [[templates]]
-id = "rank_level"
-version = "1"
+id = "toy_control_rank"
+version = "2"
+role = "CONTROL_ALPHA"
 kind = "baseline"
-family = "cross_sectional_rank"
+family = "toy_control"
 expression = "rank({p})"
 required_slots = ["p"]
-stage_path = "L0:raw -> L1:cross_sectional -> L2:none"
-economic_mechanism = "横截面排序，作为字段机制的最小基线。"
+stage_path = "toy:field -> cross_sectional_rank"
+economic_mechanism = "TOY synthetic control for cross-sectional ordering."
+field_roles = ["toy_signal"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "single toy field; control exception"
 direction = "long"
+direction_reason = "TOY direction only; not a research claim."
 direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["default", "factory_default", "reversal", "relationship", "momentum", "candidate_scratch"]
+expected_horizon = "TOY_UNSPECIFIED"
+falsification = "Any toy fixture mismatch falsifies this control."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = []
+allowed_settings_arms = ["BASE"]
+mechanism_tags = ["TOY", "CONTROL"]
+novelty_family = "TOY_CONTROL"
+selection_groups = ["default", "factory_default", "candidate_scratch"]
 selection_order = 10
 
 [[templates]]
-id = "zscore_level"
-version = "1"
+id = "toy_control_zscore"
+version = "2"
+role = "CONTROL_ALPHA"
 kind = "baseline"
-family = "cross_sectional_standardize"
+family = "toy_control"
 expression = "zscore({p})"
 required_slots = ["p"]
-stage_path = "L0:raw -> L1:cross_sectional -> L2:none"
-economic_mechanism = "横截面标准化，检验信号强度而非绝对尺度。"
+stage_path = "toy:field -> cross_sectional_zscore"
+economic_mechanism = "TOY synthetic control for cross-sectional standardization."
+field_roles = ["toy_signal"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "single toy field; control exception"
 direction = "long"
+direction_reason = "TOY direction only; not a research claim."
 direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["default", "factory_default", "relationship", "candidate_scratch"]
-selection_order = 30
-
-[[templates]]
-id = "reversal_zscore_20"
-version = "1"
-kind = "baseline"
-family = "reversal"
-expression = "-rank(ts_zscore({p}, 20))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts_zscore -> L2:rank"
-economic_mechanism = "检验短期异常值的反转机制。"
-direction = "reversal"
-direction_transform = "reverse"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["reversal", "factory_default"]
-[[templates.numeric_slots]]
-name = "short_window"
-kind = "window"
-default = 20
-allowed_values = [5, 20, 60]
-economic_role = "短期反转窗口"
-token = "20"
-occurrence = 0
-
-[[templates]]
-id = "momentum_mean_20"
-version = "1"
-kind = "baseline"
-family = "momentum"
-expression = "rank(ts_mean({p}, 20))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts_mean -> L2:rank"
-economic_mechanism = "检验慢化后的持续性机制。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["momentum", "factory_default"]
-[[templates.numeric_slots]]
-name = "smoothing_window"
-kind = "window"
-default = 20
-allowed_values = [5, 20, 60]
-economic_role = "趋势平滑窗口"
-token = "20"
-occurrence = 0
-
-[[templates]]
-id = "change_delta_5"
-version = "1"
-kind = "baseline"
-family = "change"
-expression = "rank(ts_delta({p}, 5))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts_delta -> L2:rank"
-economic_mechanism = "检验字段变化而非水平本身。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["reversal", "momentum", "candidate_scratch", "factory_default"]
-selection_order = 90
-[[templates.numeric_slots]]
-name = "delta_window"
-kind = "window"
-default = 5
-allowed_values = [5, 10, 20]
-economic_role = "变化观察窗口"
-token = "5"
-occurrence = 0
-
-[[templates]]
-id = "group_neutralized_rank"
-version = "1"
-kind = "baseline"
-family = "group_neutralized"
-expression = "group_neutralize(rank({p}), {g})"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:rank -> L2:group_neutralize"
-economic_mechanism = "检验去除组别暴露后的增量信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
+expected_horizon = "TOY_UNSPECIFIED"
+falsification = "Any toy fixture mismatch falsifies this control."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = []
+allowed_settings_arms = ["BASE"]
+mechanism_tags = ["TOY", "CONTROL"]
+novelty_family = "TOY_CONTROL"
 selection_groups = ["default", "candidate_scratch"]
-selection_order = 40
-
-[[templates]]
-id = "spread_rank"
-version = "1"
-kind = "baseline"
-family = "relationship_spread"
-expression = "rank({p} - {s})"
-required_slots = ["p", "s"]
-stage_path = "L0:spread -> L1:rank -> L2:none"
-economic_mechanism = "仅作为语义互补字段审阅后的差分构造。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["relationship"]
-
-[[templates]]
-id = "vector_mean_rank"
-version = "1"
-kind = "baseline"
-family = "vector_aggregation"
-expression = "rank(vec_avg({p}))"
-required_slots = ["p"]
-stage_path = "L0:VECTOR -> L1:vec_avg(MATRIX) -> L2:rank"
-economic_mechanism = "先把真实 VECTOR 字段聚合为 MATRIX，再检验其横截面排序信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["vector", "factory_default"]
-
-[[templates]]
-id = "quality_smooth_change"
-version = "1"
-kind = "economic"
-family = "quality_change"
-expression = "rank(ts_decay_linear(ts_delta({p}, 5), 10))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:change -> L2:decay -> L3:rank"
-economic_mechanism = "平滑盈利或质量指标的变化，检验信息持续性而非单日跳变。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-[[templates.numeric_slots]]
-name = "delta_window"
-kind = "window"
-default = 5
-allowed_values = [5, 10, 20]
-economic_role = "质量变化窗口"
-token = "5"
-occurrence = 0
-[[templates.numeric_slots]]
-name = "smoothing_window"
-kind = "window"
-default = 10
-allowed_values = [5, 10, 20]
-economic_role = "变化平滑窗口"
-token = "10"
-occurrence = 0
-
-[[templates]]
-id = "reversal_vol_adjusted"
-version = "1"
-kind = "economic"
-family = "risk_adjusted_reversal"
-expression = "rank(divide(reverse(ts_delta({p}, 5)), add(ts_std_dev({p}, 20), 0.001)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:delta/reversal -> L2:volatility adjustment -> L3:rank"
-economic_mechanism = "把短期反转幅度按自身波动率调整，区分异常变化与正常噪声。"
-direction = "reversal"
-direction_transform = "reverse"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-[[templates.numeric_slots]]
-name = "delta_window"
-kind = "window"
-default = 5
-allowed_values = [5, 10, 20]
-economic_role = "反转变化窗口"
-token = "5"
-occurrence = 0
-[[templates.numeric_slots]]
-name = "vol_window"
-kind = "window"
-default = 20
-allowed_values = [10, 20, 60]
-economic_role = "波动率估计窗口"
-token = "20"
-occurrence = 0
-
-[[templates]]
-id = "persistent_level"
-version = "1"
-kind = "economic"
-family = "persistent_level"
-expression = "rank(ts_zscore(ts_mean({p}, 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:mean -> L2:longer-horizon zscore -> L3:rank"
-economic_mechanism = "检验平滑后的相对高低是否具有持续性信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "downside_volatility"
-version = "1"
-kind = "economic"
-family = "downside_risk"
-expression = "reverse(rank(ts_std_dev(ts_delta({p}, 5), 20)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:change -> L2:volatility -> L3:rank/reversal"
-economic_mechanism = "高变化波动代表不稳定风险，检验风险暴露与未来收益的反向关系。"
-direction = "long"
-direction_transform = "reverse"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "missing_resilient_change"
-version = "1"
-kind = "economic"
-family = "data_resilient_change"
-expression = "rank(ts_delta(ts_backfill({p}, 20), 5))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:backfill -> L2:change -> L3:rank"
-economic_mechanism = "在受控回看窗口内处理缺失后检验信息修正，避免覆盖率造成假信号。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "robust_cross_section"
-version = "1"
-kind = "economic"
-family = "robust_cross_section"
-expression = "rank(winsorize(ts_delta({p}, 5)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:change -> L2:winsorize -> L3:rank"
-economic_mechanism = "对 5 日变化先截尾抑制离群冲击，再检验稳健横截面相对变化信号。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "distributional_change"
-version = "1"
-kind = "economic"
-family = "distributional_change"
-expression = "rank(ts_zscore(ts_delta({p}, 5), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:change -> L2:own-history zscore -> L3:rank"
-economic_mechanism = "当日变化相对自身 60 日变化历史的异常程度（surprise 机制），检验持续性变化之外的横截面信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "turnover_controlled_change"
-version = "1"
-kind = "economic"
-family = "turnover_control"
-expression = "hump(rank(ts_delta({p}, 5)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:change -> L2:rank -> L3:hump"
-economic_mechanism = "对变化信号限制日间跳动（默认 hump 宽度），检验降低换手后的净经济价值。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "event_triggered_signal"
-version = "1"
-kind = "economic"
-family = "event_trigger"
-expression = "trade_when(ts_rank({p}, 20) > 0.8, rank(ts_delta({p}, 5)), ts_rank({p}, 20) < 0.2)"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts_rank regime -> L2:event trigger -> L3:rank"
-economic_mechanism = "只在历史极端区间触发交易，检验事件条件下的延续或反转。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "group_relative_change"
-version = "1"
-kind = "economic"
-family = "group_relative_change"
-expression = "group_neutralize(rank(ts_delta({p}, 20)), {g})"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:change -> L2:rank -> L3:group neutralize"
-economic_mechanism = "剔除行业或板块共同变化，检验组内相对修正是否有增量信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "group_relative_extreme"
-version = "1"
-kind = "economic"
-family = "group_relative_extreme"
-expression = "group_zscore(rank(ts_zscore({p}, 20)), {g})"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:time-series zscore -> L2:group zscore"
-economic_mechanism = "比较同组内相对于自身历史的异常程度，检验组内异质性。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "group_filled_rank"
-version = "1"
-kind = "economic"
-family = "group_data_repair"
-expression = "rank(subtract(ts_backfill({p}, 20), group_mean(ts_backfill({p}, 20), 1, {g})))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts backfill -> L2:group mean -> L3:deviation rank"
-economic_mechanism = "受控窗口修复缺失后，检验个体相对组均值的偏差位置，区分覆盖率与信号。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "vector_persistent_signal"
-version = "1"
-kind = "economic"
-family = "vector_persistence"
-expression = "rank(ts_zscore(ts_mean(vec_avg({p}), 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:VECTOR -> L1:vec_avg -> L2:mean -> L3:zscore -> L4:rank"
-economic_mechanism = "将真实 VECTOR 聚合后检验平滑、长期相对异常信号。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "vector_change_signal"
-version = "1"
-kind = "economic"
-family = "vector_change"
-expression = "rank(ts_delta(ts_decay_linear(vec_sum({p}), 5), 5))"
-required_slots = ["p"]
-stage_path = "L0:VECTOR -> L1:vec_sum -> L2:decay -> L3:delta -> L4:rank"
-economic_mechanism = "检验向量总量的平滑变化是否代表集体信息更新。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "relative_spread_change"
-version = "1"
-kind = "economic"
-family = "relative_spread_change"
-expression = "rank(ts_delta(subtract({p}, {s}), 5))"
-required_slots = ["p", "s"]
-stage_path = "L0:two fields -> L1:spread -> L2:delta -> L3:rank"
-economic_mechanism = "只有语义互补字段才允许构造差值，检验相对变化而非单字段水平。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "relative_ratio_extreme"
-version = "1"
-kind = "economic"
-family = "relative_ratio"
-expression = "rank(ts_zscore(divide({p}, add(abs({s}), 0.001)), 20))"
-required_slots = ["p", "s"]
-stage_path = "L0:two fields -> L1:safe ratio -> L2:time-series zscore -> L3:rank"
-economic_mechanism = "用安全分母构造经济比例，再检验比例异常，避免无保护除零。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "relative_covariance"
-version = "1"
-kind = "economic"
-family = "relative_covariance"
-expression = "rank(ts_zscore(ts_covariance({p}, {s}, 20), 60))"
-required_slots = ["p", "s"]
-stage_path = "L0:two fields -> L1:covariance -> L2:long-horizon zscore -> L3:rank"
-economic_mechanism = "检验两个经济量的共同变化强度是否具有相对异常信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "relative_correlation_regime"
-version = "1"
-kind = "economic"
-family = "relative_correlation"
-expression = "rank(ts_zscore(ts_corr({p}, {s}, 20), 60))"
-required_slots = ["p", "s"]
-stage_path = "L0:two fields -> L1:correlation -> L2:regime zscore -> L3:rank"
-economic_mechanism = "检验两类互补信息同步程度的变化，而非简单堆叠字段。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "generic_pair_spread_change"
-version = "1"
-kind = "economic"
-family = "generic_multi_field_spread"
-expression = "rank(ts_delta(subtract({data_field}, {s}), 5))"
-required_slots = ["data_field", "s"]
-stage_path = "L0:generic fields -> L1:spread -> L2:delta -> L3:rank"
-economic_mechanism = "用动态主字段与语义互补字段的差值检验相对变化，不绑定 low 等具体字段名。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "generic_pair_ratio_extreme"
-version = "1"
-kind = "economic"
-family = "generic_multi_field_ratio"
-expression = "rank(ts_zscore(divide({data_field}, add(abs({s}), 0.001)), 20))"
-required_slots = ["data_field", "s"]
-stage_path = "L0:generic fields -> L1:safe ratio -> L2:zscore -> L3:rank"
-economic_mechanism = "对任意可兼容字段构造受保护比例，检验相对极端状态而非字段名称本身。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "generic_triple_confirmation"
-version = "1"
-kind = "economic"
-family = "generic_multi_field_confirmation"
-expression = "rank(add(ts_zscore({data_field}, 20), add(ts_zscore({s}, 20), ts_zscore({t}, 20))))"
-required_slots = ["data_field", "s", "t"]
-stage_path = "L0:generic fields -> L1:three standardized legs -> L2:additive confirmation -> L3:rank"
-economic_mechanism = "将三个动态选择的互补字段标准化后检验一致性确认，避免把 low 等名称硬编码成机制。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "group_centered_level"
-version = "1"
-kind = "economic"
-family = "group_centered_level"
-expression = "group_scale(group_mean(ts_zscore({p}, 20), 1, {g}), {g})"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts zscore -> L2:group mean -> L3:group scale"
-economic_mechanism = "先比较字段相对自身历史的位置，再用组内中心和尺度衡量共同偏离。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "extreme_location_reversal"
-version = "1"
-kind = "economic"
-family = "extreme_location"
-expression = "reverse(rank(ts_arg_max(ts_zscore({p}, 20), 60)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts zscore -> L2:arg max -> L3:rank/reversal"
-economic_mechanism = "识别指标处在历史极端高位的资产，检验极端状态后的均值回归。"
-direction = "long"
-direction_transform = "reverse"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "extreme_low_continuation"
-version = "1"
-kind = "economic"
-family = "extreme_low"
-expression = "rank(ts_arg_min(ts_zscore({p}, 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts zscore -> L2:arg min -> L3:rank"
-economic_mechanism = "识别长期低位但正在改善的指标，检验低位修复的持续性。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "innovation_surprise"
-version = "1"
-kind = "economic"
-family = "innovation_surprise"
-expression = "rank(ts_zscore(ts_av_diff({p}, 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:average deviation -> L2:long zscore -> L3:rank"
-economic_mechanism = "提取当前值相对近期平均的创新程度，区分水平与新信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "delayed_confirmation"
-version = "1"
-kind = "economic"
-family = "delayed_confirmation"
-expression = "rank(ts_zscore(ts_delta(ts_delay({p}, 5), 5), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:delay -> L2:delta -> L3:zscore -> L4:rank"
-economic_mechanism = "用滞后信息构造确认信号，检验信息扩散而非同步反应。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "accumulated_change"
-version = "1"
-kind = "economic"
-family = "accumulated_change"
-expression = "rank(ts_zscore(ts_sum(ts_delta({p}, 5), 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:delta -> L2:sum -> L3:zscore -> L4:rank"
-economic_mechanism = "累计多个短期变化，检验渐进式信息积累的经济含义。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "distribution_regime"
-version = "1"
-kind = "economic"
-family = "distribution_regime"
-expression = "rank(ts_rank(ts_zscore({p}, 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:ts zscore -> L2:own-history ts rank -> L3:rank"
-economic_mechanism = "把 20 日平滑相对水平放回自身 60 日历史分位（状态分位数），识别状态切换而非绝对水平。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "adaptive_scale_change"
-version = "1"
-kind = "economic"
-family = "adaptive_scale_change"
-expression = "rank(ts_scale(ts_delta({p}, 5), 20))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:delta -> L2:ts scale -> L3:rank"
-economic_mechanism = "按近期尺度标准化变化，比较不同波动环境下的冲击强度。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "trend_residual"
-version = "1"
-kind = "economic"
-family = "trend_residual"
-expression = "rank(ts_regression(ts_delta({p}, 5), ts_step(1), 20))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:delta -> L2:regression -> L3:rank"
-economic_mechanism = "剥离时间趋势后的变化残差，检验非趋势性信息冲击。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "compounding_pressure"
-version = "1"
-kind = "economic"
-family = "compounding_pressure"
-expression = "rank(ts_zscore(ts_product(add({p}, 1), 10), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:additive shift -> L2:product -> L3:zscore -> L4:rank"
-economic_mechanism = "将连续小幅变化视为复合效应，检验累积压力或改善是否被低估。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "data_quality_penalty"
-version = "1"
-kind = "economic"
-family = "data_quality_penalty"
-expression = "reverse(rank(ts_zscore(ts_count_nans({p}, 20), 60)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:missing count -> L2:zscore -> L3:rank/reversal"
-economic_mechanism = "将近期缺失频率作为信息质量风险，检验数据可用性与收益的关系。"
-direction = "long"
-direction_transform = "reverse"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "stale_information_reversal"
-version = "1"
-kind = "economic"
-family = "stale_information"
-expression = "reverse(rank(ts_zscore(days_from_last_change({p}), 60)))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:staleness -> L2:zscore -> L3:rank/reversal"
-economic_mechanism = "识别长期不更新的陈旧信息，检验信息滞后与未来反转。"
-direction = "long"
-direction_transform = "reverse"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "last_update_surprise"
-version = "1"
-kind = "economic"
-family = "last_update_surprise"
-expression = "rank(ts_zscore(last_diff_value({p}, 20), 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:last difference -> L2:zscore -> L3:rank"
-economic_mechanism = "聚焦最近一次变化相对历史的异常程度，检验更新事件的增量信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["economic"]
-
-[[templates]]
-id = "ts_rank_20"
-version = "1"
-kind = "baseline"
-family = "time_series_rank"
-expression = "rank(ts_rank({p}, 20))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:template -> L2:rank"
-economic_mechanism = "将字段放回自身短期历史分位，降低横截面尺度差异。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["candidate_scratch"]
 selection_order = 20
 
 [[templates]]
-id = "ts_mean_5"
-version = "1"
-kind = "baseline"
-family = "time_series_mean"
-expression = "rank(ts_mean({p}, 5))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:template -> L2:rank"
-economic_mechanism = "短期平滑字段以检验降低日间噪声后的信息。"
+id = "toy_confirmation"
+version = "2"
+role = "PROBE_ALPHA"
+kind = "economic"
+family = "toy_confirmation"
+expression = "rank(add(ts_zscore({p}, 5), ts_zscore({s}, 5)))"
+required_slots = ["p", "s"]
+stage_path = "toy:two-fields -> time-zscore -> add -> rank"
+economic_mechanism = "TOY confirmation of two complementary information streams."
+field_roles = ["toy_signal", "toy_confirmation"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "complementary toy signals"
 direction = "long"
+direction_reason = "The toy hypothesis expects aligned positive confirmation."
 direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["candidate_scratch"]
-selection_order = 60
+expected_horizon = "one declared lattice profile"
+falsification = "No aligned out-of-sample response across the declared profile."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = [[5, 22], [22, 66]]
+allowed_settings_arms = ["BASE", "DECAY_DOWN", "DECAY_UP"]
+mechanism_tags = ["TOY", "CONFIRMATION"]
+novelty_family = "TOY_RELATION"
+selection_groups = ["relationship", "candidate_scratch", "economic"]
+selection_order = 30
+[[templates.numeric_slots]]
+name = "horizon"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "declared toy horizon"
+token = "5"
+occurrence = 0
 
 [[templates]]
-id = "ts_zscore_20"
-version = "1"
-kind = "baseline"
-family = "time_series_zscore_short"
-expression = "rank(ts_zscore({p}, 20))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:template -> L2:rank"
-economic_mechanism = "以短期自身历史标准化字段检验相对位置。"
+id = "toy_relative_change"
+version = "2"
+role = "PROBE_ALPHA"
+kind = "economic"
+family = "toy_relative_change"
+expression = "group_neutralize(rank(ts_delta(subtract({p}, {s}), 5)), {g})"
+required_slots = ["p", "s", "g"]
+stage_path = "toy:relation -> delta -> rank -> group_neutralize"
+economic_mechanism = "TOY relative change between two measurement roles, controlled by group."
+field_roles = ["toy_numerator", "toy_denominator", "toy_group"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "toy numerator/denominator relation"
 direction = "long"
+direction_reason = "Positive relative change is the stated toy direction."
 direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["candidate_scratch"]
-selection_order = 70
+expected_horizon = "one declared lattice profile"
+falsification = "Relative change does not separate the toy comparison group out of sample."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = [[5, 22], [22, 66]]
+allowed_settings_arms = ["BASE", "TRUNCATION_LOW", "TRUNCATION_HIGH"]
+mechanism_tags = ["TOY", "RELATION", "GROUP_CONTROL"]
+novelty_family = "TOY_RELATION"
+selection_groups = ["relationship", "candidate_scratch", "economic"]
+selection_order = 40
+[[templates.numeric_slots]]
+name = "horizon"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "declared toy horizon"
+token = "5"
+occurrence = 0
 
 [[templates]]
-id = "ts_zscore_60"
-version = "1"
-kind = "baseline"
-family = "time_series_zscore_long"
-expression = "rank(ts_zscore({p}, 60))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:template -> L2:rank"
-economic_mechanism = "以较长历史标准化字段检验低换手的相对位置。"
+id = "toy_scale_surprise"
+version = "2"
+role = "PROBE_ALPHA"
+kind = "economic"
+family = "toy_scale_surprise"
+expression = "rank(ts_zscore(divide(ts_delta({p}, 5), add(abs({s}), 0.001)), 22))"
+required_slots = ["p", "s"]
+stage_path = "toy:scale -> delta -> safe_divide -> ts_zscore -> rank"
+economic_mechanism = "TOY surprise scaled by a complementary magnitude field."
+field_roles = ["toy_change", "toy_scale"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "toy change divided by economic scale"
 direction = "long"
+direction_reason = "Positive scaled surprise is the stated toy direction."
 direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["candidate_scratch"]
-selection_order = 80
-
-[[templates]]
-id = "ts_delta_5"
-version = "1"
-kind = "baseline"
-family = "time_series_delta"
-expression = "rank(ts_delta({p}, 5))"
-required_slots = ["p"]
-stage_path = "L0:raw -> L1:template -> L2:rank"
-economic_mechanism = "短期变化基线，用于检验变化信息。"
-direction = "long"
-direction_transform = "identity"
-expected_horizon = "由 hypothesis 与字段频率共同确定"
-falsification = "独立样本、健康或平台 checks 不能支持该结构时停止。"
-self_correlation_impact = "unknown"
-selection_groups = ["candidate_scratch"]
-selection_order = 100
+expected_horizon = "one declared lattice profile"
+falsification = "Scaled surprise has no stable out-of-sample relation or fails safety checks."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = [[5, 22], [22, 66]]
+allowed_settings_arms = ["BASE"]
+mechanism_tags = ["TOY", "SURPRISE", "SCALE"]
+novelty_family = "TOY_SCALE"
+selection_groups = ["relationship", "candidate_scratch", "economic"]
+selection_order = 50
+[[templates.numeric_slots]]
+name = "fast_horizon"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy change horizon"
+token = "5"
+occurrence = 0
+[[templates.numeric_slots]]
+name = "slow_horizon"
+kind = "RESEARCH_HORIZON"
+default = 22
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy surprise horizon"
+token = "22"
+occurrence = 0

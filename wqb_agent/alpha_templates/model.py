@@ -5,19 +5,24 @@ import json
 import re
 from dataclasses import dataclass
 
-from ..expression import analyze_expression
-
 NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
+OPERATOR_OCCURRENCE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+HORIZON_LATTICE = (5, 22, 66, 120, 255)
 
 FIXED_NUMERICS = {
     "0.001": ("SAFETY_CONSTANT", "divide epsilon；固定数值稳定性常量"),
     "0.2": ("OPERATOR_REQUIRED_CONSTANT", "trade_when 触发下界"),
     "0.8": ("OPERATOR_REQUIRED_CONSTANT", "trade_when 触发上界"),
     "1": ("OPERATOR_REQUIRED_CONSTANT", "算子位置参数或单位偏移"),
-    "5": ("OPERATOR_REQUIRED_CONSTANT", "未声明 slot 的固定 lookback"),
-    "10": ("OPERATOR_REQUIRED_CONSTANT", "未声明 slot 的固定 lookback"),
-    "20": ("OPERATOR_REQUIRED_CONSTANT", "未声明 slot 的固定 lookback"),
-    "60": ("OPERATOR_REQUIRED_CONSTANT", "未声明 slot 的固定 lookback"),
+    "5": ("RESEARCH_HORIZON", "交易周周期；仅声明为 slot 时允许轮换"),
+    "22": ("RESEARCH_HORIZON", "交易月周期；仅声明为 slot 时允许轮换"),
+    "66": ("RESEARCH_HORIZON", "交易季度周期；仅声明为 slot 时允许轮换"),
+    "120": ("RESEARCH_HORIZON", "半年周期；仅声明为 slot 时允许轮换"),
+    "255": ("RESEARCH_HORIZON", "交易年周期；仅声明为 slot 时允许轮换"),
+    "10": ("OPERATOR_CONSTANT_REVIEW", "旧窗口禁止未经语义审查继续轮换"),
+    "20": ("OPERATOR_CONSTANT_REVIEW", "旧窗口禁止未经语义审查继续轮换"),
+    "60": ("OPERATOR_CONSTANT_REVIEW", "旧窗口禁止未经语义审查继续轮换"),
 }
 
 
@@ -73,6 +78,16 @@ class AlphaTemplate:
     numeric_slots: tuple
     version: str
     kind: str
+    role: str
+    field_roles: tuple
+    fixed_field_bindings: tuple
+    allowed_field_families: tuple
+    field_relationship: str
+    direction_reason: str
+    allowed_horizon_profiles: tuple
+    allowed_settings_arms: tuple
+    mechanism_tags: tuple
+    novelty_family: str
 
     def __init__(self, template_id, family=None, expression=None,
                  required_slots=("p",),
@@ -82,7 +97,12 @@ class AlphaTemplate:
                  direction="long", direction_transform="identity",
                  expected_horizon="short-term", falsification="",
                  self_correlation_impact="unknown", tags=(),
-                 selection_groups=(), selection_order=1000):
+                 selection_groups=(), selection_order=1000, role=None,
+                 field_roles=(), fixed_field_bindings=(),
+                 allowed_field_families=(), field_relationship="",
+                 direction_reason="", allowed_horizon_profiles=(),
+                 allowed_settings_arms=("BASE",), mechanism_tags=(),
+                 novelty_family=""):
         object.__setattr__(self, "template_id", str(template_id))
         object.__setattr__(self, "family", family or "")
         object.__setattr__(self, "expression", expression or "")
@@ -101,6 +121,16 @@ class AlphaTemplate:
         object.__setattr__(self, "numeric_slots", tuple(numeric_slots))
         object.__setattr__(self, "version", str(version))
         object.__setattr__(self, "kind", kind or ("economic" if economic else "baseline"))
+        object.__setattr__(self, "role", role or ("PROBE_ALPHA" if economic else "CONTROL_ALPHA"))
+        object.__setattr__(self, "field_roles", tuple(field_roles))
+        object.__setattr__(self, "fixed_field_bindings", tuple(fixed_field_bindings))
+        object.__setattr__(self, "allowed_field_families", tuple(allowed_field_families))
+        object.__setattr__(self, "field_relationship", field_relationship)
+        object.__setattr__(self, "direction_reason", direction_reason or self.economic_mechanism)
+        object.__setattr__(self, "allowed_horizon_profiles", tuple(allowed_horizon_profiles))
+        object.__setattr__(self, "allowed_settings_arms", tuple(allowed_settings_arms))
+        object.__setattr__(self, "mechanism_tags", tuple(mechanism_tags))
+        object.__setattr__(self, "novelty_family", novelty_family or self.family)
 
     @property
     def rationale(self):
@@ -113,21 +143,46 @@ class AlphaTemplate:
 
     @property
     def operator_count(self):
-        return len(analyze_expression(self.expression).operators)
+        return len(OPERATOR_OCCURRENCE_RE.findall(self.expression))
+
+    @property
+    def operator_names(self):
+        return tuple(OPERATOR_OCCURRENCE_RE.findall(self.expression))
 
     @property
     def fingerprint(self):
-        payload = json.dumps(
-            {
-                "family": self.family,
-                "expression": self.expression,
-                "required_slots": self.required_slots,
-                "stage_path": self.stage_path,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        return self.structural_fingerprint
+
+    @staticmethod
+    def _digest(payload):
+        return hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")).hexdigest()[:16]
+
+    @property
+    def structural_fingerprint(self):
+        return self._digest({
+            "expression": self.expression,
+            "required_slots": self.required_slots,
+            "horizon_slots": tuple(slot.name for slot in self.numeric_slots),
+        })
+
+    @property
+    def mechanism_fingerprint(self):
+        return self._digest({
+            "family": self.family,
+            "mechanism": self.economic_mechanism,
+            "relationship": self.field_relationship,
+            "direction": self.direction,
+            "novelty_family": self.novelty_family,
+        })
+
+    def instantiation_fingerprint(self, bindings):
+        return self._digest({
+            "structural": self.structural_fingerprint,
+            "mechanism": self.mechanism_fingerprint,
+            "bindings": bindings,
+        })
 
     def catalog_entry(self):
         return {
@@ -139,7 +194,7 @@ class AlphaTemplate:
             "required_slots": list(self.required_slots),
             "stage_path": self.stage_path,
             "fingerprint": self.fingerprint,
-            "source": "newwqb_builtin",
+            "source": "synthetic_catalog",
             "operator_count": self.operator_count,
             "economic": self.economic,
             "economic_mechanism": self.economic_mechanism,
@@ -151,6 +206,16 @@ class AlphaTemplate:
             "tags": list(self.tags),
             "selection_groups": list(self.selection_groups),
             "selection_order": self.selection_order,
+            "role": self.role,
+            "field_roles": list(self.field_roles),
+            "fixed_field_bindings": list(self.fixed_field_bindings),
+            "allowed_field_families": list(self.allowed_field_families),
+            "field_relationship": self.field_relationship,
+            "direction_reason": self.direction_reason,
+            "allowed_horizon_profiles": [list(v) if isinstance(v, tuple) else v for v in self.allowed_horizon_profiles],
+            "allowed_settings_arms": list(self.allowed_settings_arms),
+            "mechanism_tags": list(self.mechanism_tags),
+            "novelty_family": self.novelty_family,
         }
 
     @property

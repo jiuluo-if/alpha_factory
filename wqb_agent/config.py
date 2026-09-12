@@ -92,6 +92,7 @@ class AgentRuntimeConfig:
     """
 
     state_dir: str = ".wqb_state"
+    alpha_template_catalog: str | None = None
     smoke_dataset: str | None = None
     max_rounds: int = 5
     candidates_per_round: int = 6
@@ -485,6 +486,10 @@ def parse_config(raw):
         )
     runtime = AgentRuntimeConfig(
         state_dir=str(agent.get("state_dir", ".wqb_state")),
+        alpha_template_catalog=(
+            str(agent["alpha_template_catalog"])
+            if agent.get("alpha_template_catalog") is not None else None
+        ),
         smoke_dataset=(
             str(agent["smoke_dataset"])
             if agent.get("smoke_dataset") is not None

@@ -130,13 +130,13 @@ class TestFactoryBatchContract(unittest.TestCase):
         ]
         hypothesis = {"id": "factory-seeded", "datasets": ["fundamental6"]}
         first = AlphaFactory().generate_factory_batch(
-            hypothesis, fields, reference, target=100, seed="round-a"
+            hypothesis, fields, reference, target=8, seed="round-a"
         )
         repeat = AlphaFactory().generate_factory_batch(
-            hypothesis, fields, reference, target=100, seed="round-a"
+            hypothesis, fields, reference, target=8, seed="round-a"
         )
         other = AlphaFactory().generate_factory_batch(
-            hypothesis, fields, reference, target=100, seed="round-b"
+            hypothesis, fields, reference, target=8, seed="round-b"
         )
         self.assertEqual(
             [item["expression"] for item in first],

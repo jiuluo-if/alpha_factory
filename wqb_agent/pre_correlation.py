@@ -46,6 +46,15 @@ def _policy_number(policy, name, default):
     return default if value is None else value
 
 
+def turnover_bounds(quality_policy=None):
+    """Turnover 合法区间的唯一来源；Agent rating 与准入 gate 共用同一处。"""
+    policy = quality_policy if isinstance(quality_policy, dict) else {}
+    return (
+        _policy_number(policy, "min_turnover", DEFAULT_MIN_TURNOVER),
+        _policy_number(policy, "max_turnover", DEFAULT_MAX_TURNOVER),
+    )
+
+
 def pre_self_correlation_eligibility(metrics, *, delay, quality_policy=None,
                                     health=None):
     """结构化 SELF_CORRELATION 查询准入报告（fail-closed）。
@@ -88,8 +97,7 @@ def pre_self_correlation_eligibility(metrics, *, delay, quality_policy=None,
     elif not returns_positive:
         reasons.append("RETURNS_NOT_POSITIVE")
 
-    minimum_turnover = _policy_number(policy, "min_turnover", DEFAULT_MIN_TURNOVER)
-    maximum_turnover = _policy_number(policy, "max_turnover", DEFAULT_MAX_TURNOVER)
+    minimum_turnover, maximum_turnover = turnover_bounds(policy)
     turnover_valid = (
         turnover is not None and minimum_turnover <= turnover <= maximum_turnover
     )

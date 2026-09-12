@@ -26,6 +26,7 @@ from wqb_agent.pre_correlation import (
     TURNOVER_FITNESS_FLOOR,
     metric_optimization_context,
     pre_self_correlation_eligibility,
+    turnover_bounds,
 )
 from wqb_agent.state import Experiment
 
@@ -91,6 +92,26 @@ def validate_decision(parent_id="p1", **overrides):
 
 
 class TestPreCorrelationEligibility(unittest.TestCase):
+    def test_turnover_bounds_are_the_single_shared_source(self):
+        self.assertEqual(turnover_bounds(None), (0.01, 0.70))
+        self.assertEqual(
+            turnover_bounds({"min_turnover": 0.05, "max_turnover": 0.4}),
+            (0.05, 0.4),
+        )
+        within = pre_self_correlation_eligibility(
+            synthetic_metrics(turnover=0.05), delay=1,
+            quality_policy={"min_turnover": 0.05, "max_turnover": 0.4},
+            health={"ok": True},
+        )
+        self.assertTrue(within["turnover_valid"])
+        outside = pre_self_correlation_eligibility(
+            synthetic_metrics(turnover=0.05), delay=1,
+            quality_policy={"min_turnover": 0.2, "max_turnover": 0.4},
+            health={"ok": True},
+        )
+        self.assertFalse(outside["turnover_valid"])
+        self.assertIn("TURNOVER_OUT_OF_RANGE", outside["reasons"])
+
     def test_delay_one_metric_line_is_strictly_greater(self):
         self.assertTrue(report(sharpe=1.26, fitness=1.01)["eligible"])
         edge = report(sharpe=1.25, fitness=1.0)

@@ -33,6 +33,7 @@ from .optimizer_workflow import OptimizerHooks
 from .pre_correlation import (
     delay_metric_thresholds,
     pre_self_correlation_eligibility,
+    turnover_bounds,
 )
 from .proposal_contract import (
     SETTING_OVERRIDES,
@@ -1441,9 +1442,10 @@ class Agent:
         thresholds = delay_metric_thresholds(
             (self.simulation_settings or {}).get("delay")
         )
+        min_turnover, max_turnover = turnover_bounds(self.quality_policy)
         if (thresholds is not None
                 and sharpe > thresholds["sharpe"]
-                and 0.01 <= turnover <= 0.70
+                and min_turnover <= turnover <= max_turnover
                 and fitness > thresholds["fitness"]):
             return "GOOD"
         return "BELOW_GOOD"

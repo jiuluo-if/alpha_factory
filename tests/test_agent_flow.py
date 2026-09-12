@@ -196,6 +196,15 @@ class TestAgentLoop(TmpStateMixin, unittest.TestCase):
             "UNRATED",
         )
 
+    def test_alpha_rating_shares_the_pre_correlation_turnover_bounds(self):
+        agent, _ = make_agent(self._tmp, rounds=1)
+        metrics = {
+            "sharpe": 1.5, "fitness": 1.1, "turnover": 0.5, "margin": 0.01,
+        }
+        self.assertEqual(agent._alpha_rating(metrics), "GOOD")
+        agent.quality_policy = dict(agent.quality_policy, max_turnover=0.3)
+        self.assertEqual(agent._alpha_rating(metrics), "BELOW_GOOD")
+
     def test_legacy_entrypoints_are_blocked_without_side_effects(self):
         for entrypoint, args in (("run", ()), ("run_one_round", (1,))):
             with self.subTest(entrypoint=entrypoint):

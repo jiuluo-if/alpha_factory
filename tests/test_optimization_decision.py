@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from wqb_agent.alpha_factory import AlphaFactory
+from wqb_agent.diversity import semantic_mechanism_key
 from wqb_agent.optimization_decision import (
     CHILD_REQUIRED_TEXT_FIELDS,
     OPPORTUNITY_CATEGORIES,
@@ -888,6 +889,104 @@ class TestOptimizerMetricContext(unittest.TestCase):
         self.assertEqual(entry["settings_pools"]["decay"], [3, 5])
         self.assertEqual(entry["settings_pools"]["truncation"], [0.06, 0.1])
         self.assertEqual(entry["settings_pools"]["universe"], [])
+
+
+class TestNumericVariantIdentityAndDedupe(unittest.TestCase):
+    """§24-§32/§49/§55：参数变化不制造机制多样性，并复用现有去重与预算。"""
+
+    @staticmethod
+    def window_parent():
+        return parent_record(
+            "p-window", expression="-rank(ts_zscore(field_a, 20))",
+            template_id="reversal_zscore_20",
+        )
+
+    @staticmethod
+    def window_request(value, *, expression):
+        return {
+            "parent": TestNumericVariantIdentityAndDedupe.window_parent(),
+            "variable": "template_window",
+            "old_value": 20,
+            "new_value": value,
+            "expected_effect": "检验短期反转窗口是否稳定",
+            "falsification": "窗口变化后 Sharpe 反向恶化则稳定性假设不成立",
+            "reason": "检验短期反转窗口稳定性",
+            "expression": expression,
+            "settings_override": {},
+            "numeric_variant": {
+                "source_template": "reversal_zscore_20",
+                "slot": "short_window",
+                "parent_default_value": 20,
+                "candidate_value": value,
+                "change_count": 1,
+                "reason": "检验短期反转窗口稳定性",
+            },
+        }
+
+    def test_variant_keeps_the_parent_semantic_mechanism_family(self):
+        template = AlphaFactory().registry.get("reversal_zscore_20")
+        variants = template.numeric_variants(max_variants=3)
+        self.assertTrue(variants)
+        parent_proposal = {
+            "semantic_mechanism_family": template.family,
+            "template_family": template.family,
+        }
+        for variant in variants:
+            self.assertEqual(
+                variant["semantic_mechanism_family"], template.family
+            )
+            family = str(variant["semantic_mechanism_family"]).lower()
+            for token in ("5", "20", "60", "window", "decay", "truncation",
+                          "threshold"):
+                self.assertNotIn(token, family)
+            self.assertEqual(
+                semantic_mechanism_key({
+                    "semantic_mechanism_family": variant["semantic_mechanism_family"],
+                    "template_family": template.family,
+                    "template_variant_id": variant["template_variant_id"],
+                }),
+                semantic_mechanism_key(parent_proposal),
+            )
+        identities = {variant["template_variant_id"] for variant in variants}
+        self.assertEqual(len(identities), len(variants))
+
+    def test_validation_proposals_dedupe_identical_expressions(self):
+        factory = AlphaFactory()
+        template = factory.registry.get("reversal_zscore_20")
+        request = self.window_request(
+            60,
+            expression=template.numeric_slot("short_window").render(
+                "-rank(ts_zscore(field_a, 20))", 60
+            ),
+        )
+        proposals = factory.validation_proposals(
+            [dict(request), dict(request)],
+            {"operators": ["rank", "ts_zscore"], "sha256": "sha"},
+            max_candidates=4,
+        )
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["expression"], "-rank(ts_zscore(field_a, 60))")
+
+    def test_validation_proposals_are_role_capped_and_bounded(self):
+        factory = AlphaFactory()
+        template = factory.registry.get("reversal_zscore_20")
+        requests = [
+            self.window_request(
+                value,
+                expression=template.numeric_slot("short_window").render(
+                    "-rank(ts_zscore(field_a, 20))", value
+                ),
+            )
+            for value in (5, 60)
+        ]
+        proposals = factory.validation_proposals(
+            requests,
+            {"operators": ["rank", "ts_zscore"], "sha256": "sha"},
+            max_candidates=1,
+        )
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["research_role"], "VALIDATION")
+        self.assertEqual(proposals[0]["experiment_stage"], "ROBUSTNESS")
 
 
 if __name__ == "__main__":

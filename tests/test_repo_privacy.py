@@ -8,10 +8,14 @@ itself never contains a literal private path.
 
 import importlib.util
 import pathlib
+import shutil
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+OLD_BLIND_SPOT_BYTES = 4 * 1024 * 1024
 
 
 def _load_guard():
@@ -28,6 +32,26 @@ GUARD = _load_guard()
 
 
 class TestRepositoryPrivacyGuard(unittest.TestCase):
+    def _synthetic_root(self):
+        directory = tempfile.mkdtemp(prefix="privacy_scan_")
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        return pathlib.Path(directory)
+
+    def _write_large(self, root, name, *, private=False, binary=False):
+        """Write a >4 MB tracked file (the previous scan blind spot)."""
+        chunk = b"clean synthetic line without private data\n"
+        with (root / name).open("wb") as handle:
+            if binary:
+                handle.write(b"\x00" * 64)
+            total = 0
+            while total < 5 * 1024 * 1024:
+                handle.write(chunk)
+                total += len(chunk)
+            if private:
+                marker = "root=" + "F" + ":" + "\\" + "Users" + "\\" + "researcher"
+                handle.write(marker.encode("utf-8") + b"\n")
+        return name
+
     def test_tracked_tree_has_no_private_research_data(self):
         files = GUARD.tracked_files(ROOT)
         findings, skipped = GUARD.scan(ROOT, files)
@@ -37,6 +61,40 @@ class TestRepositoryPrivacyGuard(unittest.TestCase):
             [],
             "tracked files must not expose machine paths or private research artifacts",
         )
+
+    def test_large_tracked_text_is_scanned_instead_of_skipped(self):
+        root = self._synthetic_root()
+        name = self._write_large(root, "large_private.txt", private=True)
+        self.assertGreater((root / name).stat().st_size, OLD_BLIND_SPOT_BYTES)
+        findings, skipped_binary = GUARD.scan(root, [name])
+        self.assertEqual(skipped_binary, [])
+        self.assertIn("ABSOLUTE_LOCAL_PATH", {item.code for item in findings})
+        self.assertGreater(min(item.line or 0 for item in findings), 0)
+
+    def test_large_clean_tracked_text_stays_clean(self):
+        root = self._synthetic_root()
+        name = self._write_large(root, "large_clean.txt")
+        self.assertGreater((root / name).stat().st_size, OLD_BLIND_SPOT_BYTES)
+        findings, skipped_binary = GUARD.scan(root, [name])
+        self.assertEqual([item.as_dict() for item in findings], [])
+        self.assertEqual(skipped_binary, [])
+
+    def test_large_binary_is_reported_as_binary_skip(self):
+        root = self._synthetic_root()
+        name = self._write_large(root, "large_blob.bin", binary=True)
+        self.assertGreater((root / name).stat().st_size, OLD_BLIND_SPOT_BYTES)
+        findings, skipped_binary = GUARD.scan(root, [name])
+        self.assertEqual([item.as_dict() for item in findings], [])
+        self.assertEqual(skipped_binary, [name])
+
+    def test_unreadable_tracked_file_fails_closed(self):
+        root = self._synthetic_root()
+        name = "unreadable.txt"
+        (root / name).write_text("tracked text\n", encoding="utf-8")
+        with mock.patch.object(pathlib.Path, "open", side_effect=PermissionError("denied")):
+            findings, _ = GUARD.scan(root, [name])
+        self.assertTrue(findings, "unreadable tracked text must produce a finding (exit code 1)")
+        self.assertIn("UNREADABLE_TRACKED_FILE", {item.code for item in findings})
 
     def test_windows_drive_path_is_detected(self):
         text = "root = " + "C" + ":" + "\\" + "Users" + "\\" + "researcher" + "\\" + "state"

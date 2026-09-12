@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
+from .expression import canonical_expression
 from .optimization_decision import (
     OPPORTUNITY_CATEGORIES,
     VALID_DECISIONS,
@@ -744,6 +745,26 @@ class OptimizerWorkflow:
         )
         return report
 
+    def _optimization_exclusions(self, parents):
+        """终态表达式只排除“新提案”，不排除被优化的 parent 本身。
+
+        ``terminal_expressions`` 同时包含已达终态的 parent 表达式；原样当成初筛
+        排除项会让每个已完成 parent 都被判为“已终结”，Agent authored 的
+        CHILD/VALIDATE 永远生成不出来。这里只保留真正的非 parent 终态表达式。
+        """
+        excluded = set()
+        for value in self.hooks.terminal_expressions() or ():
+            if isinstance(value, str) and value.strip():
+                excluded.add(canonical_expression(value))
+        own = set()
+        for record in parents or ():
+            if not isinstance(record, Mapping):
+                continue
+            expression = record.get("expression")
+            if isinstance(expression, str) and expression.strip():
+                own.add(canonical_expression(expression))
+        return excluded - own
+
     def generate(self, parents=None, *, max_candidates=4):
         """生成受限 CHILD proposal；绝不自行补全 hypothesis。"""
         self.hooks.ensure_loaded()
@@ -754,7 +775,7 @@ class OptimizerWorkflow:
         quality = self.quality_policy or {}
         code_screened = self.alpha_factory.screen_optimization_parents(
             parents,
-            excluded_expressions=self.hooks.terminal_expressions(),
+            excluded_expressions=self._optimization_exclusions(parents),
             min_sharpe=quality.get("promising_sharpe", 0.9),
             min_fitness=quality.get("promising_fitness", 0.6),
             min_turnover=quality.get("min_turnover", 0.01),
@@ -765,7 +786,7 @@ class OptimizerWorkflow:
             agent_screened,
             self.operator_reference,
             max_candidates=max_candidates,
-            excluded_expressions=self.hooks.terminal_expressions(),
+            excluded_expressions=self._optimization_exclusions(agent_screened),
             min_sharpe=quality.get("promising_sharpe", 0.9),
             min_fitness=quality.get("promising_fitness", 0.6),
             min_turnover=quality.get("min_turnover", 0.01),

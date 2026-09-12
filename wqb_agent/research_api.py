@@ -379,6 +379,44 @@ def propose_optimization(decision, *, agent=None, client=None, config=None,
     return runtime.propose_optimization([decision], max_candidates=max_candidates)
 
 
+def _targeted_field_profiles(runtime, proposals):
+    """用 Agent 已验证的 discovery cache 为 targeted batch 附上真实字段画像。
+
+    优化提案的字段证据来自已完成的 parent，而执行路径的 preflight 需要平台语义
+    画像（``description`` / ``semantic_status``）。这里只复用 Agent 已有的只读
+    field cache；找不到就保持缺画像由 preflight fail-closed，不伪造字段元数据。
+    """
+    used = set()
+    for proposal in proposals or ():
+        if not isinstance(proposal, Mapping):
+            continue
+        for field_id in proposal.get("fields") or ():
+            if str(field_id).strip():
+                used.add(str(field_id))
+    if not used:
+        return []
+    reader = getattr(runtime, "_read_field_cache", None)
+    if not callable(reader):
+        return []
+    try:
+        _types, profiles = reader()
+    except Exception:
+        return []
+    if not isinstance(profiles, Mapping):
+        return []
+    out = []
+    for key, profile in profiles.items():
+        if not isinstance(profile, Mapping):
+            continue
+        field_id = str(profile.get("id") or str(key).split("::")[-1])
+        if field_id not in used:
+            continue
+        enriched = dict(profile)
+        enriched.setdefault("id", field_id)
+        out.append(enriched)
+    return out
+
+
 def materialize_targeted_batch(decisions, *, agent=None, client=None,
                                config=None, state_dir=None, max_candidates=4,
                                ttl_sec=TARGETED_BATCH_TTL_SEC):
@@ -409,6 +447,7 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
     directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
     path = os.path.join(directory, "proposals.json")
     now = time.time()
+    fields = _targeted_field_profiles(runtime, proposals)
     envelope = {
         "batch_type": TARGETED_BATCH_TYPE,
         "source": "agent_optimizer",
@@ -421,6 +460,7 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
             "tags": ["agent_optimizer", "targeted_optimization"],
             "datasets": [],
         },
+        "fields": fields,
         "proposals": proposals,
     }
     os.makedirs(directory, exist_ok=True)

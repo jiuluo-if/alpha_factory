@@ -14,6 +14,8 @@ from scripts.refresh_self_correlation import (
 )
 from tests.test_agent_flow import make_agent
 from tests.test_optimization_decision import (
+    CHILD_EXPRESSION,
+    PARENT_EXPRESSION,
     FakeTrajectory,
     child_decision,
     parent_record,
@@ -25,9 +27,14 @@ from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.optimizer_workflow import OptimizerHooks, OptimizerWorkflow
+from wqb_agent.pre_correlation import (
+    metric_optimization_context,
+    pre_self_correlation_eligibility,
+)
 from wqb_agent.proposal_contract import (
     TARGETED_BATCH_TYPE,
     targeted_batch_state,
+    validate_proposal,
 )
 from wqb_agent.state import Experiment, Trajectory
 
@@ -613,6 +620,116 @@ class TestFactoryNeverInventsAgentDecisions(unittest.TestCase):
             [child_decision("p-repair")], max_candidates=2,
         )
         self.assertEqual(len(authored["proposals"]), 1)
+
+
+class TestStructuralRepairChainEndToEnd(unittest.TestCase):
+    """Phase VI 端到端离线链：结构 blocker → CHILD → 相关性 FAIL → 下一代边界。"""
+
+    def test_structural_blocker_repair_chain(self):
+        field_profile = {
+            "id": "field_a", "dataset": "fundamental6", "type": "MATRIX",
+            "description": "已核验字段", "semantic_status": "KNOWN",
+        }
+        parent = parent_record(
+            "p-chain",
+            health={"ok": False, "reasons": ["CONCENTRATED_WEIGHT=FAIL v=0.9"]},
+            metrics={
+                "sharpe": 1.1, "fitness": 0.8, "turnover": 0.2,
+                "returns": 0.03, "drawdown": 0.1,
+                "checks": [
+                    {"name": "CONCENTRATED_WEIGHT", "pass": False,
+                     "result": "FAIL"},
+                    {"name": "SELF_CORRELATION", "pass": None,
+                     "result": "PENDING"},
+                ],
+            },
+            field_analysis={"field_a": {
+                "semantic": "已核验字段", "coverage": None,
+                "frequency": None, "data_type": "MATRIX",
+            }},
+        )
+        trajectory = FakeTrajectory([parent])
+        flow = OptimizerWorkflow(
+            trajectory=trajectory,
+            alpha_feed_cache=_Cache(),
+            alpha_factory=AlphaFactory(),
+            quality_policy={},
+            operator_reference={
+                "operators": ["rank", "group_neutralize"], "sha256": "sha",
+            },
+            hooks=OptimizerHooks(
+                ensure_loaded=lambda: None,
+                terminal_expressions=lambda: set(),
+            ),
+        )
+        # 1) Agent 视图：结构 blocker 必须可见，并指向 CHILD 修复。
+        summary = flow.optimizer_context()["eligible_parents"][0]
+        self.assertEqual(
+            summary["metric_optimization_context"]["readiness"],
+            "STRUCTURAL_REPAIR_REQUIRED",
+        )
+        self.assertEqual(summary["next_action"], "CONSIDER_CHILD")
+        self.assertFalse(
+            summary["metric_optimization_context"]["pre_correlation_eligible"]
+        )
+        # 即使 parent 历史 SELF_CORRELATION 已 PASS，结构 blocker 未修复时
+        # 下一步仍由 CHILD 修复主导，不得推进。
+        self.assertEqual(parent["self_correlation"]["status"], "PASS")
+        # 2) Agent authored CHILD → production-valid proposal。
+        repaired = flow.generate_from_decisions(
+            [child_decision("p-chain")], max_candidates=1,
+        )
+        self.assertEqual(len(repaired["proposals"]), 1)
+        ok, problems = validate_proposal(
+            repaired["proposals"][0],
+            discovered_fields=[field_profile],
+            strict_experiment=True,
+            operator_reference={
+                "operators": ["rank", "group_neutralize"], "sha256": "sha",
+            },
+            require_economic_integrity=True,
+        )
+        self.assertEqual(problems, [])
+        self.assertTrue(ok)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent, _client = make_agent(tmp, rounds=1)
+            # 3) synthetic C1 DONE：非相关性 checks PASS、metrics 过线、health ok。
+            child = Experiment(
+                round=2, hypothesis_id="h-child",
+                expression=CHILD_EXPRESSION, settings={"delay": 1},
+                fields_used=["field_a"], datasets=["fundamental6"],
+                status="DONE", alpha_id="alpha-child",
+                experiment_stage="CHILD", parent_expression=PARENT_EXPRESSION,
+                metrics=synthetic_metrics(), health={"ok": True},
+            )
+            agent.trajectory.add(child)
+            self.assertTrue(pre_self_correlation_eligibility(
+                child.metrics, delay=1, quality_policy={}, health=child.health,
+            )["eligible"])
+            self.assertEqual(
+                metric_optimization_context(
+                    child.metrics, delay=1, quality_policy={},
+                    health=child.health,
+                )["readiness"],
+                "PRE_CORRELATION_READY",
+            )
+            # 4) SELF_CORRELATION 只 GET 一次，结果立即进入下一步判断。
+            agent.reflector.evidence_cache = {}
+            client = _CorrelationClient({"correlation": 0.9})
+            agent.client = client
+            agent._refresh_self_correlation_evidence([child])
+            agent._refresh_self_correlation_evidence([child])
+            self.assertEqual(client.calls, ["alpha-child"])
+            self.assertEqual(
+                agent.resolved_self_correlation("alpha-child")["status"], "FAIL"
+            )
+            # 5) generation bound 反映真实 C1 历史（无 incremental evidence）。
+            trajectory.rows.append(child.to_dict())
+            bound = flow.optimizer_context()["generation_bound"]
+        self.assertEqual(bound["children_done"], 1)
+        self.assertFalse(bound["allowed"])
+        self.assertEqual(bound["stop_reason"], "NO_INCREMENTAL_CHILD_EVIDENCE")
 
 
 if __name__ == "__main__":

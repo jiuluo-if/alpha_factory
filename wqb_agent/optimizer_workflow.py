@@ -103,13 +103,17 @@ def _next_action(readiness, *, self_correlation_status="UNKNOWN",
     band = str(readiness or "")
     if status in _CORRELATION_FAIL_STATES:
         return "CONSIDER_CORRELATION_REPAIR"
+    if band == "STRUCTURAL_REPAIR_REQUIRED":
+        # 结构 blocker 未修复的 parent 不能推进；历史 SELF_CORRELATION PASS
+        # 只说明旧表达式的相关性边界已解决，不解除当前结构 blocker。
+        if not generation_allowed:
+            return "STOP"
+        return "CONSIDER_CHILD"
     if status == "PASS":
         # 已结算 PASS 后不得再要求重复查询；相关性边界已解决，可以推进。
         return "READY_TO_ADVANCE"
     if band == "PRE_CORRELATION_READY":
         return "CHECK_SELF_CORRELATION"
-    if not generation_allowed and band == "STRUCTURAL_REPAIR_REQUIRED":
-        return "STOP"
     return _NEXT_ACTION_BY_READINESS.get(band, "REROUTE_OR_STOP")
 
 

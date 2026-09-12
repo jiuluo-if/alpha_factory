@@ -57,17 +57,16 @@ Fitness = Sharpe × sqrt(abs(Returns) / max(Turnover, 0.125))
 4. 一旦 `PRE_CORRELATION_READY`（除 `SELF_CORRELATION` 外全部 checks PASS、`health.ok`、`Returns > 0`、Turnover/Drawdown 合法、delay-aware Sharpe/Fitness 过线），立即改用只读结算 `SELF_CORRELATION`，不得继续扫窗口追求更高 Sharpe。
 5. `SELF_CORRELATION` 只在真正过线后查询；未过线时查询只增加延迟。查询 FAIL 后才考虑真正改变经济暴露来源的修复，不得靠窗口微调伪装成低相关新 Alpha。
 
-统一准入由 `wqb_agent/pre_correlation.py` 的 `pre_self_correlation_eligibility()` 实现：Agent 自动路径与 `scripts/refresh_self_correlation.py` 共用同一判定，不要在 prompt 或代码里另立门槛。
+统一准入由仪器（Python gate）判定，自动路径与只读回填共用同一结论；你只在 `optimizer_context` 暴露的 `pre_correlation_eligibility` 里读取它，不要在推理或 prompt 里另立门槛。
 
-具体 API（写“优化”时必须落到这些调用，不要只写抽象描述）：
+具体 API（写“优化”时必须落到这些调用，不要只写抽象描述）。optimizer 侧只有这四个入口，全部来自 `wqb_agent.research_api`，不要引用 Agent 实例、模块 owner 或仓库内部对象：
 
-1. `wqb_agent.research_api.inspect_optimizer_parents(limit=8)`：读取 bounded、只读的 evidence-eligible parent 摘要（按 opportunity 排序）。
-2. `Agent.optimizer_context(limit=8)`：读取每个 parent 的 `metric_optimization_context`、`next_action`、`pre_correlation_eligibility`、`generation_bound` 与 `decision_contract`；这是决定下一步的唯一派生视图。
-3. `wqb_agent.research_api.propose_optimization(decision)`：提交一个 `OptimizationDecision`（`CHILD` / `VALIDATE` / `REROUTE` / `STOP`）；只校验并生成 proposal，不执行 Simulation、不写状态。
-4. `wqb_agent.research_api.materialize_targeted_batch([decision, ...])`：把已 authored 的 CHILD/VALIDATE 决策固化为唯一 `.wqb_state/proposals.json` 的 `targeted_optimization` 批次（≤4 CHILD + ≤4 VALIDATE，`proposal_origin=agent_optimizer`）。
-5. `python main.py run-proposals`：正常执行该批次（复用 checkpoint、预算、去重、`SUBMIT_UNKNOWN` 与恢复边界）。
+1. `inspect_optimizer_parents(limit=8)`：读取 bounded、只读的 evidence-eligible parent 摘要（按 opportunity 排序）。
+2. `inspect_optimizer_context(limit=8)`：读取每个 parent 的 `metric_optimization_context`、`next_action`、`pre_correlation_eligibility`、`generation_bound` 与 `decision_contract`；这是决定下一步的唯一派生视图。
+3. `propose_optimization(decision)`：提交一个 `OptimizationDecision`（`CHILD` / `VALIDATE` / `REROUTE` / `STOP`）；只校验并生成 proposal，不执行 Simulation、不写状态。
+4. `materialize_targeted_batch([decision, ...])`：把已 authored 的 CHILD/VALIDATE 决策固化为唯一的 targeted 批次（≤4 CHILD + ≤4 VALIDATE）。
 
-工厂循环在 targeted batch 有效期内会报告 `last_action=WAIT_AGENT_DECISION`、`status=TARGETED_OPTIMIZATION_PENDING`，并保持 exploration 不覆盖该 inbox；此时应完成第 3–5 步（author → materialize → run-proposals），不要手改 `proposals.json`，也不要绕过 `Agent.run_proposals()`。
+批次的实际执行由仪器入口发起（外层维护 Agent 或用户），不经过你；此时仪器会报告 `last_action=WAIT_AGENT_DECISION`、`status=TARGETED_OPTIMIZATION_PENDING` 并保留该 inbox，你只需完成 author → materialize 两步，不要手改提案文件，也不要要求绕过唯一执行路径。
 
 ## 反过拟合与自相关准入
 
@@ -84,38 +83,18 @@ Fitness = Sharpe × sqrt(abs(Returns) / max(Turnover, 0.125))
 ## 默认闭环
 
 ```text
-takeover-preflight → inspect → discover → hypothesize → run → evaluate → correlate → record → iterate
+inspect → discover → hypothesize → run → evaluate → correlate → record → iterate
 ```
 
-Agent 接管已有项目时先运行：
-
-```powershell
-python main.py state preflight
-```
-
-若结果为 `BLOCKED`，先处理未完成 checkpoint、状态对账或认证/基础设施问题，不得直接开始新一轮实验。对最近已完成且除 `SELF_CORRELATION` 外全部通过的 Alpha，可用只读批量回填：
-
-```powershell
-python scripts/refresh_self_correlation.py --since 2026-09-07 --until 2026-09-09 --dry-run
-```
-
-确认候选后去掉 `--dry-run`；该脚本只发起平台 GET，并只更新可重取的 evidence cache，不写 trajectory、checkpoint、proposals 或提交接口。
+接管已有项目时先调用 `inspect_state()` 读 `runtime_state`：若为 `BLOCKED`，停下并等待外层维护 Agent 处理未完成状态，不得直接开始新一轮实验。对最近已完成且除 `SELF_CORRELATION` 外全部通过的 Alpha，可请求只读回填（由外层维护 Agent 发起，只做平台 GET，只更新可重取的 evidence cache，不写 trajectory、checkpoint、提案或提交接口）。
 
 最小 agent-facing API：
 
-- `run_experiment(ExperimentSpec(...))`：执行一个轻量实验输入；底层仍走既有校验、checkpoint、去重、预算和 Simulation 安全路径；
+- `inspect_state()`：读取有限运行状态与最近实验证据；
+- `discover_fields(query)`、`get_operator_reference()`：读取平台事实，不把 cache 或旧文档当事实；
+- `run_experiment(ExperimentSpec(...))`：提交一个轻量实验输入；合法性、去重、预算和恢复边界都由仪器决定；
 - `get_experiment()`、`compare_experiments()`、`search_history()`：读取证据，不生成替代事实；
 - `reconcile()`：只读轮询已知远端 job；未知写结果不得重 POST。
-
-CLI：
-
-```powershell
-python main.py suggest
-# Agent 审阅 suggestions 并写入 .wqb_state/proposals.json
-python main.py run-proposals
-```
-
-旧式 boolean flag 形式在有限兼容窗口内仍可用，但不是主入口。
 
 ## 记忆与下一步
 

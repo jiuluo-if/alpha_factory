@@ -370,6 +370,19 @@ def inspect_optimizer_parents(*, agent=None, client=None, config=None,
     return runtime.inspect_optimizer_parents(limit=limit)
 
 
+def inspect_optimizer_context(*, agent=None, client=None, config=None,
+                              state_dir=None, limit=8):
+    """Return the bounded, read-only optimizer context for the Inner Agent.
+
+    Thin facade only: the optimizer gate, ranking, generation bound and
+    pre-correlation policy stay owned by ``OptimizerWorkflow``.  The limit is
+    capped at 8 so an Agent prompt never receives an unbounded view, nothing is
+    written and no Simulation runs here.
+    """
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    return runtime.optimizer_context(limit=min(int(limit), 8))
+
+
 def propose_optimization(decision, *, agent=None, client=None, config=None,
                          state_dir=None, max_candidates=4):
     """Validate one Agent-authored ``OptimizationDecision`` and emit proposals.
@@ -487,6 +500,6 @@ __all__ = [
     "ExperimentSpec", "inspect_state", "discover_fields",
     "get_operator_reference", "run_experiment", "get_experiment",
     "compare_experiments", "search_history", "reconcile",
-    "inspect_optimizer_parents", "propose_optimization",
-    "materialize_targeted_batch",
+    "inspect_optimizer_parents", "inspect_optimizer_context",
+    "propose_optimization", "materialize_targeted_batch",
 ]

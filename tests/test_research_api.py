@@ -9,6 +9,7 @@ from wqb_agent.research_api import (
     discover_fields,
     get_experiment,
     get_operator_reference,
+    inspect_optimizer_context,
     inspect_state,
     reconcile,
     run_experiment,
@@ -35,6 +36,7 @@ class _FakeAgent:
     def __init__(self, state_dir):
         self.state_dir = state_dir
         self.received = None
+        self.optimizer_limit = None
 
     def next_round_no(self):
         return 7
@@ -43,6 +45,10 @@ class _FakeAgent:
         with open(path, encoding="utf-8") as handle:
             self.received = json.load(handle)
         return {"accepted": 1, "status": "DONE"}
+
+    def optimizer_context(self, *, limit=8):
+        self.optimizer_limit = limit
+        return {"limit": limit, "parents": []}
 
 
 class _FakeClient:
@@ -107,6 +113,13 @@ class TestResearchApi(unittest.TestCase):
             self.assertEqual(result["experiment_count"], 0)
             self.assertEqual(result["recent_experiments"], [])
             self.assertEqual(compare_experiments(["missing"], state_dir=directory)["missing"], ["missing"])
+
+    def test_optimizer_context_facade_is_bounded_and_needs_no_agent_object(self):
+        agent = _FakeAgent(tempfile.gettempdir())
+        self.assertEqual(inspect_optimizer_context(agent=agent, limit=32), {"limit": 8, "parents": []})
+        self.assertEqual(agent.optimizer_limit, 8)
+        self.assertEqual(inspect_optimizer_context(agent=agent, limit=3)["limit"], 3)
+        self.assertEqual(agent.optimizer_limit, 3)
 
     def test_history_queries_read_experiment_evidence_by_id_and_expression(self):
         with tempfile.TemporaryDirectory() as directory:

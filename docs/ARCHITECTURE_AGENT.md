@@ -178,6 +178,7 @@ WQBClient.set_alpha_color(..., verify=True)
 | Proposal execution/recovery | `ProposalExecutionWorkflow` | preflight、预算、checkpoint、恢复、终态结算；经 `Simulator` 执行 |
 | Alpha metadata read sync | `AlphaFeedWorkflow` | `GET /users/self/alphas`、纽约七日窗口、dedupe、bucket、cache refresh |
 | Optimization candidate orchestration | `OptimizerWorkflow` | 仅消费 `Trajectory` 中已有 DONE evidence；cloud cache 只提供 metadata priority，不恢复 evidence 或 metrics |
+| Alpha template catalog | `wqb_agent.alpha_templates` | TOML template model/resource/registry/numeric audit；`alpha_factory.py` 与 `candidate.py` 只能消费，不得定义第二套 skeleton |
 | Remote color sync | `AlphaColorWorkflow` | 仅显式 CLI control/write，ownership fail-closed、dry-run、verified PATCH |
 | Simulation transport | `Simulator` → `WQBClient` | 唯一生产 `submit_simulation` owner chain |
 | Credentials discovery | `credentials.py` | deterministic local-only source resolution |

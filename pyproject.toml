@@ -32,8 +32,11 @@ check_untyped_defs = true
 no_implicit_optional = true
 follow_imports = "skip"
 
-[tool.setuptools]
-packages = ["wqb_agent"]
+[tool.setuptools.packages.find]
+include = ["wqb_agent*"]
+
+[tool.setuptools.package-data]
+"wqb_agent.alpha_templates" = ["catalog/*.toml"]
 
 [tool.ruff.lint]
 select = [

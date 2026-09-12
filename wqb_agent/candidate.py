@@ -35,68 +35,33 @@ class CandidateBuilder:
         primary = self._main_field(fields)
         if not primary:
             return []
-        reversal = hypothesis.get("direction") == "reversal"
-        group = self.neutralization
-        s = "-" if reversal else ""  # hypothesis-driven sign
-        base = f"rank({primary})"
-        candidates = [
-            {
-                "expression": f"{s}{base}",
-                "rationale": "Baseline: raw cross-sectional rank of primary field.",
-                "mutation": "baseline",
-                "parent": None,
-                "fields_used": extract_fields(f"{s}{base}", [primary] + [f["id"] for f in fields]),
-            },
-            {
-                "expression": f"{s}rank(ts_rank({primary}, 20))",
-                "rationale": "Time-series rank over 20d to smooth cross-sectional noise.",
-                "mutation": "ts-rank-20",
-                "parent": None,
-            },
-            {
-                "expression": f"{s}zscore({primary})",
-                "rationale": "Standardize field with cross-sectional zscore.",
-                "mutation": "zscore",
-                "parent": None,
-            },
-            {
-                "expression": f"group_neutralize({s}rank({primary}), {group})",
-                "rationale": f"Neutralize baseline rank within {group}.",
-                "mutation": f"neutralize-{group}",
-                "parent": None,
-            },
-            {
-                "expression": f"{s}rank(ts_mean({primary}, 5))",
-                "rationale": "Short 5d mean of field to lower turnover.",
-                "mutation": "ts-mean-5",
-                "parent": None,
-            },
-            {
-                "expression": f"{s}rank(ts_zscore({primary}, 20))",
-                "rationale": "20d z-score of the field: level-relative signal.",
-                "mutation": "ts-zscore-20",
-                "parent": None,
-            },
-            {
-                "expression": f"{s}rank(ts_zscore({primary}, 60))",
-                "rationale": "60d z-score of the field: slower, lower-turnover signal.",
-                "mutation": "ts-zscore-60",
-                "parent": None,
-            },
-            {
-                "expression": f"{s}rank(ts_delta({primary}, 5))",
-                "rationale": "5d change of the field: short-term momentum/reversal of the signal.",
-                "mutation": "ts-delta-5",
-                "parent": None,
-            },
-        ]
-        # 精确记录每个候选实际用到的字段（含辅助腿），供信号族比对。
         all_ids = [primary] + [
             f.get("id") for f in fields
             if isinstance(f, dict) and isinstance(f.get("id"), (str, int))
         ]
-        for c in candidates:
-            c["fields_used"] = extract_fields(c["expression"], all_ids)
+        generated = self.factory.generate(
+            {"selection_group": "candidate_scratch"}, fields, count=count
+        )
+        candidates = []
+        reversal = hypothesis.get("direction") == "reversal"
+        for item in generated:
+            candidate = dict(item)
+            expression = candidate["expression"]
+            if reversal:
+                if expression.startswith("group_neutralize(rank("):
+                    expression = expression.replace(
+                        "group_neutralize(rank(", "group_neutralize(-rank(", 1
+                    )
+                else:
+                    expression = f"-{expression}"
+            candidate["expression"] = expression
+            candidate["parent"] = None
+            candidate["fields_used"] = extract_fields(expression, all_ids)
+            candidate["rationale"] = candidate.get("rationale") or "Catalog baseline."
+            candidate["mutation"] = candidate.get("mutation") or (
+                f"template:{candidate['template_id']}"
+            )
+            candidates.append(candidate)
         return candidates[:count]
 
     def _mutate_best(self, hypothesis, fields, current_best, count):
@@ -145,10 +110,8 @@ class CandidateBuilder:
                     "field-swap",
                 )
 
-        # Knowledge-backed mutation: for the champion template
-        # rank(ts_zscore(field, N)), combine with a sibling field's z-score.
-        # Legacy research validated two-field guidance z-score combinations
-        # (Sharpe ~1.38) as an information-density improvement.
+        # Knowledge-backed mutation: combine two fields' standardized signals
+        # as a bounded confirmation structure.
         combo = re.fullmatch(r"rank\(ts_zscore\(([^,()]+),\s*(\d+)\)\)", best_expr)
         if combo and secondary:
             sibling = f"rank(ts_zscore({combo.group(1)}, {combo.group(2)}) + ts_zscore({secondary}, {combo.group(2)}))"

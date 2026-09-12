@@ -6,13 +6,17 @@ shape of an Alpha; a field bundle supplies the slots.  The resulting metadata
 keeps the skeleton visible to the later proposal and diversity gates.
 """
 
-import hashlib
 import itertools
-import json
 import random
-import re
-from dataclasses import dataclass
 
+from .alpha_templates import (
+    DEFAULT_TEMPLATES,
+    ECONOMIC_TEMPLATES,
+    AlphaTemplate,
+    AlphaTemplateRegistry,
+    TemplateNumericSlot,
+    template_numeric_audit,
+)
 from .discovery import frequency_evidence, normalize_coverage
 from .diversity import (
     extract_fields,
@@ -24,510 +28,13 @@ from .pre_correlation import optimization_parent_admission
 from .proposal_contract import CHILD_CHANGE_TYPES, FACTORY_BATCH_SIZE
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 
-_NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
+__all__ = [
+    "AlphaFactory", "AlphaTemplate", "AlphaTemplateRegistry",
+    "TemplateNumericSlot", "DEFAULT_TEMPLATES", "ECONOMIC_TEMPLATES",
+    "template_numeric_audit",
+]
 
-
-def _render_numeric_token(expression, token, value, occurrence=0):
-    """Replace one declared numeric token; an undeclared digit is never touched."""
-    matches = [
-        match for match in _NUMBER_TOKEN_RE.finditer(expression)
-        if match.group(1) == str(token)
-    ]
-    index = max(0, int(occurrence))
-    if index >= len(matches):
-        raise ValueError(f"numeric slot token not found: {token}#{index}")
-    match = matches[index]
-    return expression[:match.start(1)] + str(value) + expression[match.end(1):]
-
-
-@dataclass(frozen=True)
-class TemplateNumericSlot:
-    """模板中显式声明的研究数值（只有声明的数字允许轮换）。
-
-    ``token`` 是该数字在骨架里的字面量，``occurrence`` 指同值 token 出现的第
-    几次（从 0 开始）。divide epsilon、operator arity 等 safety constant 永远
-    不声明成 slot。
-    """
-
-    name: str
-    kind: str = "window"
-    default: float = 0.0
-    allowed_values: tuple = ()
-    economic_role: str = ""
-    token: str = ""
-    occurrence: int = 0
-
-    def render(self, expression, value):
-        """在已填充 slot 的真实表达式上替换本声明的数值。"""
-        return _render_numeric_token(
-            expression, self.token or str(self.default), value, self.occurrence
-        )
-
-
-@dataclass(frozen=True)
-class AlphaTemplate:
-    """One bounded, inspectable expression skeleton."""
-
-    template_id: str
-    family: str
-    expression: str
-    required_slots: tuple = ("p",)
-    stage_path: str = "L0:raw -> L1:cross_sectional -> L2:none"
-    rationale: str = ""
-    economic: bool = False
-    numeric_slots: tuple = ()
-
-    @property
-    def operator_count(self):
-        """Count function-style operators in the skeleton."""
-        return len(analyze_expression(self.expression).operators)
-
-    @property
-    def fingerprint(self):
-        payload = json.dumps(
-            {
-                "family": self.family,
-                "expression": self.expression,
-                "required_slots": self.required_slots,
-                "stage_path": self.stage_path,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-    def catalog_entry(self):
-        reversal = "reversal" in self.family or "reversal" in self.rationale.lower()
-        return {
-            "template_id": self.template_id,
-            "family": self.family,
-            "expression": self.expression,
-            "required_slots": list(self.required_slots),
-            "stage_path": self.stage_path,
-            "fingerprint": self.fingerprint,
-            "source": "newwqb_builtin",
-            "operator_count": self.operator_count,
-            "economic": self.economic,
-            "economic_mechanism": self.rationale,
-            "direction": "reversal" if reversal else "long",
-            "direction_transform": {
-                "applied": reversal,
-                "reason": (
-                    "将高位/异常信号映射为反转方向。" if reversal
-                    else "保持字段经济含义的正向预测，不做符号翻转。"
-                ),
-            },
-            "expected_horizon": "由 hypothesis 与字段频率共同确定",
-            "falsification": "独立样本、健康或平台 checks 不能支持机制时停止该模板。",
-        }
-
-    @property
-    def research_slot_names(self):
-        return tuple(slot.name for slot in self.numeric_slots)
-
-    def numeric_slot(self, name):
-        for slot in self.numeric_slots:
-            if slot.name == name:
-                return slot
-        return None
-
-    def render_numeric_variant(self, slot_name, value):
-        """只替换声明过的 slot，其余数字保持字面量。"""
-        slot = self.numeric_slot(slot_name)
-        if slot is None:
-            raise KeyError(f"undeclared numeric slot: {slot_name}")
-        if slot.allowed_values and value not in slot.allowed_values:
-            raise ValueError(f"{value} is not an allowed value for {slot_name}")
-        return slot.render(self.expression, value)
-
-    def numeric_variants(self, *, max_variants=3):
-        """default + 单变量 variant；一次只改一个 slot，绝不生成笛卡尔积。"""
-        try:
-            cap = max(0, int(max_variants))
-        except (TypeError, ValueError):
-            cap = 3
-        variants = []
-        for slot in self.numeric_slots:
-            for value in slot.allowed_values or ():
-                if value == slot.default:
-                    continue
-                variants.append({
-                    "source_template": self.template_id,
-                    "slot": slot.name,
-                    "kind": slot.kind,
-                    "parent_default_value": slot.default,
-                    "candidate_value": value,
-                    "expression": slot.render(self.expression, value),
-                    "change_count": 1,
-                    "economic_role": slot.economic_role,
-                    "template_variant_id": f"{self.template_id}@{slot.name}={value}",
-                    "semantic_mechanism_family": self.family,
-                })
-        return variants[:cap]
-
-
-DEFAULT_TEMPLATES = (
-    AlphaTemplate(
-        "rank_level", "cross_sectional_rank", "rank({p})",
-        rationale="横截面排序，作为字段机制的最小基线。",
-    ),
-    AlphaTemplate(
-        "zscore_level", "cross_sectional_standardize", "zscore({p})",
-        rationale="横截面标准化，检验信号强度而非绝对尺度。",
-    ),
-    AlphaTemplate(
-        "reversal_zscore_20", "reversal", "-rank(ts_zscore({p}, 20))",
-        stage_path="L0:raw -> L1:ts_zscore -> L2:rank",
-        rationale="检验短期异常值的反转机制。",
-        numeric_slots=(
-            TemplateNumericSlot(
-                "short_window", kind="window", default=20,
-                allowed_values=(5, 20, 60), economic_role="短期反转窗口",
-                token="20",
-            ),
-        ),
-    ),
-    AlphaTemplate(
-        "momentum_mean_20", "momentum", "rank(ts_mean({p}, 20))",
-        stage_path="L0:raw -> L1:ts_mean -> L2:rank",
-        rationale="检验慢化后的持续性机制。",
-        numeric_slots=(
-            TemplateNumericSlot(
-                "smoothing_window", kind="window", default=20,
-                allowed_values=(5, 20, 60), economic_role="趋势平滑窗口",
-                token="20",
-            ),
-        ),
-    ),
-    AlphaTemplate(
-        "change_delta_5", "change", "rank(ts_delta({p}, 5))",
-        stage_path="L0:raw -> L1:ts_delta -> L2:rank",
-        rationale="检验字段变化而非水平本身。",
-        numeric_slots=(
-            TemplateNumericSlot(
-                "delta_window", kind="window", default=5,
-                allowed_values=(5, 10, 20), economic_role="变化观察窗口",
-                token="5",
-            ),
-        ),
-    ),
-    AlphaTemplate(
-        "group_neutralized_rank", "group_neutralized", "group_neutralize(rank({p}), {g})",
-        stage_path="L0:raw -> L1:rank -> L2:group_neutralize",
-        rationale="检验去除组别暴露后的增量信息。",
-    ),
-    AlphaTemplate(
-        "spread_rank", "relationship_spread", "rank({p} - {s})",
-        required_slots=("p", "s"),
-        stage_path="L0:spread -> L1:rank -> L2:none",
-        rationale="仅作为语义互补字段审阅后的差分构造。",
-    ),
-    AlphaTemplate(
-        "vector_mean_rank", "vector_aggregation", "rank(vec_avg({p}))",
-        stage_path="L0:VECTOR -> L1:vec_avg(MATRIX) -> L2:rank",
-        rationale="先把真实 VECTOR 字段聚合为 MATRIX，再检验其横截面排序信息。",
-    ),
-)
-
-
-# These are deliberately bounded economic mechanisms, not a Cartesian product
-# of fields, windows, and operators.  Every new template uses 3-8 distinct
-# function operators and exposes the mechanism in its rationale.  The
-# proposal contract still validates fields, types, operator evidence, and
-# lineage before any Simulation is submitted.
-ECONOMIC_TEMPLATES = (
-    AlphaTemplate(
-        "quality_smooth_change", "quality_change",
-        "rank(ts_decay_linear(ts_delta({p}, 5), 10))",
-        stage_path="L0:raw -> L1:change -> L2:decay -> L3:rank",
-        rationale="平滑盈利或质量指标的变化，检验信息持续性而非单日跳变。",
-        economic=True,
-        numeric_slots=(
-            TemplateNumericSlot(
-                "delta_window", kind="window", default=5,
-                allowed_values=(5, 10, 20), economic_role="质量变化窗口",
-                token="5",
-            ),
-            TemplateNumericSlot(
-                "smoothing_window", kind="window", default=10,
-                allowed_values=(5, 10, 20), economic_role="变化平滑窗口",
-                token="10",
-            ),
-        ),
-    ),
-    AlphaTemplate(
-        "reversal_vol_adjusted", "risk_adjusted_reversal",
-        "rank(divide(reverse(ts_delta({p}, 5)), add(ts_std_dev({p}, 20), 0.001)))",
-        stage_path="L0:raw -> L1:delta/reversal -> L2:volatility adjustment -> L3:rank",
-        rationale="把短期反转幅度按自身波动率调整，区分异常变化与正常噪声。",
-        economic=True,
-        numeric_slots=(
-            TemplateNumericSlot(
-                "delta_window", kind="window", default=5,
-                allowed_values=(5, 10, 20), economic_role="反转变化窗口",
-                token="5",
-            ),
-            TemplateNumericSlot(
-                "vol_window", kind="window", default=20,
-                allowed_values=(10, 20, 60), economic_role="波动率估计窗口",
-                token="20",
-            ),
-        ),
-    ),
-    AlphaTemplate(
-        "persistent_level", "persistent_level",
-        "rank(ts_zscore(ts_mean({p}, 20), 60))",
-        stage_path="L0:raw -> L1:mean -> L2:longer-horizon zscore -> L3:rank",
-        rationale="检验平滑后的相对高低是否具有持续性信息。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "downside_volatility", "downside_risk",
-        "reverse(rank(ts_std_dev(ts_delta({p}, 5), 20)))",
-        stage_path="L0:raw -> L1:change -> L2:volatility -> L3:rank/reversal",
-        rationale="高变化波动代表不稳定风险，检验风险暴露与未来收益的反向关系。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "missing_resilient_change", "data_resilient_change",
-        "rank(ts_delta(ts_backfill({p}, 20), 5))",
-        stage_path="L0:raw -> L1:backfill -> L2:change -> L3:rank",
-        rationale="在受控回看窗口内处理缺失后检验信息修正，避免覆盖率造成假信号。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "robust_cross_section", "robust_cross_section",
-        "rank(winsorize(ts_delta({p}, 5)))",
-        stage_path="L0:raw -> L1:change -> L2:winsorize -> L3:rank",
-        rationale="对 5 日变化先截尾抑制离群冲击，再检验稳健横截面相对变化信号。"
-                  "2026-09-11 平台实测：三参 normalize 与双参 winsorize(x, 4) 均被拒"
-                  "（exactly 1 input），winsorize 仅用单参形式。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "distributional_change", "distributional_change",
-        "rank(ts_zscore(ts_delta({p}, 5), 60))",
-        stage_path="L0:raw -> L1:change -> L2:own-history zscore -> L3:rank",
-        rationale="当日变化相对自身 60 日变化历史的异常程度（surprise 机制），"
-                  "检验持续性变化之外的横截面信息。2026-09-11 平台实测："
-                  "裸位置参数 gaussian 驱动被拒（unknown variable），改用"
-                  "已实证算子的等价 surprise 机制。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "turnover_controlled_change", "turnover_control",
-        "hump(rank(ts_delta({p}, 5)))",
-        stage_path="L0:raw -> L1:change -> L2:rank -> L3:hump",
-        rationale="对变化信号限制日间跳动（默认 hump 宽度），检验降低换手后的净经济价值。"
-                  "2026-09-11 round_4 平台实测：双参 hump(x, 0.01) 被拒"
-                  "（exactly 1 input），hump 仅用单参形式。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "event_triggered_signal", "event_trigger",
-        "trade_when(ts_rank({p}, 20) > 0.8, rank(ts_delta({p}, 5)), ts_rank({p}, 20) < 0.2)",
-        stage_path="L0:raw -> L1:ts_rank regime -> L2:event trigger -> L3:rank",
-        rationale="只在历史极端区间触发交易，检验事件条件下的延续或反转。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "group_relative_change", "group_relative_change",
-        "group_neutralize(rank(ts_delta({p}, 20)), {g})",
-        stage_path="L0:raw -> L1:change -> L2:rank -> L3:group neutralize",
-        rationale="剔除行业或板块共同变化，检验组内相对修正是否有增量信息。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "group_relative_extreme", "group_relative_extreme",
-        "group_zscore(rank(ts_zscore({p}, 20)), {g})",
-        stage_path="L0:raw -> L1:time-series zscore -> L2:group zscore",
-        rationale="比较同组内相对于自身历史的异常程度，检验组内异质性。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "group_filled_rank", "group_data_repair",
-        "rank(subtract(ts_backfill({p}, 20), group_mean(ts_backfill({p}, 20), 1, {g})))",
-        stage_path="L0:raw -> L1:ts backfill -> L2:group mean -> L3:deviation rank",
-        rationale="受控窗口修复缺失后，检验个体相对组均值的偏差位置，区分覆盖率与信号。"
-                  "2026-09-11 平台实测：group_rank(group_backfill(...)) 参数个数被拒"
-                  "（exactly 2 inputs），改用已实证算子 ts_backfill+group_mean+subtract；"
-                  "同日 round_9 实测 2 参 group_mean 被拒（exactly 3 inputs），"
-                  "与 group_scaled_mean 的 3 参形式 group_mean(X, 1, G) 对齐"
-                  "（r1-r7 共 38 次 DONE，拒绝记录见 OPERATORS_CHEATSHEET）。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "vector_persistent_signal", "vector_persistence",
-        "rank(ts_zscore(ts_mean(vec_avg({p}), 20), 60))",
-        stage_path="L0:VECTOR -> L1:vec_avg -> L2:mean -> L3:zscore -> L4:rank",
-        rationale="将真实 VECTOR 聚合后检验平滑、长期相对异常信号。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "vector_change_signal", "vector_change",
-        "rank(ts_delta(ts_decay_linear(vec_sum({p}), 5), 5))",
-        stage_path="L0:VECTOR -> L1:vec_sum -> L2:decay -> L3:delta -> L4:rank",
-        rationale="检验向量总量的平滑变化是否代表集体信息更新。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "relative_spread_change", "relative_spread_change",
-        "rank(ts_delta(subtract({p}, {s}), 5))",
-        required_slots=("p", "s"),
-        stage_path="L0:two fields -> L1:spread -> L2:delta -> L3:rank",
-        rationale="只有语义互补字段才允许构造差值，检验相对变化而非单字段水平。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "relative_ratio_extreme", "relative_ratio",
-        "rank(ts_zscore(divide({p}, add(abs({s}), 0.001)), 20))",
-        required_slots=("p", "s"),
-        stage_path="L0:two fields -> L1:safe ratio -> L2:time-series zscore -> L3:rank",
-        rationale="用安全分母构造经济比例，再检验比例异常，避免无保护除零。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "relative_covariance", "relative_covariance",
-        "rank(ts_zscore(ts_covariance({p}, {s}, 20), 60))",
-        required_slots=("p", "s"),
-        stage_path="L0:two fields -> L1:covariance -> L2:long-horizon zscore -> L3:rank",
-        rationale="检验两个经济量的共同变化强度是否具有相对异常信息。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "relative_correlation_regime", "relative_correlation",
-        "rank(ts_zscore(ts_corr({p}, {s}, 20), 60))",
-        required_slots=("p", "s"),
-        stage_path="L0:two fields -> L1:correlation -> L2:regime zscore -> L3:rank",
-        rationale="检验两类互补信息同步程度的变化，而非简单堆叠字段。",
-        economic=True,
-    ),
-    # Generic slot names are intentional: ``data_field`` is the semantic
-    # primary field selected from the current dataset catalog, not a literal
-    # field called data_field.  This keeps templates reusable for low/high/
-    # close/volume and for platform fields with different names.
-    AlphaTemplate(
-        "generic_pair_spread_change", "generic_multi_field_spread",
-        "rank(ts_delta(subtract({data_field}, {s}), 5))",
-        required_slots=("data_field", "s"),
-        stage_path="L0:generic fields -> L1:spread -> L2:delta -> L3:rank",
-        rationale="用动态主字段与语义互补字段的差值检验相对变化，不绑定 low 等具体字段名。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "generic_pair_ratio_extreme", "generic_multi_field_ratio",
-        "rank(ts_zscore(divide({data_field}, add(abs({s}), 0.001)), 20))",
-        required_slots=("data_field", "s"),
-        stage_path="L0:generic fields -> L1:safe ratio -> L2:zscore -> L3:rank",
-        rationale="对任意可兼容字段构造受保护比例，检验相对极端状态而非字段名称本身。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "generic_triple_confirmation", "generic_multi_field_confirmation",
-        "rank(add(ts_zscore({data_field}, 20), add(ts_zscore({s}, 20), ts_zscore({t}, 20))))",
-        required_slots=("data_field", "s", "t"),
-        stage_path="L0:generic fields -> L1:three standardized legs -> L2:additive confirmation -> L3:rank",
-        rationale="将三个动态选择的互补字段标准化后检验一致性确认，避免把 low 等名称硬编码成机制。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "group_centered_level", "group_centered_level",
-        "group_scale(group_mean(ts_zscore({p}, 20), 1, {g}), {g})",
-        stage_path="L0:raw -> L1:ts zscore -> L2:group mean -> L3:group scale",
-        rationale="先比较字段相对自身历史的位置，再用组内中心和尺度衡量共同偏离。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "extreme_location_reversal", "extreme_location",
-        "reverse(rank(ts_arg_max(ts_zscore({p}, 20), 60)))",
-        stage_path="L0:raw -> L1:ts zscore -> L2:arg max -> L3:rank/reversal",
-        rationale="识别指标处在历史极端高位的资产，检验极端状态后的均值回归。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "extreme_low_continuation", "extreme_low",
-        "rank(ts_arg_min(ts_zscore({p}, 20), 60))",
-        stage_path="L0:raw -> L1:ts zscore -> L2:arg min -> L3:rank",
-        rationale="识别长期低位但正在改善的指标，检验低位修复的持续性。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "innovation_surprise", "innovation_surprise",
-        "rank(ts_zscore(ts_av_diff({p}, 20), 60))",
-        stage_path="L0:raw -> L1:average deviation -> L2:long zscore -> L3:rank",
-        rationale="提取当前值相对近期平均的创新程度，区分水平与新信息。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "delayed_confirmation", "delayed_confirmation",
-        "rank(ts_zscore(ts_delta(ts_delay({p}, 5), 5), 60))",
-        stage_path="L0:raw -> L1:delay -> L2:delta -> L3:zscore -> L4:rank",
-        rationale="用滞后信息构造确认信号，检验信息扩散而非同步反应。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "accumulated_change", "accumulated_change",
-        "rank(ts_zscore(ts_sum(ts_delta({p}, 5), 20), 60))",
-        stage_path="L0:raw -> L1:delta -> L2:sum -> L3:zscore -> L4:rank",
-        rationale="累计多个短期变化，检验渐进式信息积累的经济含义。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "distribution_regime", "distribution_regime",
-        "rank(ts_rank(ts_zscore({p}, 20), 60))",
-        stage_path="L0:raw -> L1:ts zscore -> L2:own-history ts rank -> L3:rank",
-        rationale="把 20 日平滑相对水平放回自身 60 日历史分位（状态分位数），"
-                  "识别状态切换而非绝对水平。2026-09-11 平台实测：裸位置参数 "
-                  "gaussian 驱动被拒（unknown variable），改用已实证的 ts_rank。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "adaptive_scale_change", "adaptive_scale_change",
-        "rank(ts_scale(ts_delta({p}, 5), 20))",
-        stage_path="L0:raw -> L1:delta -> L2:ts scale -> L3:rank",
-        rationale="按近期尺度标准化变化，比较不同波动环境下的冲击强度。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "trend_residual", "trend_residual",
-        "rank(ts_regression(ts_delta({p}, 5), ts_step(1), 20))",
-        stage_path="L0:raw -> L1:delta -> L2:regression -> L3:rank",
-        rationale="剥离时间趋势后的变化残差，检验非趋势性信息冲击。"
-                  "2026-09-11 round_4 平台实测：lookback=0 被拒"
-                  "（invalid value \"0\" for attribute \"lookback\"），"
-                  "改用省略 lookback 的默认形式。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "compounding_pressure", "compounding_pressure",
-        "rank(ts_zscore(ts_product(add({p}, 1), 10), 60))",
-        stage_path="L0:raw -> L1:additive shift -> L2:product -> L3:zscore -> L4:rank",
-        rationale="将连续小幅变化视为复合效应，检验累积压力或改善是否被低估。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "data_quality_penalty", "data_quality_penalty",
-        "reverse(rank(ts_zscore(ts_count_nans({p}, 20), 60)))",
-        stage_path="L0:raw -> L1:missing count -> L2:zscore -> L3:rank/reversal",
-        rationale="将近期缺失频率作为信息质量风险，检验数据可用性与收益的关系。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "stale_information_reversal", "stale_information",
-        "reverse(rank(ts_zscore(days_from_last_change({p}), 60)))",
-        stage_path="L0:raw -> L1:staleness -> L2:zscore -> L3:rank/reversal",
-        rationale="识别长期不更新的陈旧信息，检验信息滞后与未来反转。",
-        economic=True,
-    ),
-    AlphaTemplate(
-        "last_update_surprise", "last_update_surprise",
-        "rank(ts_zscore(last_diff_value({p}, 20), 60))",
-        stage_path="L0:raw -> L1:last difference -> L2:zscore -> L3:rank",
-        rationale="聚焦最近一次变化相对历史的异常程度，检验更新事件的增量信息。",
-        economic=True,
-    ),
-)
-
+MAX_TEMPLATE_FAMILY_PER_BATCH = 2
 MAX_TEMPLATE_FAMILY_PER_BATCH = 2
 
 # 参数验证只复用既有 change_type 词表：window / decay / truncation / universe
@@ -805,202 +312,6 @@ def _derive_field_semantic_traits(profile):
             "frequency": frequency,
         },
     }
-
-
-# 模板中未被声明为 slot 的固定数字必须在这里显式分类；新增模板数字若没有分类
-# 会让 ``template_numeric_audit()`` 失败，避免它悄悄变成可轮换的研究参数。
-TEMPLATE_FIXED_NUMERICS = {
-    "0.001": (
-        "SAFETY_CONSTANT",
-        "divide epsilon；轮换只改变数值稳定性，不表达经济机制",
-    ),
-    "0.2": (
-        "OPERATOR_REQUIRED_CONSTANT",
-        "trade_when 触发下界，属于固定骨架的算子语义参数",
-    ),
-    "0.8": (
-        "OPERATOR_REQUIRED_CONSTANT",
-        "trade_when 触发上界，属于固定骨架的算子语义参数",
-    ),
-    "1": (
-        "OPERATOR_REQUIRED_CONSTANT",
-        "group 位置参数或单位偏移等算子语义常量",
-    ),
-    "5": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
-    "10": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
-    "20": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
-    "60": ("OPERATOR_REQUIRED_CONSTANT", "模板固定 lookback；未声明 slot 时不可轮换"),
-}
-
-
-def template_numeric_audit(templates=None):
-    """显式审计模板里的每个固定数字，只允许 RESEARCH_SLOT 轮换。
-
-    使用模块自己的 numeric token 规则（与渲染共用，不写第二套 regex）：出现
-    在已声明 slot 上的 token 记为 RESEARCH_SLOT，其余必须命中
-    ``TEMPLATE_FIXED_NUMERICS`` 分类，否则进入 ``problems``。这样
-    divide epsilon 之类的 safety constant 不会被误当作研究参数轮换，新增模板
-    数字也不会绕过审计。
-    """
-    source = (
-        DEFAULT_TEMPLATES + ECONOMIC_TEMPLATES
-        if templates is None else tuple(templates)
-    )
-    rows = []
-    problems = []
-    for template in source:
-        declared = {}
-        for slot in template.numeric_slots:
-            declared[(str(slot.token or slot.default), int(slot.occurrence))] = slot
-        seen = {}
-        for match in _NUMBER_TOKEN_RE.finditer(template.expression):
-            token = match.group(1)
-            index = seen.get(token, 0)
-            seen[token] = index + 1
-            slot = declared.pop((token, index), None)
-            if slot is not None:
-                allowed = tuple(slot.allowed_values or ())
-                if not allowed:
-                    problems.append(
-                        f"{template.template_id}: slot {slot.name} 缺 allowed_values"
-                    )
-                rows.append({
-                    "template_id": template.template_id,
-                    "token": token,
-                    "occurrence": index,
-                    "class": "RESEARCH_SLOT",
-                    "name": slot.name,
-                    "allowed_values": allowed,
-                })
-                continue
-            entry = TEMPLATE_FIXED_NUMERICS.get(token)
-            if entry is None:
-                problems.append(
-                    f"{template.template_id}: 未分类 numeric literal {token}#{index}"
-                )
-                rows.append({
-                    "template_id": template.template_id,
-                    "token": token,
-                    "occurrence": index,
-                    "class": "UNCLASSIFIED",
-                    "name": None,
-                    "allowed_values": (),
-                })
-                continue
-            rows.append({
-                "template_id": template.template_id,
-                "token": token,
-                "occurrence": index,
-                "class": entry[0],
-                "name": None,
-                "allowed_values": (),
-                "role": entry[1],
-            })
-        for slot in declared.values():
-            problems.append(
-                f"{template.template_id}: slot {slot.name} 未出现在表达式中"
-            )
-    return {
-        "ok": not problems,
-        "problems": problems,
-        "rows": rows,
-        "rotatable": [row for row in rows if row["class"] == "RESEARCH_SLOT"],
-    }
-
-
-class AlphaTemplateRegistry:
-    """Immutable-by-default registry for built-in template skeletons."""
-
-    def __init__(self, templates=None):
-        self._templates = {}
-        source = (DEFAULT_TEMPLATES + ECONOMIC_TEMPLATES
-                  if templates is None else templates)
-        for template in source:
-            self.register(template)
-
-    def register(self, template):
-        if not isinstance(template, AlphaTemplate):
-            raise TypeError("template 必须是 AlphaTemplate")
-        if template.template_id in self._templates:
-            raise ValueError(f"重复 template_id: {template.template_id}")
-        if template.economic and not 3 <= template.operator_count <= 8:
-            raise ValueError(
-                f"经济模板 {template.template_id} 算子数必须在 3-8："
-                f"{template.operator_count}"
-            )
-        self._templates[template.template_id] = template
-
-    def get(self, template_id):
-        return self._templates.get(template_id)
-
-    def catalog(self):
-        return [
-            self._templates[key].catalog_entry()
-            for key in sorted(self._templates)
-        ]
-
-    def economic_templates(self):
-        return [
-            self._templates[key]
-            for key in sorted(self._templates)
-            if self._templates[key].economic
-        ]
-
-    def select(self, hypothesis=None):
-        if hypothesis is None:
-            hypothesis = {}
-        if not isinstance(hypothesis, dict):
-            return []
-        explicit = hypothesis.get("template_ids") or []
-        if isinstance(explicit, str):
-            explicit = [explicit]
-        elif not isinstance(explicit, (list, tuple)):
-            return []
-        if any(not isinstance(item, str) or not item.strip() for item in explicit):
-            return []
-        selected = [self.get(item) for item in explicit]
-        if explicit and any(item is None for item in selected):
-            # A partially valid list is still invalid: silently dropping an
-            # unknown id would make the proposal run a different skeleton
-            # from the one the caller requested.
-            return []
-        selected = [item for item in selected if item is not None]
-        if selected:
-            return selected
-        if explicit:
-            # Explicit template intent must fail closed; silently replacing a
-            # typo with a default family makes an AI appear to make progress
-            # while repeatedly testing the wrong structure.
-            return []
-
-        ref = hypothesis.get("template_ref") or {}
-        if not isinstance(ref, dict):
-            return []
-        family = hypothesis.get("template_family") or ref.get("family")
-        if not family:
-            family = ref.get("template_skeleton_family")
-        if ref and not family and (
-            ref.get("catalog_id") or ref.get("skeleton_fingerprint")
-        ):
-            return []
-        raw_tags = hypothesis.get("tags")
-        raw_tags = raw_tags if isinstance(raw_tags, (list, tuple, set)) else []
-        tags = {str(tag).lower() for tag in raw_tags}
-        direction = str(hypothesis.get("direction") or "").lower()
-        if family:
-            matching = [t for t in self._templates.values() if t.family == family]
-            # An explicit family is an exact request, not a preference.  Do
-            # not fall through to direction/tag defaults when it is unknown.
-            return matching
-        if direction == "reversal" or tags & {"reversal", "contrarian"}:
-            ids = {"reversal_zscore_20", "change_delta_5", "rank_level"}
-        elif tags & {"relationship", "pair", "spread", "corr"}:
-            ids = {"spread_rank", "zscore_level", "rank_level"}
-        elif tags & {"momentum", "trend", "continuation"}:
-            ids = {"momentum_mean_20", "change_delta_5", "rank_level"}
-        else:
-            ids = {"rank_level", "zscore_level", "group_neutralized_rank"}
-        return [self._templates[key] for key in sorted(ids)]
 
 
 class AlphaFactory:
@@ -1294,8 +605,12 @@ class AlphaFactory:
                     "fields_used": used_ids,
                     "field_refs": field_refs,
                     "template_id": template.template_id,
+                    "template_version": template.version,
+                    "template_fingerprint": template.fingerprint,
+                    "template_catalog_source": "wqb_agent.alpha_templates.catalog/builtin.toml",
                     "template_family": template.family,
                     "template_stage_path": template.stage_path,
+                    "template_bindings": dict(slot_values),
                     "template_ref": ref,
                     "template_slots": slot_values,
                     "relationship_audit": relationship_audit,
@@ -1306,19 +621,14 @@ class AlphaFactory:
                         template,
                         relation,
                     ),
-                    "direction": (
-                        "reversal" if "reversal" in template.family
-                        or "reversal" in template.rationale.lower() else "long"
-                    ),
+                    "direction": template.direction,
                     "direction_transform": {
-                        "applied": (
-                            "reversal" in template.family
-                            or "reversal" in template.rationale.lower()
-                        ),
-                        "reason": template.rationale,
+                        "applied": template.direction_transform == "reverse",
+                        "reason": template.economic_mechanism,
                     },
-                    "expected_horizon": "由 hypothesis 与字段频率共同确定",
-                    "falsification": "独立样本、健康或平台 checks 不能支持机制时停止该模板。",
+                    "expected_horizon": template.expected_horizon,
+                    "falsification": template.falsification,
+                    "self_correlation_impact": template.self_correlation_impact,
                 }
             )
             if len(candidates) >= limit:
@@ -2258,8 +1568,10 @@ class AlphaFactory:
             if has_explicit_templates else (
                 [template.template_id for template in self.registry.economic_templates()]
                 if economic_mode else [
-                    "rank_level", "zscore_level", "reversal_zscore_20",
-                    "momentum_mean_20", "change_delta_5", "vector_mean_rank",
+                    template.template_id
+                    for template in self.registry.select(
+                        {"selection_group": "factory_default"}
+                    )
                 ]
             )
         )
@@ -2421,7 +1733,7 @@ class AlphaFactory:
                         profile_by_id[item]
                     ),
                     "independent_increment": "该 BASELINE 只检验这些字段组合的独立增量信息。",
-                    "direction": "reversal" if "reversal" in template.family else "long",
+                    "direction": template.direction,
                 }
                 for item in used_field_ids
             }
@@ -2476,9 +1788,9 @@ class AlphaFactory:
                 "novelty": 1.0,
                 "simulation_cost": 1.0,
                 "rationale": candidate["rationale"],
-                "direction": "reversal" if "reversal" in template.family else "long",
-                "expected_horizon": "short-term",
-                "falsification": "若六指标、checks 或健康诊断不能支持稳定增量，则关闭该字段-结构组合。",
+                "direction": template.direction,
+                "expected_horizon": template.expected_horizon,
+                "falsification": template.falsification,
                 "self_correlation_impact": {
                     "expected_effect": "UNKNOWN",
                     "basis": "no_live_behavior_series",
@@ -2490,7 +1802,9 @@ class AlphaFactory:
                 key: candidate[key]
                 for key in ("mutation", "template_id", "template_family",
                             "template_stage_path", "template_ref", "template_slots",
-                            "relationship_audit", "factory_version")
+                            "relationship_audit", "factory_version",
+                            "template_version", "template_fingerprint",
+                            "template_catalog_source", "template_bindings")
             })
             proposal["proposal_origin"] = "factory"
             assembled.append(proposal)

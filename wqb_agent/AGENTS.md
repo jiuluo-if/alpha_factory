@@ -23,6 +23,8 @@
 
 `credentials.py` 是 local-only credential resolver，不依赖 Client、requests、Agent、Simulator、proposal execution 或 state。它只接受完整来源：显式 Client pair、WQB 环境变量、显式绝对路径 `WQB_CREDENTIALS_ENV_FILE`、home credentials file；partial、malformed、unreadable source 必须 fail-closed，不得从 cwd/父目录/package 自动发现 `.env` 或跨源拼接。`client.py` 继续拥有认证协议和 retry/Session 机制，只消费 resolver 结果。
 
+`alpha_templates/` 是 Alpha template model、TOML catalog、resource loader、registry 与 numeric audit 的唯一 owner。新增模板只编辑 `alpha_templates/catalog/builtin.toml`，声明稳定 metadata、字段 slots、selection groups 和 numeric slots；不要在 `alpha_factory.py` 或 `candidate.py` 增加第二份 skeleton。loader 使用 `importlib.resources`/`tomllib`，缺字段、重复 ID、非法 group/direction、未声明数字或无效 slot 必须 fail-closed。`alpha_factory.py` 仅通过 registry 消费模板并保留旧 import 的 compatibility re-export；`CandidateBuilder` 的 from-scratch path 必须复用该 binding path。
+
 领域模块不得导入 `Agent` 或创建另一条执行/状态路径；BRAIN 事实留在 client/discovery 边界，纯评估函数不得产生网络写入。
 
 ## 不变量

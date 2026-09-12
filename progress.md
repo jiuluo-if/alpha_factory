@@ -564,6 +564,8 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 链 2（`P0 → C1 DONE → incremental UNAVAILABLE → restart`）在 trajectory 中同时写入已结算 P0 与
   C1，证明 restart 后 bound 仍只把真实 CHILD 计为下一代、`stop_reason=NO_INCREMENTAL_CHILD_EVIDENCE`。
 - 链 3 继续由 `TestResearchApiCanonicalReads` 覆盖（三个 surface 只见最新 FINAL）。
-- 复跑质量门：`862 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
+- 新增 `test_blocked_generation_turns_structural_repair_into_stop`：结构 blocker parent + 已存在
+  无 incremental evidence 的 CHILD → `generation_bound.allowed=False` 时 `next_action=STOP`。
+- 复跑质量门：`863 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
   coverage `TOTAL 79.9%`、`state doctor`/`state audit`/`context --compact` exit 0
   （`WORKSPACE STATUS: SAFE`、`SUBMIT_UNKNOWN: 0`、无未完成 checkpoint）。

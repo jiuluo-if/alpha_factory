@@ -918,3 +918,5 @@
   （`field_understanding`/`field_analysis`/`field_source`/`field_hypothesis_basis`/
   `economic_mechanism`），否则 `OptimizerWorkflow._parent_rejections()` 会把 C1 过滤掉，
   Agent 视图反而看不到自己的子代。
+- `next_action` 映射逐项锁定：结构 blocker 且 `generation_bound.allowed == False` 时返回 `STOP`
+  （`test_blocked_generation_turns_structural_repair_into_stop`），确保“修不动”时不再提议新 CHILD。

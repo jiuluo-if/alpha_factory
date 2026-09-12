@@ -420,6 +420,7 @@
 - [x] 复检 P0-C：结构 blocker 优先级高于 resolved PASS（`_next_action()` 顺序修复）
 - [x] 端到端离线验收链 `TestStructuralRepairChainEndToEnd` + 复跑质量门（`862 tests OK`、coverage 79.9%）
 - [x] 端到端链 1 补齐 `SELF_CORRELATION_REPAIR` 投影断言；链 2 纳入已结算 P0 父代
+- [x] 锁定 `generation_bound.allowed==false → STOP` 映射并复跑质量门（`863 tests OK`、coverage 79.9%）
 
 ## 约束
 

@@ -111,6 +111,14 @@ Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实
 
 不要默认递归阅读整个仓库。历史 phase 文档、`docs/superpowers/**`、兼容 factory、一次性 report 脚本和 specialized skills 只有在当前任务确实需要时才读。
 
+## Prompt 结构
+
+- 本文件是架构、安全与 owner 契约的唯一 source-of-truth。
+- `prompts/maintenance_agent.md`：外层维护 Agent（architecture、tests、docs、privacy、profiling、dependency、交付）；遇到研究判断输出 `REQUIRES_INNER_RESEARCH_DECISION`。
+- `prompts/research_agent.md`：内层研究 Agent（hypothesis、`OptimizationDecision`、结果解释）。
+
+两个 prompt 只引用本文件，不复制契约正文；`docs/AGENT_VIBE_CODING_PROMPT.md` 是指向它们的 redirect。
+
 ## 运行入口
 
 ```powershell

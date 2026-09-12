@@ -18,6 +18,11 @@
 - [x] 提交并推送：`2ce1f87`（前置准入与有界验证变体）、`00a5672`（文档）；`git ls-remote origin main`
   在推送 `00a5672` 时与本地 HEAD 相同（本收尾提交只回填记录）
 - [x] 记录 `TARGETED_OPTIMIZATION_BATCH_BLOCKED_BY_FACTORY_BATCH_CONTRACT`（不绕过 100 契约）
+- [x] 审计轮：turnover 准入区间收敛为 `pre_correlation.turnover_bounds()` 单一来源，Agent 复用（`ea38933`）
+- [x] 审计轮：补齐 numeric variant 同一性/去重/预算测试与 §44/§50 准入缺口测试（`841 tests OK`）
+- [x] 审计轮：只读核对 §55 VALIDATION 配额 owner 与 §56 factory batch mode 保护结论
+- [x] 审计轮质量门：compileall、Ruff、mypy 9 frontier、coverage 79.8%、offline doctor/audit/context exit 0
+- [x] 审计轮提交与推送：远端 SHA == LOCAL_HEAD
 
 ## 2026-09-12（前序）Phase III Autonomous Optimization（PAUSED/DISARMED，未运行真实 Simulation）
 

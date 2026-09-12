@@ -182,6 +182,14 @@ class TestPreCorrelationEligibility(unittest.TestCase):
         ])
         self.assertFalse(pending_other["eligible"])
 
+    def test_low_sub_universe_sharpe_blocks_the_query(self):
+        outcome = report(checks=[
+            {"name": "LOW_SUB_UNIVERSE_SHARPE", "pass": False},
+            {"name": "SELF_CORRELATION", "pass": None, "result": "PENDING"},
+        ])
+        self.assertFalse(outcome["eligible"])
+        self.assertIn("NON_CORRELATION_CHECKS_NOT_PASS", outcome["reasons"])
+
     def test_missing_metrics_stay_unknown_not_pass(self):
         outcome = pre_self_correlation_eligibility(
             {}, delay=1, quality_policy=QUALITY, health={"ok": True},
@@ -210,6 +218,21 @@ class TestMetricOptimizationContext(unittest.TestCase):
         self.assertEqual(context["readiness"], "STRUCTURAL_REPAIR_REQUIRED")
         self.assertEqual(context["structural_blockers"], ["CONCENTRATED_WEIGHT"])
         self.assertIn("CONCENTRATION_REPAIR", context["opportunities"])
+
+    def test_low_sub_universe_sharpe_needs_structure_not_a_query(self):
+        context = metric_optimization_context(
+            synthetic_metrics(sharpe=1.50, fitness=1.20, checks=[
+                {"name": "LOW_SUB_UNIVERSE_SHARPE", "pass": False},
+                {"name": "SELF_CORRELATION", "pass": None, "result": "PENDING"},
+            ]),
+            delay=1, quality_policy=QUALITY, health={"ok": True},
+        )
+        self.assertFalse(context["pre_correlation_eligible"])
+        self.assertEqual(context["readiness"], "STRUCTURAL_REPAIR_REQUIRED")
+        self.assertEqual(
+            context["structural_blockers"], ["LOW_SUB_UNIVERSE_SHARPE"]
+        )
+        self.assertIn("SUB_UNIVERSE_REPAIR", context["opportunities"])
 
     def test_repaired_parent_is_ready_for_self_correlation(self):
         context = metric_optimization_context(
@@ -358,6 +381,18 @@ class TestValidationContract(unittest.TestCase):
         )
         self.assertEqual(validation_candidate_values("universe", current="TOP3000"), ())
         self.assertEqual(validation_candidate_values("decay", current=None), ())
+
+    def test_truncation_outside_the_whitelist_is_rejected(self):
+        decision = validate_decision(
+            validation_variable="truncation", old_value=0.08, new_value=0.09
+        )
+        self.assertIn(
+            "VALIDATION_NEW_VALUE_OUT_OF_POOL",
+            validation_rejections(
+                decision, self.parent,
+                allowed_values=validation_candidate_values("truncation", current=0.08),
+            ),
+        )
 
     def test_decision_identity_is_checked_before_pool_membership(self):
         decision = validate_decision(parent_id="other")

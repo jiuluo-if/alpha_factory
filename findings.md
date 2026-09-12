@@ -787,3 +787,30 @@
   （`factory_100` vs `targeted_optimization`）选择 materialization；复用现有 member-level preflight、去重、
   checkpoint、`SUBMIT_UNKNOWN` 与预算保护，只放宽"恰好 100"这一条并补行为/回归测试；不新增 inbox、
   不新增 state owner、不绕过 `Agent.run_proposals()`。
+
+### 审计轮补记：准入门槛单一来源、spec 覆盖核对与补测
+
+- **turnover 区间单一来源（已修复）**：此前 `pre_self_correlation_eligibility()` 与
+  `Agent._alpha_rating()` 的 GOOD 分支各写一份 `0.01..0.70` 字面量，quality policy 变更后两者可能漂移；
+  现统一为 `pre_correlation.turnover_bounds(quality_policy)`，Agent 复用同一函数。新增
+  `test_turnover_bounds_are_the_single_shared_source` 与
+  `test_alpha_rating_shares_the_pre_correlation_turnover_bounds` 固定该契约。
+- **§49 / §50 / §51 覆盖核对（只读）**：`tests/test_optimization_decision.py` 已覆盖 declared window slot
+  可轮换、undeclared `0.001` 不可渲染、单变量 `change_count == 1`、variant 同
+  `semantic_mechanism_family` / 同 `semantic_mechanism_key` / 唯一 `template_variant_id`、
+  `validation_proposals()` 表达式去重与 `max_candidates` 截断；真实 `AlphaFactory` 端到端
+  （`test_window_validation_is_robustness_not_child`、`test_single_variable_decay_validation_emits_robustness_proposal`）
+  使用真实模板 + `validate_proposal(..., require_economic_integrity=True)` 断言零问题（非 FakeFactory）。
+- **§44 / §50 缺口补齐**：新增 `test_low_sub_universe_sharpe_blocks_the_query`、
+  `test_low_sub_universe_sharpe_needs_structure_not_a_query`（LOW_SUB_UNIVERSE_SHARPE FAIL →
+  不可查询；readiness `STRUCTURAL_REPAIR_REQUIRED`；opportunity `SUB_UNIVERSE_REPAIR`）与
+  `test_truncation_outside_the_whitelist_is_rejected`（`0.09` 不在白名单池 →
+  `VALIDATION_NEW_VALUE_OUT_OF_POOL`）。
+- **§55 配额 owner 未变（只读）**：整轮 VALIDATION 上限仍由 `ProposalExecutionWorkflow` 的
+  `research_allocation.maximum[role]` 计数并 fail-closed；`AlphaFactory.validation_proposals(max_candidates=...)`
+  只是单次调用的额外上限，未新增 quota system。
+- **§56 batch inbox 保护检查（只读结论）**：`proposal_contract.validate_factory_batch()` 要求批次恰好
+  `FACTORY_BATCH_SIZE = 100`；`FactoryRunner` 每轮在锁内以 `atomic_write_json_if_changed(proposals_path,
+  payload)`（`batch_type="factory_100"`、`source="ai_factory_template_adapter"`）覆盖唯一 canonical
+  `proposals.json`。当前编排没有 optimization / exploration 双 batch mode 保护，也没有第二 inbox；
+  定向批次按 §57 保持“记录 + 设计候选方案”，未实现。

@@ -489,3 +489,25 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 - 提交与推送：`2ce1f87` `feat：统一 SELF_CORRELATION 前置准入门槛并增加有界验证变体`、
   `00a5672` `docs：记录 Phase V 指标感知优化与定向批次阻塞`；远端 `origin/main` 校验
   `REMOTE_SHA == LOCAL_HEAD`（`00a5672300146ad46948636442c6acb8c558836f`）。
+
+## 2026-09-12 Phase V 审计轮：准入单一来源、spec 覆盖核对与 §44/§50 补测
+
+- 修复真实冗余：turnover 准入区间此前在 `pre_correlation` 与 `Agent._alpha_rating()` GOOD 分支各写一份
+  字面量，现统一为 `pre_correlation.turnover_bounds()` 并由 Agent 复用；新增单一来源与 Agent 一致性测试。
+- 补齐 numeric variant 契约测试（`TestNumericVariantIdentityAndDedupe`）：variant 保持 parent
+  `semantic_mechanism_family` / `semantic_mechanism_key`、`template_variant_id` 唯一、表达式去重、
+  `max_candidates` 截断且 `research_role=VALIDATION` / `experiment_stage=ROBUSTNESS`。
+- 补齐 §44/§50 spec 缺口：LOW_SUB_UNIVERSE_SHARPE FAIL 不得查询 SELF_CORRELATION
+  （`STRUCTURAL_REPAIR_REQUIRED` / `SUB_UNIVERSE_REPAIR`）；truncation `0.09` 不在白名单 →
+  `VALIDATION_NEW_VALUE_OUT_OF_POOL`。
+- 只读核对：§55 VALIDATION 配额仍由 `ProposalExecutionWorkflow` 的 research allocation 计数，未新增
+  quota owner；§56 检查确认当前工厂只有单一 `factory_100` batch mode 且每轮覆盖 canonical
+  `proposals.json`，无 optimization/exploration 双 mode 保护（按 §57 记录 + 设计候选方案）。
+- 全量质量门（fresh）：`841 tests OK`、compileall exit 0、Ruff（排除 7 个未跟踪用户分析脚本）
+  All checks passed、mypy 9 frontier Success、coverage branch-aware 79.8%（`fail_under=76.0`）、
+  offline `state doctor` / `state audit` / `context --compact` exit 0。
+- 提交与推送：`ea38933` `fix：收敛 turnover 区间来源并补齐 numeric variant 去重测试`、本笔
+  `fix：补齐 LOW_SUB_UNIVERSE_SHARPE 与 truncation 白名单准入测试`；远端 `origin/main` 校验
+  `REMOTE_SHA == LOCAL_HEAD`。
+- 约束确认：未运行真实 Simulation / run-proposals / factory run；未提交 Alpha；未做远端 color 写入；
+  未写 `.wqb_state`；研究保持 PAUSED。

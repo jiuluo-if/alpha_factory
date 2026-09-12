@@ -929,9 +929,11 @@
   于是 `screen_optimization_parents()` 判定该 parent“已终结”并丢弃 —— Agent authored 的
   CHILD/VALIDATE 在真实路径下永远 0 生成。此前端到端测试用
   `terminal_expressions=lambda: set()` 的空 hook，掩盖了这个断点。
+  VALIDATE 走同一条排除逻辑（`AlphaFactory.validation_proposals()` 也按
+  `excluded_expressions` 过滤 parent 自身表达式），因此两条生成路径同时被杀死。
 - **修复 A：** 新增 `OptimizerWorkflow._optimization_exclusions()`：终态集合只用于排除
   “新提案”，再减去被优化 parent 自身的表达式；screen 与 optimize 各自读取一次 hook，
-  保留既有 dynamic terminal read 行为。
+  保留既有 dynamic terminal read 行为。CHILD 与 VALIDATE 两条生成路径都改用该豁免。
 - **断点 B：targeted envelope 缺 discovery 字段画像。** `run-proposals` 的生产 preflight
   需要平台字段画像（`description` / `semantic_status`），而 `materialize_targeted_batch()`
   写出的 envelope 只有 proposals，结果是 `PREFLIGHT_BLOCKED：缺少本轮 discovery 字段画像`：
@@ -940,6 +942,7 @@
   取出 batch 引用字段的真实画像写入 envelope `fields`；cache 缺失时不写画像、由 preflight
   fail-closed，不伪造字段元数据。
 - **验收：** `tests/test_control_loop_repair.py::TestTargetedBatchRunsOnTheSingleExecutionPath`
-  三条测试：终态不再排除 parent 且真实 Agent 产出 1 个 CHILD；预置真实 field cache 后
+  四条测试：终态不再排除 parent 且真实 Agent 产出 1 个 CHILD；真实 Agent 的 VALIDATE 决策
+  仍产出 ROBUSTNESS proposal（`changed_variable=decay`、`settings={"decay": 5}`）；预置真实 field cache 后
   `materialize → agent.run_proposals()` 被 accepted 并恰好提交 1 次 Simulation（唯一
   `proposals.json`、唯一执行路径）；无字段画像时 0 次提交且 `PREFLIGHT_BLOCKED`。

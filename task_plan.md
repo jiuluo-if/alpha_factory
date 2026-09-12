@@ -422,6 +422,7 @@
 - [x] 端到端链 1 补齐 `SELF_CORRELATION_REPAIR` 投影断言；链 2 纳入已结算 P0 父代
 - [x] 锁定 `generation_bound.allowed==false → STOP` 映射并复跑质量门（`863 tests OK`、coverage 79.9%）
 - [x] 修复执行侧真实断点（终态表达式排除 parent、targeted envelope 缺字段画像）并新增单路径执行验收
+- [x] CHILD/VALIDATE 两条生成路径均复用 `_optimization_exclusions()` 豁免，并补 VALIDATE 真实 Agent 验收
 
 ## 约束
 

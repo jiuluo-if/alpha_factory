@@ -572,9 +572,11 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
 
 ### 2026-09-12 增补 3：targeted batch 执行侧真实控制链复检
 
-- 发现并修复两处真实断点（详见 `findings.md`）：终态表达式错误排除被优化的 DONE parent；
-  targeted envelope 缺 discovery 字段画像导致 preflight 永远拒绝。
-- 新增 `TestTargetedBatchRunsOnTheSingleExecutionPath`（3 条）：真实 Agent 生成 CHILD、
-  `materialize → run-proposals` 唯一路径恰好 1 次 Simulation、无画像时 fail-closed。
-- 复跑质量门：`866 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
+- 发现并修复两处真实断点（详见 `findings.md`）：终态表达式错误排除被优化的 DONE parent
+  （CHILD 与 VALIDATE 两条生成路径同时受害）；targeted envelope 缺 discovery 字段画像
+  导致 preflight 永远拒绝。
+- 新增 `TestTargetedBatchRunsOnTheSingleExecutionPath`（4 条）：真实 Agent 生成 CHILD、
+  真实 Agent 的 VALIDATE 仍产出 ROBUSTNESS proposal、`materialize → run-proposals` 唯一路径
+  恰好 1 次 Simulation、无画像时 fail-closed。
+- 复跑质量门：`867 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
   coverage `TOTAL 80.1%`、`state doctor`/`state audit`/`context --compact` exit 0。

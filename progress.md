@@ -554,3 +554,16 @@ N/A | engineering evidence | 记录 ledger 缺失、无 URL UNKNOWN、RUNNING+st
   coverage `TOTAL 79.9%`、offline `state doctor` / `state audit` exit 0。
 - 约束不变：REAL_SIMULATION_RUN=NO、NEW_QUOTA_CONSUMED=NO、ALPHA_SUBMISSION=NO、
   REMOTE_COLOR_WRITE=NO；未写 `.wqb_state`；研究保持 PAUSED。
+
+### 2026-09-12 增补 2：端到端离线链补强（对照目标提示词的 acceptance 清单）
+
+- 链 1 补齐提示词列出的最后一步：resolved FAIL 必须立即出现在 `agent.optimizer_context()` ——
+  `self_correlation_status=FAIL`、`next_action=CONSIDER_CORRELATION_REPAIR`、
+  `SELF_CORRELATION_REPAIR` opportunity 与顶层 `next_action` 一致；为此 synthetic C1 补齐父子证据
+  字段，使其能通过 parent 初筛。
+- 链 2（`P0 → C1 DONE → incremental UNAVAILABLE → restart`）在 trajectory 中同时写入已结算 P0 与
+  C1，证明 restart 后 bound 仍只把真实 CHILD 计为下一代、`stop_reason=NO_INCREMENTAL_CHILD_EVIDENCE`。
+- 链 3 继续由 `TestResearchApiCanonicalReads` 覆盖（三个 surface 只见最新 FINAL）。
+- 复跑质量门：`862 tests OK`、compileall exit 0、mypy 9 frontier Success、Ruff All checks passed、
+  coverage `TOTAL 79.9%`、`state doctor`/`state audit`/`context --compact` exit 0
+  （`WORKSPACE STATUS: SAFE`、`SUBMIT_UNKNOWN: 0`、无未完成 checkpoint）。

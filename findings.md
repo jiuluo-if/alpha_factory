@@ -913,3 +913,8 @@
 - 验收：`tests/test_control_loop_repair.py::TestStructuralRepairChainEndToEnd`（离线端到端链：
   结构 blocker → CONSIDER_CHILD → production-valid CHILD → synthetic C1 `PRE_CORRELATION_READY`
   → SELF_CORRELATION 只 GET 一次且 FAIL → generation bound `NO_INCREMENTAL_CHILD_EVIDENCE`）。
+- 端到端链补强：resolved FAIL 必须出现在 `Agent.optimizer_context()`（不能只断言
+  `resolved_self_correlation()`），因此 synthetic C1 必须携带完整 parent 级证据
+  （`field_understanding`/`field_analysis`/`field_source`/`field_hypothesis_basis`/
+  `economic_mechanism`），否则 `OptimizerWorkflow._parent_rejections()` 会把 C1 过滤掉，
+  Agent 视图反而看不到自己的子代。

@@ -322,7 +322,14 @@ def get_experiment(experiment_id, *, state_dir=".wqb_state"):
 
 
 def compare_experiments(ids: Sequence[str], *, state_dir=".wqb_state") -> dict[str, Any]:
-    records = [get_experiment(item, state_dir=state_dir) for item in ids]
+    """Compare stored experiments with one canonical streaming pass.
+
+    ``Trajectory.find_rows()`` is the owner-side batch merge primitive, so the
+    comparison does not reload and re-scan the append-only file once per id.
+    """
+    trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
+    found = trajectory.find_rows(ids)
+    records = [found.get(str(item)) for item in ids]
     records = [record for record in records if record is not None]
     return {"experiments": records, "missing": [item for item in ids if not any(str(record.get("id")) == str(item) or str(record.get("proposal_id")) == str(item) for record in records)]}
 

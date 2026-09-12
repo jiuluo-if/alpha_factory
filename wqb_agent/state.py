@@ -49,6 +49,31 @@ def same_execution_identity(left, right):
         key: right.get(key) for key in IDENTITY_FIELDS
     }
 
+
+def json_literal_prefilter(value):
+    """Return a safe raw-substring prefilter for a JSONL line, else ``None``.
+
+    A JSON string escapes quote, backslash and control characters, and an
+    ``ensure_ascii=True`` writer escapes non-ASCII characters, so those values
+    cannot be prefiltered by a raw substring test without risking a false
+    negative.  ``None`` means "decode every line" (fail-closed).
+    """
+    if not value:
+        return None
+    if any(ch in '"\\' or ord(ch) < 0x20 or ord(ch) > 0x7E for ch in value):
+        return None
+    return value
+
+
+def merge_canonical_candidate(references, latest, key, row):
+    """Keep the first legal identity reference and the latest legal revision."""
+    reference = references.get(key)
+    if reference is not None and not same_execution_identity(reference, row):
+        return
+    references.setdefault(key, row)
+    latest[key] = row
+
+
 def dataset_ref(value):
     """数据集条目归一化为字符串 id。
 
@@ -361,13 +386,17 @@ class Trajectory:
             if row.get("id"):
                 yield row["id"]
 
-    def iter_rows(self, *, stats=None):
+    def iter_rows(self, *, stats=None, prefilter=None):
         """Stream valid raw trajectory objects without retaining history.
 
         This is a read-only primitive for bounded identity/audit passes.  It
         deliberately yields dictionaries rather than ``Experiment`` objects
         so callers do not materialize the day-long append-only file or create
         a persistent sidecar index.
+
+        ``prefilter`` is an optional literal (or tuple of literals) that every
+        requested row must contain; it only skips JSON decoding of lines that
+        cannot match and never changes which rows are yielded.
         """
         if not self.persist:
             return
@@ -376,6 +405,11 @@ class Trajectory:
         try:
             with open(self.path, encoding="utf-8") as handle:
                 for line in handle:
+                    if isinstance(prefilter, str):
+                        if prefilter not in line:
+                            continue
+                    elif prefilter and not any(token in line for token in prefilter):
+                        continue
                     try:
                         row = json.loads(line)
                     except (ValueError, TypeError, json.JSONDecodeError):
@@ -413,7 +447,7 @@ class Trajectory:
         target = str(experiment_id)
         reference = None
         latest = None
-        for row in self.iter_rows() or ():
+        for row in self.iter_rows(prefilter=json_literal_prefilter(target)) or ():
             if target not in (str(row.get("id")), str(row.get("proposal_id"))):
                 continue
             if reference is not None and not same_execution_identity(reference, row):
@@ -422,6 +456,41 @@ class Trajectory:
                 reference = row
             latest = row
         return latest
+
+    def find_rows(self, experiment_ids):
+        """Resolve several experiment identities with one streaming pass.
+
+        ``find_row`` streams the append-only file per identity, so comparing a
+        handful of ids costs one full scan each.  This owner-local batch
+        primitive performs a single canonical merge pass for the whole set
+        while keeping ``find_row``'s per-identity semantics: the latest legal
+        revision wins and a row whose execution identity contradicts the first
+        legal match is ignored.  Missing identities are reported as ``None``
+        rather than fabricated.
+        """
+        if not self.persist or not self.path or not os.path.exists(self.path):
+            return {}
+        targets = {
+            str(value) for value in (experiment_ids or ()) if value is not None
+        }
+        if not targets:
+            return {}
+        literals = {target: json_literal_prefilter(target) for target in targets}
+        prefilter = (
+            tuple(sorted(set(literals.values())))
+            if all(literal is not None for literal in literals.values())
+            else None
+        )
+        references = {}
+        latest = {}
+        for row in self.iter_rows(prefilter=prefilter) or ():
+            row_id = str(row.get("id"))
+            if row_id in targets:
+                merge_canonical_candidate(references, latest, row_id, row)
+            proposal_id = str(row.get("proposal_id"))
+            if proposal_id in targets and proposal_id != row_id:
+                merge_canonical_candidate(references, latest, proposal_id, row)
+        return {target: latest.get(target) for target in targets}
 
     def iter_canonical_rows(self, *, since=None, until=None):
         """Stream the latest valid canonical row per experiment identity.

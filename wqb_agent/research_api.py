@@ -20,6 +20,7 @@ DO NOT USE FOR:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -31,7 +32,7 @@ from typing import Any
 from .artifacts import atomic_write_json_if_changed
 from .config import normalize_config
 from .expression import analyze_expression
-from .optimization_decision import OptimizationDecision
+from .optimization_decision import OptimizationDecision, optimization_decision_identity
 from .proposal_contract import (
     TARGETED_BATCH_TTL_SEC,
     TARGETED_BATCH_TYPE,
@@ -444,16 +445,46 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
 
     The optimizer already validated the decisions; this only freezes the
     resulting bounded batch into the canonical ``proposals.json`` so it is not
-    silently replaced by a factory exploration batch.  It reuses
+    silently replaced by a factory exploration batch.  The Agent also records
+    local canonical accounting and a lossy memory projection; this is distinct
+    from remote Simulation writes.  It reuses
     ``OptimizerWorkflow`` (the single CHILD path), the canonical round counter
     and the existing atomic writer: no second inbox, no second Simulation path,
     and no Simulation/checkpoint write happens here.
     """
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
     authored = [
         OptimizationDecision.from_mapping(item) if isinstance(item, Mapping) else item
         for item in (decisions or ())
     ]
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
+    path = os.path.join(directory, "proposals.json")
+    decision_ids = [optimization_decision_identity(item) for item in authored]
+    fingerprint = _targeted_batch_fingerprint(decision_ids)
+    existing = _read_targeted_envelope(path)
+    if _active_targeted_batch(existing, time.time()):
+        existing_fingerprint = existing.get("decision_fingerprint")
+        if not existing_fingerprint:
+            existing_ids = existing.get("optimization_decision_ids")
+            existing_fingerprint = (
+                _targeted_batch_fingerprint(existing_ids)
+                if isinstance(existing_ids, list) else None
+            )
+        if existing_fingerprint == fingerprint:
+            return {
+                "written": False,
+                "status": "TARGETED_BATCH_UNCHANGED",
+                "path": path,
+                "round_no": existing.get("round_no"),
+                "expires_at": existing.get("expires_at"),
+                "proposal_count": len(existing.get("proposals") or []),
+            }
+        return {
+            "written": False,
+            "status": "TARGETED_BATCH_CONFLICT",
+            "path": path,
+            "round_no": existing.get("round_no"),
+        }
     report = runtime.propose_optimization(authored, max_candidates=max_candidates)
     proposals = list(report.get("proposals") or [])
     if not proposals:
@@ -464,8 +495,6 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
             **report, "written": False,
             "status": "TARGETED_BATCH_REJECTED", "errors": list(errors),
         }
-    directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
-    path = os.path.join(directory, "proposals.json")
     now = time.time()
     fields = _targeted_field_profiles(runtime, proposals)
     envelope = {
@@ -474,6 +503,8 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
         "round_no": runtime.next_round_no(),
         "created_at": now,
         "expires_at": now + max(0.0, float(ttl_sec)),
+        "optimization_decision_ids": decision_ids,
+        "decision_fingerprint": fingerprint,
         "hypothesis": {
             "id": f"h-targeted-r{int(now)}",
             "statement": "Agent authored optimization decisions",
@@ -494,6 +525,31 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
         "expires_at": envelope["expires_at"],
         "proposal_count": len(proposals),
     }
+
+
+def _targeted_batch_fingerprint(decision_ids):
+    return hashlib.sha256(json.dumps(sorted(str(item) for item in decision_ids),
+                                         separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _read_targeted_envelope(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _active_targeted_batch(payload, now):
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("batch_type") != TARGETED_BATCH_TYPE or payload.get("source") != "agent_optimizer":
+        return False
+    try:
+        return float(payload.get("expires_at")) > float(now)
+    except (TypeError, ValueError):
+        return False
 
 
 __all__ = [

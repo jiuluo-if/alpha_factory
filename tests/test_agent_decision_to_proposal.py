@@ -144,6 +144,24 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         self.assertEqual(result["decision_report"]["child_generated"], 0)
         for entry in result["rejected"]:
             self.assertIn("NOT_A_CHILD_DECISION", entry["reasons"])
+        self.assertEqual(
+            [item["outcome"] for item in result["decision_results"]],
+            ["REROUTE", "STOP"],
+        )
+
+    def test_pruned_and_rejected_decision_results_preserve_outcomes(self):
+        parent = parent_record("p1")
+        flow = workflow(FakeTrajectory([parent]), factory=RecordingFactory())
+        decisions = [
+            OptimizationDecision(parent_id="p1", decision="CHILD"),
+            OptimizationDecision(parent_id="p1", decision="VALIDATE"),
+        ]
+        result = flow.generate_from_decisions(decisions)
+
+        self.assertEqual(len(result["decision_results"]), 2)
+        self.assertEqual([item["outcome"] for item in result["decision_results"]],
+                         ["REJECTED", "REJECTED"])
+        self.assertTrue(all(item["decision_id"] for item in result["decision_results"]))
 
     def test_incomplete_validate_decision_is_rejected_without_proposal(self):
         """VALIDATE 缺单变量 contract 时必须 fail-closed，不猜参数。"""
@@ -235,6 +253,41 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         )
         self.assertEqual(problems, [])
         self.assertTrue(ok)
+
+    def test_same_parent_validations_are_attributed_by_decision_identity(self):
+        parent = parent_record(
+            "p-mixed",
+            settings={"delay": 1, "decay": 4, "truncation": 0.08,
+                      "universe": "TOP3000"},
+        )
+        decisions = [
+            validate_decision("p-mixed", new_value=5),
+            validate_decision("p-mixed", validation_variable="truncation",
+                              old_value=0.08, new_value=0.10),
+        ]
+        result = workflow(FakeTrajectory([parent]), factory=AlphaFactory()).generate_from_decisions(
+            decisions, max_candidates=1
+        )
+
+        self.assertEqual([item["outcome"] for item in result["decision_results"]],
+                         ["GENERATED", "NO_CANDIDATE"])
+        self.assertEqual(result["proposals"][0]["optimization_decision_id"],
+                         result["decision_results"][0]["decision_id"])
+
+    def test_child_and_validate_share_one_batch_candidate_cap(self):
+        parent = parent_record(
+            "p-cap",
+            settings={"delay": 1, "decay": 4, "truncation": 0.08,
+                      "universe": "TOP3000"},
+        )
+        decisions = [child_decision("p-cap"), validate_decision("p-cap")]
+        result = workflow(FakeTrajectory([parent]), factory=AlphaFactory()).generate_from_decisions(
+            decisions, max_candidates=1
+        )
+
+        self.assertEqual(len(result["proposals"]), 1)
+        self.assertEqual([item["outcome"] for item in result["decision_results"]],
+                         ["GENERATED", "NO_CANDIDATE"])
 
     def test_window_validation_is_robustness_not_child(self):
         field_profile = {

@@ -33,6 +33,7 @@ from .metrics import (
     checks_passed,
     num,
 )
+from .optimization_decision import optimization_decision_identity
 from .optimization_interfaces import OptimizationTrial, record_optimization_trial
 from .optimizer_workflow import OptimizerHooks
 from .pre_correlation import (
@@ -341,10 +342,11 @@ class Agent:
 
     def propose_optimization(self, decisions, *, max_candidates=4):
         """Agent-facing：校验 OptimizationDecision 后走唯一 CHILD 生成路径。"""
+        authored = list(decisions or ())
         result = self.optimizer_workflow.generate_from_decisions(
-            decisions, max_candidates=max_candidates
+            authored, max_candidates=max_candidates
         )
-        self._record_optimization_selection(decisions, result)
+        self._record_optimization_selection(authored, result)
         return result
 
     def _record_optimization_selection(self, decisions, result):
@@ -356,10 +358,26 @@ class Agent:
             if item.get("parent_id")
         }
         decision_results = (result or {}).get("decision_results") or []
-        for index, decision in enumerate(decisions or ()):
+        authored = list(decisions or ())
+        if decision_results and len(decision_results) != len(authored):
+            raise ValueError("optimization decision result count mismatch")
+        if decision_results and any(
+            not isinstance(item, dict) or not item.get("decision_id")
+            for item in decision_results
+        ):
+            raise ValueError("optimization decision result identity missing")
+        results_by_id = {
+            item.get("decision_id"): item for item in decision_results
+            if isinstance(item, dict) and item.get("decision_id")
+        }
+        for index, decision in enumerate(authored):
             if not hasattr(decision, "parent_id") or not hasattr(decision, "decision"):
                 continue
-            metadata = decision_results[index] if index < len(decision_results) else {}
+            expected_id = optimization_decision_identity(decision)
+            metadata = results_by_id.get(expected_id)
+            if decision_results and metadata is None:
+                raise ValueError("optimization decision result identity mismatch")
+            metadata = metadata or (decision_results[index] if index < len(decision_results) else {})
             outcome = metadata.get("outcome") if isinstance(metadata, dict) else None
             if outcome:
                 pass
@@ -375,11 +393,11 @@ class Agent:
                 outcome = "PRUNED" if any(
                     "PRUNE" in str(reason).upper() for reason in rejected.get(decision.parent_id, ())
                 ) else "REJECTED"
-            self.trial_ledger.record_optimization_selection(
+            inserted = self.trial_ledger.record_optimization_selection(
                 decision, outcome=outcome, emitted=outcome == "GENERATED"
             )
             memory = getattr(self, "memory", None)
-            if memory is not None and callable(getattr(memory, "add_short_term", None)):
+            if inserted and memory is not None and callable(getattr(memory, "add_short_term", None)):
                 try:
                     record_optimization_trial(
                         memory,

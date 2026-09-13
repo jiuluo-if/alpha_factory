@@ -33,6 +33,7 @@ from wqb_agent import research_api
 from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.factory_runner import AIFactoryRunner
+from wqb_agent.optimization_decision import optimization_decision_identity
 from wqb_agent.optimizer_workflow import OptimizerHooks, OptimizerWorkflow
 from wqb_agent.pre_correlation import (
     metric_optimization_context,
@@ -179,6 +180,56 @@ class TestTargetedBatchMaterialization(unittest.TestCase):
         self.assertFalse(result["written"])
         self.assertEqual(result["status"], "NO_TARGETED_PROPOSAL")
         self.assertFalse(exists)
+
+    def test_identical_active_targeted_batch_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            decision = child_decision("p1")
+            decision_ids = [optimization_decision_identity(decision)]
+            fingerprint = research_api._targeted_batch_fingerprint(decision_ids)
+            payload = {
+                "batch_type": TARGETED_BATCH_TYPE, "source": "agent_optimizer",
+                "round_no": 42, "created_at": 10.0, "expires_at": 4_000_000_000.0,
+                "optimization_decision_ids": decision_ids,
+                "decision_fingerprint": fingerprint,
+                "proposals": [_targeted_proposal(0)],
+            }
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            runtime = self._runtime(tmp, [_targeted_proposal(9)], round_no=99)
+            result = research_api.materialize_targeted_batch(
+                [decision], agent=runtime, state_dir=tmp,
+            )
+            with open(path, encoding="utf-8") as handle:
+                after = json.load(handle)
+
+        self.assertEqual(result["status"], "TARGETED_BATCH_UNCHANGED")
+        self.assertEqual(after, payload)
+
+    def test_different_active_targeted_batch_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = child_decision("p1")
+            second = child_decision("p2")
+            payload = {
+                "batch_type": TARGETED_BATCH_TYPE, "source": "agent_optimizer",
+                "round_no": 42, "created_at": 10.0, "expires_at": 4_000_000_000.0,
+                "optimization_decision_ids": [optimization_decision_identity(first)],
+                "decision_fingerprint": research_api._targeted_batch_fingerprint(
+                    [optimization_decision_identity(first)]
+                ),
+                "proposals": [_targeted_proposal(0)],
+            }
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            result = research_api.materialize_targeted_batch(
+                [second], agent=self._runtime(tmp, [_targeted_proposal(9)]), state_dir=tmp,
+            )
+            with open(path, encoding="utf-8") as handle:
+                after = json.load(handle)
+
+        self.assertEqual(result["status"], "TARGETED_BATCH_CONFLICT")
+        self.assertEqual(after, payload)
 
 
 class TestFactoryNeverInventsAgentDecisions(unittest.TestCase):

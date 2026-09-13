@@ -11,6 +11,8 @@ context hint，不是自动 action。
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -221,6 +223,24 @@ class OptimizationDecision:
         payload["new_value"] = self.new_value
         payload["reason"] = self.reason
         return payload
+
+
+def optimization_decision_identity(decision):
+    """Return the stable identity shared by workflow, ledger, and inbox."""
+    payload = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision or {})
+    semantic = {
+        "parent_id": payload.get("parent_id"),
+        "decision": str(payload.get("decision") or "STOP").upper(),
+        "fields": {key: payload.get(key) for key in (
+            "economic_mechanism", "change_type", "changed_variable",
+            "expression", "expected_effect", "falsification", "direction",
+            "direction_transform", "self_correlation_impact", "validation_variable",
+            "old_value", "new_value", "reason",
+        )},
+    }
+    return "optimization-selection|" + hashlib.sha256(
+        json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 def _structure(expression):

@@ -1460,6 +1460,8 @@ class AlphaFactory:
                 decision_payload = parent.get("optimization_decision")
                 if isinstance(decision_payload, dict) and decision_payload:
                     proposal["optimization_decision"] = dict(decision_payload)
+                if parent.get("optimization_decision_id"):
+                    proposal["optimization_decision_id"] = parent["optimization_decision_id"]
                 proposal["proposal_origin"] = "agent_optimizer"
                 proposal["research_layer"] = "optimization"
                 proposal["optimization_source"] = parent.get(
@@ -1594,9 +1596,11 @@ class AlphaFactory:
             settings_variant = request.get("settings_variant")
             if isinstance(settings_variant, dict) and settings_variant:
                 proposal["settings_variant"] = dict(settings_variant)
-            decision_payload = parent.get("optimization_decision")
+            decision_payload = request.get("optimization_decision") or parent.get("optimization_decision")
             if isinstance(decision_payload, dict) and decision_payload:
                 proposal["optimization_decision"] = dict(decision_payload)
+            if request.get("optimization_decision_id"):
+                proposal["optimization_decision_id"] = request["optimization_decision_id"]
             out.append(proposal)
             excluded.add(normalized)
         return out

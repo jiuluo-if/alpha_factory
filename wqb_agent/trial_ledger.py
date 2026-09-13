@@ -22,6 +22,7 @@ from .artifacts import (
 )
 from .expression import canonical_expression
 from .identity import candidate_identity
+from .optimization_decision import optimization_decision_identity
 from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
 from .search_policy import structural_fingerprint
 
@@ -185,19 +186,7 @@ class TrialLedger:
         same decision cannot inflate selection accounting.
         """
         payload = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision or {})
-        semantic = {
-            "parent_id": payload.get("parent_id"),
-            "decision": str(payload.get("decision") or "STOP").upper(),
-            "fields": {key: payload.get(key) for key in (
-                "economic_mechanism", "change_type", "changed_variable",
-                "expression", "expected_effect", "falsification", "direction",
-                "direction_transform", "self_correlation_impact", "validation_variable",
-                "old_value", "new_value", "reason",
-            )},
-        }
-        selection_identity = "optimization-selection|" + hashlib.sha256(
-            json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-        ).hexdigest()
+        selection_identity = optimization_decision_identity(payload)
         trial = {
             "candidate_id": selection_identity,
             "proposal_id": selection_identity,

@@ -32,6 +32,7 @@ from wqb_agent.optimization_decision import (
     VALIDATION_VARIABLES,
     OptimizationDecision,
     decision_rejections,
+    optimization_decision_identity,
     parent_opportunity,
     summarize_parent,
 )
@@ -51,6 +52,15 @@ from wqb_agent.research_yield import build_research_yield
 
 
 class TestOptimizationDecisionContract(unittest.TestCase):
+    def test_semantic_identity_is_order_and_time_independent(self):
+        first = child_decision("p1")
+        second = OptimizationDecision.from_mapping({
+            **first.as_dict(),
+            "self_correlation_impact": dict(reversed(list(first.self_correlation_impact.items()))),
+        })
+        self.assertEqual(optimization_decision_identity(first),
+                         optimization_decision_identity(second))
+
     def setUp(self):
         self.parent = parent_record("p1")
 

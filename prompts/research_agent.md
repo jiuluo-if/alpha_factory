@@ -84,7 +84,9 @@ CHILD/VALIDATE 才能 `MATERIALIZE`；`EXECUTE/SETTLE` 由既有安全入口完�
 1. `inspect_optimizer_parents(limit=8)`：读取 bounded、只读的 evidence-eligible parent 摘要（按 opportunity 排序）。
 2. `inspect_optimizer_context(limit=8)`：读取每个 parent 的 `metric_optimization_context`、`next_action`、`pre_correlation_eligibility`、`generation_bound` 与 `decision_contract`；这是决定下一步的唯一派生视图。
 3. `propose_optimization(decision)`：提交一个 `OptimizationDecision`（`CHILD` / `VALIDATE` / `REROUTE` / `STOP`）；只校验并生成 proposal，不执行 Simulation、不写状态。
-4. `materialize_targeted_batch([decision, ...])`：把已 authored 的 CHILD/VALIDATE 决策固化为唯一的 targeted 批次（≤4 CHILD + ≤4 VALIDATE）。
+4. `materialize_targeted_batch([decision, ...])`：把已 authored 的 CHILD/VALIDATE 决策固化为唯一的 targeted 批次（≤4 CHILD + ≤4 VALIDATE）。该调用可产生本地 TrialLedger/ExperienceMemory 记账，但不产生远端 Simulation 写入。
+
+每个正式决策有稳定的 semantic identity，并随 proposal 进入 targeted inbox；重放相同 active batch 不刷新或覆盖 inbox，不同 active batch 等待既有 batch 消费或过期。
 
 批次的实际执行由仪器入口发起（外层维护 Agent 或用户），不经过你；此时仪器会报告 `last_action=WAIT_AGENT_DECISION`、`status=TARGETED_OPTIMIZATION_PENDING` 并保留该 inbox，你只需完成 author → materialize 两步，不要手改提案文件，也不要要求绕过唯一执行路径。
 

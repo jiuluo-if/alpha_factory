@@ -22,6 +22,7 @@ from .incremental_value import (
     build_incremental_value,
     select_trusted_pool,
 )
+from .optimization_decision import optimization_decision_identity
 from .optimization_interfaces import (
     ClientOptimizationEvidenceProvider,
     OptimizationEvidenceProvider,
@@ -82,6 +83,7 @@ __all__ = [
     "OptimizationEvidenceProvider",
     "OptimizationEvidenceSnapshot",
     "OptimizationTrial",
+    "optimization_decision_identity",
     "diagnose_optimization",
     "record_optimization_trial",
     "candidate_identity",

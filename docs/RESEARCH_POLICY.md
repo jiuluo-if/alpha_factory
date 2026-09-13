@@ -40,6 +40,8 @@
 
 优化选择的事实计数由既有 `TrialLedger` 唯一拥有：每个 finalized `OptimizationDecision`（包括 STOP、REROUTE、被拒绝或剪枝的 CHILD/VALIDATE）最多记一次，重复语义按 parent identity 与决策内容幂等；该非 Simulation 选择事件不改变既有 Simulation lifecycle 或历史 candidate/trial 计数。`ExperienceMemory` 仅是可失败的压缩投影，不能覆盖或删除账本事实。
 
+优化决策使用唯一稳定 semantic identity 贯穿 workflow、proposal provenance、账本和 targeted inbox；同一 active targeted batch 重放为 no-op，不同 active batch 不得静默覆盖，过期 batch 才能在同一 canonical inbox 中替换。真实 proposal 的归属必须由 decision identity 证明，不能从 parent、列表顺序或 proposal 数量猜测。
+
 ## 统计、稳健性与停止
 
 - DONE 结果必须结合 headline、checks、health、yearly、PnL（能力已验证时）和 correlation 解释。

@@ -355,10 +355,15 @@ class Agent:
             for item in (result or {}).get("rejected", [])
             if item.get("parent_id")
         }
-        for decision in decisions or ():
+        decision_results = (result or {}).get("decision_results") or []
+        for index, decision in enumerate(decisions or ()):
             if not hasattr(decision, "parent_id") or not hasattr(decision, "decision"):
                 continue
-            if decision.decision in {"STOP", "REROUTE"}:
+            metadata = decision_results[index] if index < len(decision_results) else {}
+            outcome = metadata.get("outcome") if isinstance(metadata, dict) else None
+            if outcome:
+                pass
+            elif decision.decision in {"STOP", "REROUTE"}:
                 outcome = decision.decision
             elif decision.parent_id in rejected:
                 outcome = "PRUNED" if any(
@@ -370,7 +375,9 @@ class Agent:
                 outcome = "PRUNED" if any(
                     "PRUNE" in str(reason).upper() for reason in rejected.get(decision.parent_id, ())
                 ) else "REJECTED"
-            self.trial_ledger.record_optimization_selection(decision, outcome=outcome)
+            self.trial_ledger.record_optimization_selection(
+                decision, outcome=outcome, emitted=outcome == "GENERATED"
+            )
             memory = getattr(self, "memory", None)
             if memory is not None and callable(getattr(memory, "add_short_term", None)):
                 try:

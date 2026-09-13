@@ -6,6 +6,26 @@ from wqb_agent.trial_ledger import SIMULATION_LIFECYCLE_PHASES, TrialLedger
 
 
 class TestOptimizationSelectionAccounting(unittest.TestCase):
+    def test_candidate_only_uses_generated_candidates_as_selection_trials(self):
+        ledger = TrialLedger(None, persist=False)
+        for index in range(6):
+            ledger.record({"candidate_id": f"c{index}", "expression": f"rank(x{index})"}, "generated")
+        summary = ledger.summarize()
+        self.assertEqual(summary["candidate_count"], 6)
+        self.assertEqual(summary["optimization_selection_count"], 0)
+        self.assertEqual(summary["selection_trial_count"], 6)
+
+    def test_candidates_plus_non_emitted_selections_form_union(self):
+        ledger = TrialLedger(None, persist=False)
+        for index in range(6):
+            ledger.record({"candidate_id": f"c{index}", "expression": f"rank(x{index})"}, "generated")
+        ledger.record_optimization_selection(
+            OptimizationDecision(parent_id="p-stop", decision="STOP"), outcome="STOP"
+        )
+        ledger.record_optimization_selection(
+            OptimizationDecision(parent_id="p-reroute", decision="REROUTE"), outcome="REROUTE"
+        )
+        self.assertEqual(ledger.summarize()["selection_trial_count"], 8)
     def test_final_decisions_count_once_and_are_idempotent(self):
         ledger = TrialLedger(None, persist=False)
         stop = OptimizationDecision(parent_id="p-stop", decision="STOP", reason="falsified")
@@ -17,6 +37,8 @@ class TestOptimizationSelectionAccounting(unittest.TestCase):
         summary = ledger.summarize()
 
         self.assertEqual(summary["selection_trial_count"], 2)
+        self.assertEqual(summary["optimization_selection_count"], 2)
+        self.assertEqual(summary["non_emitted_optimization_selection_count"], 2)
         self.assertEqual(summary["candidate_count"], 0)
         self.assertEqual(summary["trial_count"], 0)
 
@@ -28,7 +50,7 @@ class TestOptimizationSelectionAccounting(unittest.TestCase):
 
         ledger.record({"candidate_id": "c1", "expression": "rank(x)"}, "generated")
         summary = ledger.summarize()
-        self.assertEqual(summary["selection_trial_count"], 2)
+        self.assertEqual(summary["selection_trial_count"], 3)
         self.assertEqual(summary["candidate_count"], 1)
         self.assertEqual(SIMULATION_LIFECYCLE_PHASES, (
             "simulation_committed", "simulation_submitted",

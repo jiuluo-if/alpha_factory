@@ -216,6 +216,7 @@ class TestAgentDecisionToProposal(unittest.TestCase):
         )
         self.assertEqual(result["decision_report"]["validation_requests"], 1)
         self.assertEqual(len(result["proposals"]), 1)
+        self.assertEqual(result["decision_results"][0]["outcome"], "GENERATED")
         proposal = result["proposals"][0]
         self.assertEqual(proposal["experiment_stage"], "ROBUSTNESS")
         self.assertEqual(proposal["change_type"], "decay")

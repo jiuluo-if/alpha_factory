@@ -939,18 +939,24 @@ class OptimizerWorkflow:
         ROBUSTNESS proposal.  REROUTE/STOP never produce a proposal.
         """
         self.hooks.ensure_loaded()
+        decisions = list(decisions or ())
         accepted: list[dict] = []
         validation_queue: list[dict] = []
         rejected: list[dict] = []
-        for decision in decisions or ():
+        decision_results: list[dict] = []
+        pending_results: list[tuple[int, str]] = []
+        for decision_index, decision in enumerate(decisions):
             if not isinstance(decision, OptimizationDecision):
                 rejected.append({"parent_id": None, "reasons": ["DECISION_INVALID"]})
+                decision_results.append({"parent_id": None, "outcome": "REJECTED", "decision": None})
                 continue
             parent = self._canonical_parent(decision.parent_id)
             if parent is None:
                 rejected.append(
                     {"parent_id": decision.parent_id, "reasons": ["PARENT_NOT_FOUND"]}
                 )
+                decision_results.append({"parent_id": decision.parent_id,
+                                         "decision": decision.decision, "outcome": "REJECTED"})
                 continue
             reasons = list(self._parent_rejections(parent))
             if not reasons and decision.is_validate:
@@ -958,7 +964,9 @@ class OptimizerWorkflow:
                     decision, parent
                 )
                 if not validation_reasons and request is not None:
+                    request["_optimization_decision_index"] = decision_index
                     validation_queue.append(request)
+                    pending_results.append((decision_index, decision.parent_id))
                     continue
                 reasons = list(validation_reasons)
             elif not reasons:
@@ -969,6 +977,9 @@ class OptimizerWorkflow:
                     "decision": decision.decision,
                     "reasons": reasons or ["NOT_A_CHILD_DECISION"],
                 })
+                decision_results.append({"parent_id": decision.parent_id,
+                                         "decision": decision.decision,
+                                         "outcome": decision.decision if decision.decision in {"STOP", "REROUTE"} else "REJECTED"})
                 continue
             if reasons:
                 rejected.append({
@@ -976,11 +987,16 @@ class OptimizerWorkflow:
                     "decision": decision.decision,
                     "reasons": reasons,
                 })
+                decision_results.append({"parent_id": decision.parent_id,
+                                         "decision": decision.decision,
+                                         "outcome": "PRUNED" if any("PRUNE" in str(reason).upper() for reason in reasons) else "REJECTED"})
                 continue
             record = dict(parent)
+            record["_optimization_decision_index"] = decision_index
             record["optimization_decision"] = decision.as_dict()
             record["child_economic_hypothesis"] = decision.to_child_hypothesis()
             accepted.append(record)
+            pending_results.append((decision_index, decision.parent_id))
         proposals = (
             self.generate(accepted, max_candidates=max_candidates)
             if accepted else []
@@ -1005,6 +1021,35 @@ class OptimizerWorkflow:
                         "reasons": ["VALIDATION_BUILDER_UNAVAILABLE"],
                     })
                 validation_queue = []
+        generated_parent_ids = {
+            str(proposal.get("parent_id"))
+            for proposal in list(proposals or []) + list(validation_proposals or [])
+            if isinstance(proposal, dict) and proposal.get("parent_id")
+        }
+        if not generated_parent_ids and (proposals or validation_proposals):
+            # Some compatibility factories return opaque proposal sentinels;
+            # preserve their concrete emission without inventing parent evidence.
+            generated_count = len(list(proposals or [])) + len(list(validation_proposals or []))
+            generated_parent_ids = {
+                str(parent_id) for _, parent_id in pending_results[:generated_count]
+            }
+        result_by_index = {item.get("_optimization_decision_index"): item
+                           for item in decision_results if "_optimization_decision_index" in item}
+        for decision_index, parent_id in pending_results:
+            decision = decisions[decision_index]
+            result_by_index[decision_index] = {
+                "parent_id": parent_id,
+                "decision": decision.decision,
+                "outcome": "GENERATED" if str(parent_id) in generated_parent_ids else "NO_CANDIDATE",
+            }
+        decision_results = [
+            result_by_index.get(index, {
+                "parent_id": getattr(decision, "parent_id", None),
+                "decision": getattr(decision, "decision", None),
+                "outcome": "REJECTED",
+            })
+            for index, decision in enumerate(decisions)
+        ]
         return {
             "proposals": list(proposals or []) + list(validation_proposals or []),
             "accepted": [
@@ -1014,11 +1059,12 @@ class OptimizerWorkflow:
             ],
             "rejected": rejected,
             "decision_report": {
-                "reviewed": len(list(decisions or ())),
+                "reviewed": len(decisions),
                 "accepted": len(accepted),
                 "rejected": len(rejected),
                 "child_generated": len(proposals or []),
                 "validation_requests": len(validation_queue),
                 "validation_generated": len(validation_proposals or []),
             },
+            "decision_results": decision_results,
         }

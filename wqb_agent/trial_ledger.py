@@ -109,6 +109,8 @@ class TrialLedger:
             "phase": phase,
             "event_type": phase,
             "selection_identity": selection_identity,
+            "optimization_candidate_emitted": self._value(trial, "optimization_candidate_emitted"),
+            "optimization_decision": self._value(trial, "optimization_decision"),
             "outcome": outcome or state,
             "reason": reason,
             "reason_code": reason_code,
@@ -176,7 +178,7 @@ class TrialLedger:
                            settlement=settlement)
 
     def record_optimization_selection(self, decision, *, outcome=None, reason=None,
-                                      timestamp=None):
+                                      emitted=None, timestamp=None):
         """Record one finalized non-Simulation optimization decision.
 
         The semantic identity intentionally excludes timestamps so retries of the
@@ -200,13 +202,15 @@ class TrialLedger:
             "candidate_id": selection_identity,
             "proposal_id": selection_identity,
             "selection_identity": selection_identity,
-            "status": str(outcome or "SELECTED").upper(),
+            "optimization_candidate_emitted": emitted,
+            "optimization_decision": str(payload.get("decision") or "STOP").upper(),
+            "status": str(outcome or payload.get("decision") or "SELECTED").upper(),
             "round": payload.get("round"),
             "template_family": "optimization_selection",
             "research_role": "EXPLOIT",
             "experiment_stage": "OPTIMIZATION",
         }
-        return self.record(trial, "optimization_selection", outcome=outcome or "SELECTED",
+        return self.record(trial, "optimization_selection", outcome=outcome or payload.get("decision") or "SELECTED",
                            reason=reason or payload.get("reason"),
                            reason_code="OPTIMIZATION_DECISION",
                            timestamp=timestamp)
@@ -237,12 +241,19 @@ class TrialLedger:
         lifecycle_rows = defaultdict(list)
         settlement_rows = {}
         selection_ids = set()
+        non_emitted_selection_ids = set()
         rows = self._events if not self.path or not self.persist else iter_jsonl_objects(self.path)
         for row in rows:
             events += 1
             is_selection = row.get("phase") == "optimization_selection"
             if is_selection:
-                selection_ids.add(row.get("selection_identity") or row.get("event_id"))
+                selection_id = row.get("selection_identity") or row.get("event_id")
+                selection_ids.add(selection_id)
+                emitted = row.get("optimization_candidate_emitted")
+                if emitted is False or (emitted is None and str(row.get("outcome") or "").upper() in {
+                    "STOP", "REROUTE", "REJECTED", "PRUNED", "NO_CANDIDATE",
+                }):
+                    non_emitted_selection_ids.add(selection_id)
             trial_id = row.get("trial_id")
             if trial_id and not is_selection:
                 trial_ids.add(trial_id)
@@ -316,7 +327,9 @@ class TrialLedger:
             "generated_trials": len(generated_trials),
             "candidate_generated_count": len(generated_trials),
             "candidate_count": len(generated_trials),
-            "selection_trial_count": len(selection_ids),
+            "selection_trial_count": len(generated_trials) + len(non_emitted_selection_ids),
+            "optimization_selection_count": len(selection_ids),
+            "non_emitted_optimization_selection_count": len(non_emitted_selection_ids),
             "candidate_rejected_count": len(rejected_candidates),
             "rejected_candidate_count": len(rejected_candidates),
             "preflight_accepted_count": len(accepted_candidates),

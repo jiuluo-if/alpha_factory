@@ -80,6 +80,13 @@ class TestValidationReport(unittest.TestCase):
         )
         self.assertEqual(report["selection_adjustment"]["trial_events"], 7)
 
+    def test_dsr_uses_complete_selection_denominator(self):
+        report = build_validation_report(
+            self.parent, [], self.plan,
+            trial_summary={"selection_trial_count": 6},
+        )
+        self.assertEqual(report["statistical_evidence"]["dsr"]["n_trials"], 6)
+
     def test_more_searches_reduce_selection_adjusted_confidence(self):
         returns = [-0.01, 0.02, 0.01, 0.03, -0.02, 0.01, 0.015, -0.005, 0.01, 0.02]
         one = deflated_sharpe_ratio(returns, observed_sharpe=1.2, n_trials=1)

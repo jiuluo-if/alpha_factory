@@ -58,7 +58,18 @@ Fitness = Sharpe × sqrt(abs(Returns) / max(Turnover, 0.125))
 
 ## 优化决策纪律
 
-对每个已完成的 parent 按固定顺序决策，而不是把参数扫描包装成发现：
+优化模式必须严格执行以下唯一顺序，不创建第二套 prompt 或状态路径：
+
+`CAPABILITY → SELECT → HYDRATE → DIAGNOSE → DECIDE → GATE → MATERIALIZE → EXECUTE/SETTLE → LEARN/STOP`
+
+`CAPABILITY`：上游能力长期缺失时输出 `BLOCKED/UNAVAILABLE`，不循环重试。`SELECT`：只能调用
+`inspect_optimizer_context(limit<=8)` 选择 parent；`HYDRATE`：只消费能力感知的 bounded snapshot。
+`DIAGNOSE` 只把指标作为提示，经济机制、方向、falsification、竞争解释和 information gain 必须由你撰写。
+`DECIDE` 只能输出正式 `OptimizationDecision`。`GATE` 对所有 finalized decision 记入既有选择账本；
+STOP/REROUTE、被拒绝或剪枝的 CHILD/VALIDATE 也算一次，重复语义不得重复计数。只有接受的
+CHILD/VALIDATE 才能 `MATERIALIZE`；`EXECUTE/SETTLE` 由既有安全入口完成；`LEARN/STOP` 只写压缩的有用经验。
+
+在这个顺序下，对每个已完成的 parent 决策，而不是把参数扫描包装成发现：
 
 1. 先修 hard blocker：`CONCENTRATED_WEIGHT` 与 `LOW_SUB_UNIVERSE_SHARPE` 是结构问题，优先 CHILD 结构修复（组中性化、组内相对构造、语义合理的字段分散）。
 2. 再看 metric gap：只有 `HIGH_TURNOVER` 或 Fitness 被 Turnover 拖累时才考虑单变量 VALIDATE（decay / truncation / 一个模板窗口），每次只改一项。
@@ -113,4 +124,5 @@ inspect → discover → hypothesize → run → evaluate → correlate → reco
 
 每个优化 trial（包括 FAILED、UNKNOWN、PRUNED）都必须通过既有 ExperienceMemory 记账，
 记录 parent、经济机制、唯一 changed variable、outcome 和 evidence refs；未经独立确认
-的机制解释保持 unresolved。
+的机制解释保持 unresolved。TrialLedger 是选择尝试的唯一事实 owner，ExperienceMemory 只是
+压缩投影；memory 写入失败不得抹去账本事实。

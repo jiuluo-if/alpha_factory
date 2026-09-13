@@ -31,6 +31,7 @@ PHASES = {
     "candidate_admitted",
     "simulation_committed", "simulation_submitted", "simulation_settled",
     "research_outcome_settled",
+    "optimization_selection",
 }
 
 SIMULATION_LIFECYCLE_PHASES = (
@@ -90,7 +91,9 @@ class TrialLedger:
         )
         state = _text(self._value(trial, "status"), "UNKNOWN")
         stable_settlement = (settlement or {}).get("settlement_id") if phase == "research_outcome_settled" else None
+        selection_identity = self._value(trial, "selection_identity") if phase == "optimization_selection" else None
         identity = (f"settlement|{stable_settlement}" if stable_settlement else
+                    selection_identity or
                     f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{timestamp or ''}|{reward}")
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
@@ -105,6 +108,7 @@ class TrialLedger:
             "proposal_id": self._value(trial, "proposal_id"),
             "phase": phase,
             "event_type": phase,
+            "selection_identity": selection_identity,
             "outcome": outcome or state,
             "reason": reason,
             "reason_code": reason_code,
@@ -171,6 +175,42 @@ class TrialLedger:
                            reason_code="FINAL", timestamp=settled_at, reward=reward,
                            settlement=settlement)
 
+    def record_optimization_selection(self, decision, *, outcome=None, reason=None,
+                                      timestamp=None):
+        """Record one finalized non-Simulation optimization decision.
+
+        The semantic identity intentionally excludes timestamps so retries of the
+        same decision cannot inflate selection accounting.
+        """
+        payload = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision or {})
+        semantic = {
+            "parent_id": payload.get("parent_id"),
+            "decision": str(payload.get("decision") or "STOP").upper(),
+            "fields": {key: payload.get(key) for key in (
+                "economic_mechanism", "change_type", "changed_variable",
+                "expression", "expected_effect", "falsification", "direction",
+                "direction_transform", "self_correlation_impact", "validation_variable",
+                "old_value", "new_value", "reason",
+            )},
+        }
+        selection_identity = "optimization-selection|" + hashlib.sha256(
+            json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
+        trial = {
+            "candidate_id": selection_identity,
+            "proposal_id": selection_identity,
+            "selection_identity": selection_identity,
+            "status": str(outcome or "SELECTED").upper(),
+            "round": payload.get("round"),
+            "template_family": "optimization_selection",
+            "research_role": "EXPLOIT",
+            "experiment_stage": "OPTIMIZATION",
+        }
+        return self.record(trial, "optimization_selection", outcome=outcome or "SELECTED",
+                           reason=reason or payload.get("reason"),
+                           reason_code="OPTIMIZATION_DECISION",
+                           timestamp=timestamp)
+
     def summarize(self):
         phase_counts = Counter()
         status_counts = Counter()
@@ -196,23 +236,28 @@ class TrialLedger:
         unique_proposals = set()
         lifecycle_rows = defaultdict(list)
         settlement_rows = {}
+        selection_ids = set()
         rows = self._events if not self.path or not self.persist else iter_jsonl_objects(self.path)
         for row in rows:
             events += 1
+            is_selection = row.get("phase") == "optimization_selection"
+            if is_selection:
+                selection_ids.add(row.get("selection_identity") or row.get("event_id"))
             trial_id = row.get("trial_id")
-            if trial_id:
+            if trial_id and not is_selection:
                 trial_ids.add(trial_id)
-            if row.get("structural_fingerprint"):
+            if row.get("structural_fingerprint") and not is_selection:
                 structural_trials.add(row.get("structural_fingerprint"))
-            family_trials.add((row.get("template_family", "unknown"), row.get("dataset_family", "unknown").__str__()))
+            if not is_selection:
+                family_trials.add((row.get("template_family", "unknown"), row.get("dataset_family", "unknown").__str__()))
             if row.get("phase") in {"generated", "candidate_generated"} and trial_id:
                 generated_trials.add(trial_id)
             event_type_counts[row.get("event_type") or row.get("phase", "unknown")] += 1
             if row.get("phase") == "candidate_rejected" and row.get("candidate_id"):
                 rejected_candidates.add(row.get("candidate_id"))
-            if row.get("candidate_id"):
+            if row.get("candidate_id") and not is_selection:
                 unique_candidates.add(row.get("candidate_id"))
-            if row.get("proposal_id"):
+            if row.get("proposal_id") and not is_selection:
                 unique_proposals.add(row.get("proposal_id"))
             if row.get("phase") == "preflight_accepted" and row.get("candidate_id"):
                 accepted_candidates.add(row.get("candidate_id"))
@@ -271,6 +316,7 @@ class TrialLedger:
             "generated_trials": len(generated_trials),
             "candidate_generated_count": len(generated_trials),
             "candidate_count": len(generated_trials),
+            "selection_trial_count": len(selection_ids),
             "candidate_rejected_count": len(rejected_candidates),
             "rejected_candidate_count": len(rejected_candidates),
             "preflight_accepted_count": len(accepted_candidates),

@@ -914,6 +914,22 @@ class AlphaFactory:
             "toy_relative_change": "relationship_spread",
             "toy_scale_surprise": "relative_ratio",
             "toy_sync_corr": "relative_correlation",
+            # Private catalog families declare economic names for provenance;
+            # reuse the existing relationship contracts instead of creating a
+            # second gate for each catalog family.
+            "live-risk-decomposition": "relative_ratio",
+            "live-beta-correlation-shift": "relative_correlation",
+            "live-skew-scaled-change": "relationship_spread",
+            "live-iv-term-structure-shift": "relationship_spread",
+            "live-sales-estimate-revision": "relationship_spread",
+            "live-eps-forecast-dispersion": "relationship_spread",
+            "live-operating-profit-asset-intensity": "relative_ratio",
+            "live-cashflow-debt-coverage": "relationship_spread",
+            "live-equity-asset-structure": "relationship_spread",
+            "live-option-positioning-term-slope": "relationship_spread",
+            "live-forward-breakeven-dislocation": "relationship_spread",
+            "live-news-novelty-sentiment": "relative_correlation",
+            "live-social-attention-sentiment": "relationship_spread",
         }.get(template.family, template.family)
         frequency = cls._frequency_compatibility(traits, family)
 

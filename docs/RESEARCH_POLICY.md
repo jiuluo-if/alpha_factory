@@ -36,6 +36,8 @@
 
 优化 Agent 必须输出经济机制、方向理由、falsification、竞争解释和 information gain。每个 child 最多改变一个主要变量；`VALIDATE` 只用于有界的单变量 robustness，不能冒充新机制。失败和剪枝结果通过既有 `ExperienceMemory` 记账，原始指标仍由 trajectory 保存。
 
+优化选择的事实计数由既有 `TrialLedger` 唯一拥有：每个 finalized `OptimizationDecision`（包括 STOP、REROUTE、被拒绝或剪枝的 CHILD/VALIDATE）最多记一次，重复语义按 parent identity 与决策内容幂等；该非 Simulation 选择事件不改变既有 Simulation lifecycle 或历史 candidate/trial 计数。`ExperienceMemory` 仅是可失败的压缩投影，不能覆盖或删除账本事实。
+
 ## 统计、稳健性与停止
 
 - DONE 结果必须结合 headline、checks、health、yearly、PnL（能力已验证时）和 correlation 解释。

@@ -110,6 +110,25 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         self.assertFalse(forward["symmetric"])
         self.assertNotEqual(reverse["admission"], "ALLOW")
 
+    def test_private_fundamental_family_reuses_ratio_contract(self):
+        factory = AlphaFactory()
+        earnings = semantic_field(
+            "ebitda", "daily earnings before interest and taxes",
+            dataset="fundamental6", frequency="daily", category="fundamental",
+        )
+        assets = semantic_field(
+            "assets", "daily total assets balance sheet",
+            dataset="fundamental6", frequency="daily", category="fundamental",
+        )
+        template = SimpleNamespace(
+            template_id="live_operating_profit_asset_intensity",
+            family="live-operating-profit-asset-intensity",
+            required_slots=("p", "s"),
+        )
+        decision = factory._relationship_gate([earnings, assets], template)
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "numerator_denominator")
+
     def test_option_pair_does_not_admit_unrelated_open_interest_and_greek(self):
         factory = AlphaFactory()
         open_interest = semantic_field(

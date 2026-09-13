@@ -524,7 +524,9 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
         "evidence_status": "PASS" if platform_ok else "FAIL",
         "evidence": platform_evidence,
     }
-    selection = (trial_summary or {}).get("candidate_count")
+    selection = (trial_summary or {}).get("selection_trial_count")
+    if selection is None:
+        selection = (trial_summary or {}).get("candidate_count")
     if selection is None:
         selection = (trial_summary or {}).get("generated_trials")
     if selection is None:

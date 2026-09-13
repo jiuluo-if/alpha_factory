@@ -63,7 +63,7 @@ class TestValidationReport(unittest.TestCase):
         ]
         report = build_validation_report(self.parent, children, self.plan,
                                          yearly_evidence=self.parent["yearly_evidence"],
-                                         trial_summary={"generated_trials": 6},
+                                         trial_summary={"selection_trial_count": 6, "candidate_count": 99},
                                          platform_evidence={
                                              "parent": {"health": self.parent["health"], "correlation": self.parent["self_correlation"]},
                                              "children": [{"health": child["health"], "correlation": child["self_correlation"]} for child in children],
@@ -71,6 +71,14 @@ class TestValidationReport(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["candidate"], "parent")
         self.assertEqual(report["selection_adjustment"]["trial_events"], 6)
+
+    def test_old_trial_summary_uses_backward_compatible_fallback(self):
+        children = []
+        report = build_validation_report(
+            self.parent, children, self.plan,
+            trial_summary={"generated_trials": 7},
+        )
+        self.assertEqual(report["selection_adjustment"]["trial_events"], 7)
 
     def test_more_searches_reduce_selection_adjusted_confidence(self):
         returns = [-0.01, 0.02, 0.01, 0.03, -0.02, 0.01, 0.015, -0.005, 0.01, 0.02]

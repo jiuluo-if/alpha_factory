@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -16,6 +16,8 @@ class OptimizationEvidenceSnapshot:
     aggregates: Mapping[str, Any]
     pnl: Any
     self_correlation: Mapping[str, Any] | None
+    status: Mapping[str, str] = field(default_factory=dict)
+    availability: Mapping[str, str] = field(default_factory=dict)
 
 
 class OptimizationEvidenceProvider(Protocol):
@@ -32,13 +34,39 @@ class ClientOptimizationEvidenceProvider:
         alpha_id = str(alpha_id).strip()
         if not alpha_id:
             raise ValueError("alpha_id must be non-empty")
+        slots = {
+            "alpha_detail": self._slot("alpha_detail", self.client.get_alpha, alpha_id),
+            "aggregates": self._slot("aggregates", self.client.get_aggregates, alpha_id),
+            "pnl": self._slot("pnl", self.client.get_pnl, alpha_id),
+            "self_correlation": self._slot("self_correlation", self.client.get_self_correlation, alpha_id),
+        }
+        status = {name: self._slot_value(value, "status", "AVAILABLE") for name, value in slots.items()}
+        availability = {name: self._slot_value(value, "availability", "AVAILABLE") for name, value in slots.items()}
         return OptimizationEvidenceSnapshot(
             alpha_id=alpha_id,
-            alpha_detail=self.client.get_alpha(alpha_id),
-            aggregates=self.client.get_aggregates(alpha_id),
-            pnl=self.client.get_pnl(alpha_id),
-            self_correlation=self.client.get_self_correlation(alpha_id),
+            alpha_detail=slots["alpha_detail"], aggregates=slots["aggregates"],
+            pnl=slots["pnl"], self_correlation=slots["self_correlation"],
+            status=status, availability=availability,
         )
+
+    @staticmethod
+    def _slot_value(value, key, default):
+        if isinstance(value, Mapping):
+            return str(value.get(key) or default).upper()
+        return default
+
+    @staticmethod
+    def _slot(name, operation, alpha_id):
+        try:
+            return operation(alpha_id)
+        except (AttributeError, NotImplementedError) as exc:
+            return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
+                    "slot": name, "reason": str(exc) or "capability unavailable"}
+        except Exception as exc:
+            if str(getattr(exc, "kind", "")).upper() in {"UNAVAILABLE", "CAPABILITY_UNAVAILABLE"}:
+                return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
+                        "slot": name, "reason": str(exc) or "capability unavailable"}
+            raise
 
 
 @dataclass(frozen=True)

@@ -33,6 +33,7 @@ from .metrics import (
     checks_passed,
     num,
 )
+from .optimization_interfaces import OptimizationTrial, record_optimization_trial
 from .optimizer_workflow import OptimizerHooks
 from .pre_correlation import (
     delay_metric_thresholds,
@@ -340,9 +341,52 @@ class Agent:
 
     def propose_optimization(self, decisions, *, max_candidates=4):
         """Agent-facing：校验 OptimizationDecision 后走唯一 CHILD 生成路径。"""
-        return self.optimizer_workflow.generate_from_decisions(
+        result = self.optimizer_workflow.generate_from_decisions(
             decisions, max_candidates=max_candidates
         )
+        self._record_optimization_selection(decisions, result)
+        return result
+
+    def _record_optimization_selection(self, decisions, result):
+        """Bridge finalized decisions to the sole TrialLedger owner."""
+        accepted = {item.get("parent_id") for item in (result or {}).get("accepted", [])}
+        rejected = {
+            item.get("parent_id"): item.get("reasons") or []
+            for item in (result or {}).get("rejected", [])
+            if item.get("parent_id")
+        }
+        for decision in decisions or ():
+            if not hasattr(decision, "parent_id") or not hasattr(decision, "decision"):
+                continue
+            if decision.decision in {"STOP", "REROUTE"}:
+                outcome = decision.decision
+            elif decision.parent_id in rejected:
+                outcome = "PRUNED" if any(
+                    "PRUNE" in str(reason).upper() for reason in rejected[decision.parent_id]
+                ) else "REJECTED"
+            elif decision.parent_id in accepted:
+                outcome = "ACCEPTED"
+            else:
+                outcome = "PRUNED" if any(
+                    "PRUNE" in str(reason).upper() for reason in rejected.get(decision.parent_id, ())
+                ) else "REJECTED"
+            self.trial_ledger.record_optimization_selection(decision, outcome=outcome)
+            memory = getattr(self, "memory", None)
+            if memory is not None and callable(getattr(memory, "add_short_term", None)):
+                try:
+                    record_optimization_trial(
+                        memory,
+                        OptimizationTrial(
+                            parent_id=decision.parent_id,
+                            outcome=outcome,
+                            mechanism=decision.economic_mechanism or decision.reason or decision.decision,
+                            changed_variable=decision.changed_variable or decision.validation_variable,
+                        ),
+                        round_no=getattr(self, "round_no", 0) or 0,
+                    )
+                except Exception:
+                    # The ledger is the fact owner; a lossy projection must not erase it.
+                    pass
 
     def refresh_remote_alpha_feed(self, *, limit=100):
         """兼容 facade：执行 Alpha Feed 的只读同步。"""

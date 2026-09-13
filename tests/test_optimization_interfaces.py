@@ -56,6 +56,33 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_pnl.assert_called_once_with("a1")
         client.get_self_correlation.assert_called_once_with("a1")
 
+    def test_client_provider_preserves_other_slots_when_one_capability_is_unavailable(self):
+        client = Mock()
+        client.get_alpha.return_value = {"is": {"sharpe": 1.2}}
+        client.get_aggregates.side_effect = NotImplementedError("not supported")
+        client.get_pnl.return_value = {"records": []}
+        client.get_self_correlation.return_value = {"status": "PASS"}
+
+        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+
+        self.assertEqual(evidence.alpha_detail["is"]["sharpe"], 1.2)
+        self.assertEqual(evidence.aggregates["status"], "UNAVAILABLE")
+        self.assertEqual(evidence.aggregates["availability"], "UNAVAILABLE")
+        self.assertEqual(evidence.status["aggregates"], "UNAVAILABLE")
+        self.assertEqual(evidence.availability["alpha_detail"], "AVAILABLE")
+        self.assertEqual(evidence.pnl, {"records": []})
+        self.assertEqual(evidence.self_correlation["status"], "PASS")
+
+    def test_client_provider_rethrows_classified_transport_errors(self):
+        client = Mock()
+        error = RuntimeError("AUTH failed")
+        error.kind = "AUTH"
+        client.get_alpha.side_effect = error
+
+        with self.assertRaises(RuntimeError) as raised:
+            ClientOptimizationEvidenceProvider(client).collect("a1")
+        self.assertIs(raised.exception, error)
+
     def test_diagnosis_distinguishes_low_sharpe_from_turnover(self):
         low_signal = diagnose_optimization(
             {"sharpe": 0.4, "returns": 0.03, "turnover": 0.08}

@@ -1,7 +1,15 @@
 import unittest
 from unittest.mock import Mock
 
-from wqb_agent.client import WQBClient
+from wqb_agent.client import (
+    WQBAuthError,
+    WQBClient,
+    WQBCorrelationPendingError,
+    WQBNotFoundError,
+    WQBRateLimitError,
+    WQBSimulationError,
+    WQBTimeoutError,
+)
 from wqb_agent.optimization_interfaces import (
     ClientOptimizationEvidenceProvider,
     OptimizationTrial,
@@ -82,6 +90,50 @@ class TestOptimizationInterfaces(unittest.TestCase):
         with self.assertRaises(RuntimeError) as raised:
             ClientOptimizationEvidenceProvider(client).collect("a1")
         self.assertIs(raised.exception, error)
+
+    def test_alpha_detail_is_required_anchor_and_stops_followup_reads_on_404(self):
+        client = Mock()
+        client.get_alpha.side_effect = WQBNotFoundError("missing")
+
+        with self.assertRaises(WQBNotFoundError):
+            ClientOptimizationEvidenceProvider(client).collect("a1")
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
+
+    def test_existing_alpha_allows_optional_aggregates_404_to_be_unavailable(self):
+        client = Mock()
+        client.get_alpha.return_value = {"id": "a1", "is": {"sharpe": 1.2}}
+        client.get_aggregates.side_effect = WQBNotFoundError("optional endpoint")
+        client.get_pnl.return_value = {"records": []}
+        client.get_self_correlation.return_value = {"status": "PASS"}
+
+        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+
+        self.assertEqual(evidence.status["aggregates"], "UNAVAILABLE")
+        self.assertEqual(evidence.aggregates["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(evidence.pnl, {"records": []})
+
+    def test_optional_infrastructure_errors_are_not_missing_evidence(self):
+        for error_type in (WQBAuthError, WQBRateLimitError, WQBSimulationError, WQBTimeoutError):
+            with self.subTest(error=error_type.__name__):
+                client = Mock()
+                client.get_alpha.return_value = {"id": "a1"}
+                client.get_aggregates.side_effect = error_type("failure")
+                with self.assertRaises(error_type):
+                    ClientOptimizationEvidenceProvider(client).collect("a1")
+
+    def test_explicit_correlation_pending_is_unknown_but_capability_available(self):
+        client = Mock()
+        client.get_alpha.return_value = {"id": "a1"}
+        client.get_aggregates.return_value = {"is": {"yearlyData": []}}
+        client.get_pnl.return_value = {"records": []}
+        client.get_self_correlation.side_effect = WQBCorrelationPendingError("pending")
+
+        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+
+        self.assertEqual(evidence.status["self_correlation"], "UNKNOWN")
+        self.assertEqual(evidence.availability["self_correlation"], "AVAILABLE")
 
     def test_diagnosis_distinguishes_low_sharpe_from_turnover(self):
         low_signal = diagnose_optimization(

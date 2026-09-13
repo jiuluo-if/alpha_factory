@@ -6,6 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from .client import (
+    WQBCorrelationPendingError,
+    WQBNotFoundError,
+)
+
 
 @dataclass(frozen=True)
 class OptimizationEvidenceSnapshot:
@@ -34,11 +39,16 @@ class ClientOptimizationEvidenceProvider:
         alpha_id = str(alpha_id).strip()
         if not alpha_id:
             raise ValueError("alpha_id must be non-empty")
+        alpha_detail = self.client.get_alpha(alpha_id)
+        if not isinstance(alpha_detail, Mapping):
+            raise ValueError("alpha detail response malformed")
         slots = {
-            "alpha_detail": self._slot("alpha_detail", self.client.get_alpha, alpha_id),
-            "aggregates": self._slot("aggregates", self.client.get_aggregates, alpha_id),
+            "alpha_detail": alpha_detail,
+            "aggregates": self._slot("aggregates", self.client.get_aggregates, alpha_id,
+                                      allow_not_found=True),
             "pnl": self._slot("pnl", self.client.get_pnl, alpha_id),
-            "self_correlation": self._slot("self_correlation", self.client.get_self_correlation, alpha_id),
+            "self_correlation": self._slot("self_correlation", self.client.get_self_correlation,
+                                             alpha_id, pending_unknown=True),
         }
         status = {name: self._slot_value(value, "status", "AVAILABLE") for name, value in slots.items()}
         availability = {name: self._slot_value(value, "availability", "AVAILABLE") for name, value in slots.items()}
@@ -56,9 +66,24 @@ class ClientOptimizationEvidenceProvider:
         return default
 
     @staticmethod
-    def _slot(name, operation, alpha_id):
+    def _slot(name, operation, alpha_id, *, allow_not_found=False, pending_unknown=False):
         try:
-            return operation(alpha_id)
+            value = operation(alpha_id)
+            if pending_unknown and isinstance(value, Mapping) and str(value.get("status") or "").upper() in {
+                "PENDING", "RUNNING", "QUEUED", "UNSETTLED",
+            }:
+                value = dict(value)
+                value.update({"status": "UNKNOWN", "availability": "AVAILABLE",
+                              "reason_code": "CORRELATION_PENDING"})
+            return value
+        except WQBCorrelationPendingError:
+            return {"status": "UNKNOWN", "availability": "AVAILABLE",
+                    "reason_code": "CORRELATION_PENDING", "slot": name}
+        except WQBNotFoundError:
+            if not allow_not_found:
+                raise
+            return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
+                    "slot": name, "reason_code": "CAPABILITY_UNAVAILABLE"}
         except (AttributeError, NotImplementedError) as exc:
             return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
                     "slot": name, "reason": str(exc) or "capability unavailable"}

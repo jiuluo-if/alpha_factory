@@ -88,6 +88,12 @@ class WQBTimeoutError(WQBError):
     kind = FailureKind.TIMEOUT
 
 
+class WQBCorrelationPendingError(WQBTimeoutError):
+    """Correlation endpoint was reachable but did not settle in its read budget."""
+
+    kind = FailureKind.TIMEOUT
+
+
 class WQBSimulationError(WQBError):
     kind = FailureKind.INFRA
 
@@ -871,7 +877,7 @@ class WQBClient:
                 return resp.json()
             remaining = max(0.0, budget - (time.monotonic() - start))
             if remaining <= 0:
-                raise WQBTimeoutError(
+                raise WQBCorrelationPendingError(
                     f"{kind} correlation timed out after {timeout_sec}s"
                 )
             time.sleep(min(self._retry_after_seconds(resp), 30, remaining))

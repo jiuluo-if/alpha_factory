@@ -34,6 +34,8 @@
 
 优化 Agent 只使用 `research_api` 的 bounded 优化入口：`inspect_optimizer_parents`、`inspect_optimizer_context`、`propose_optimization` 和 `materialize_targeted_batch`。真实只读证据可由 `wqb_agent.optimization_interfaces.ClientOptimizationEvidenceProvider` 聚合 Alpha detail、aggregates、allow-listed PnL recordset 与 self-correlation；PnL 按服务端 schema 名称解析，不假设列位置。该接口不创建第二套 HTTP、state、ledger、trajectory 或 memory owner。
 
+优化只读证据槽位彼此独立，可分别为 `AVAILABLE`、`UNKNOWN` 或 `UNAVAILABLE`；Alpha detail 是确认 Alpha 身份的必要 anchor。可选 endpoint 的明确能力缺失可以降级为 `UNAVAILABLE`，但 AUTH、RATE_LIMIT、transport 和 parent-not-found 等基础设施或身份错误必须保留为异常；correlation 已可达但尚未结算时保持 `UNKNOWN`，不能伪造 PASS/FAIL。
+
 优化 Agent 必须输出经济机制、方向理由、falsification、竞争解释和 information gain。每个 child 最多改变一个主要变量；`VALIDATE` 只用于有界的单变量 robustness，不能冒充新机制。失败和剪枝结果通过既有 `ExperienceMemory` 记账，原始指标仍由 trajectory 保存。
 
 优化选择的事实计数由既有 `TrialLedger` 唯一拥有：每个 finalized `OptimizationDecision`（包括 STOP、REROUTE、被拒绝或剪枝的 CHILD/VALIDATE）最多记一次，重复语义按 parent identity 与决策内容幂等；该非 Simulation 选择事件不改变既有 Simulation lifecycle 或历史 candidate/trial 计数。`ExperienceMemory` 仅是可失败的压缩投影，不能覆盖或删除账本事实。
